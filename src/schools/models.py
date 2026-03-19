@@ -40,6 +40,7 @@ class School(Base):
     appointlet_link: Mapped[str | None] = mapped_column(Text)
     calendar_link: Mapped[str | None] = mapped_column(Text)
     logo_url: Mapped[str | None] = mapped_column(Text)
+    logo_thumb_url: Mapped[str | None] = mapped_column(Text)
     is_current_customer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     cohort_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("cohorts.id"))
     bubble_rec_id: Mapped[str | None] = mapped_column(Text)

@@ -17,9 +17,3 @@ uv run uvicorn src.main:app --reload --port 8000
 ```
 
 `GET /health` returns status and non-secret config (supabase_url, supabase_db_name, s3_bucket).
-
-## Schools data
-
-- **Table**: `schools` (see `supabase/migrations/20250310000000_create_schools_table.sql`).
-- **Apply migration**: From project root run `supabase db reset` (or apply the migration in Supabase dashboard).
-- **Import CSV**: `uv run python scripts/import_schools_csv.py` (uses `Schools-Grid view.csv` by default). Use `--dry-run` to only validate the CSV.

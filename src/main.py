@@ -5,19 +5,23 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# Import all models FIRST so SQLAlchemy mapper can resolve cross-module
+# relationships before any router (which imports models) is loaded.
+import src.assets.models  # noqa: F401
+import src.auth.models  # noqa: F401
+import src.calendar.models  # noqa: F401
+import src.cycles.models  # noqa: F401
+import src.meetings.models  # noqa: F401
+import src.sales.models  # noqa: F401
+import src.schools.models  # noqa: F401
+import src.settings.models  # noqa: F401
+import src.workshops.models  # noqa: F401
+
 from src.auth.router import router as auth_router
 from src.config import settings
 from src.cycles.router import router as cohorts_router
 from src.db import get_supabase
 from src.schools.router import router as schools_router
-
-# Import all models so SQLAlchemy mapper can resolve cross-module relationships
-import src.assets.models  # noqa: F401
-import src.calendar.models  # noqa: F401
-import src.meetings.models  # noqa: F401
-import src.sales.models  # noqa: F401
-import src.settings.models  # noqa: F401
-import src.workshops.models  # noqa: F401
 
 
 @asynccontextmanager
