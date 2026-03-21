@@ -2,6 +2,8 @@
 
 import uuid
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload, selectinload
@@ -65,6 +67,19 @@ def list_cities(
 # ── Collection endpoints ───────────────────────────────────────────────────────
 
 
+def _build_order_by(sort_by: str, sort_dir: str):
+    """Return an order_by clause list for the given sort parameters."""
+    desc = sort_dir == "desc"
+    if sort_by == "state":
+        state_col = School.state.desc() if desc else School.state
+        return [state_col, School.name]
+    if sort_by == "enrollment":
+        col = School.enrollment_9_12.desc().nullslast() if desc else School.enrollment_9_12.asc().nullslast()
+        return [col]
+    # default: name
+    return [School.name.desc() if desc else School.name]
+
+
 @router.get("", response_model=SchoolListResponse)
 def list_schools(
     db: DbDep,
@@ -74,6 +89,9 @@ def list_schools(
     city: str | None = Query(default=None),
     cohort_ids: list[uuid.UUID] | None = Query(default=None),
     is_current_customer: bool | None = Query(default=None),
+    enrollment_range: str | None = Query(default=None),
+    sort_by: Literal["name", "state", "enrollment"] = Query(default="name"),
+    sort_dir: Literal["asc", "desc"] = Query(default="asc"),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> SchoolListResponse:
@@ -104,9 +122,11 @@ def list_schools(
         q = q.filter(School.cohort_id.in_(cohort_ids))
     if is_current_customer is not None:
         q = q.filter(School.is_current_customer == is_current_customer)
+    if enrollment_range:
+        q = q.filter(School.enrollment_range == enrollment_range)
 
     total = q.count()
-    schools = q.order_by(School.name).offset(skip).limit(limit).all()
+    schools = q.order_by(*_build_order_by(sort_by, sort_dir)).offset(skip).limit(limit).all()
 
     return SchoolListResponse(
         items=[SchoolListItem.model_validate(s) for s in schools],

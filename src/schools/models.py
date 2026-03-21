@@ -29,8 +29,8 @@ class School(Base):
             "CASE "
             "WHEN enrollment_9_12 IS NULL THEN NULL "
             "WHEN enrollment_9_12 < 250 THEN '< 250' "
-            "WHEN enrollment_9_12 <= 500 THEN '250 - 500' "
-            "ELSE '> 500' "
+            "WHEN enrollment_9_12 <= 500 THEN '250-500' "
+            "ELSE '>500' "
             "END"
         ),
     )
