@@ -38,13 +38,12 @@ from src.db.base import get_engine
 # ── HTML sanitization ─────────────────────────────────────────────────────────
 
 _UNSAFE_TAGS = re.compile(
-    r"<(script|style|iframe|object|embed|form|input|button)[^>]*>.*?</\1>",
+    r"<(script|style|object|embed|form|input|button)[^>]*>.*?</\1>",
     re.IGNORECASE | re.DOTALL,
 )
 _SELF_CLOSING_UNSAFE = re.compile(
     r"<(script|style|input|form)[^>]*/?>",
-    re.IGNORECASE,
-)
+    re.IGNORECASE,)
 _EVENT_ATTRS = re.compile(
     r'\s+on\w+\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]*)',
     re.IGNORECASE,
