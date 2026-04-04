@@ -32,10 +32,18 @@ class Topic(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     airtable_id: Mapped[str | None] = mapped_column(Text, unique=True)
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    icon_url: Mapped[str | None] = mapped_column(Text)
+    slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    suggested_grades: Mapped[str | None] = mapped_column(Text)  # e.g. "9,10"
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     content_assets: Mapped[list[ContentAsset]] = relationship(
-        secondary="content_asset_topics", back_populates="topics"
+        secondary="content_asset_topics",
+        back_populates="topics",
+        order_by="ContentAssetTopic.sort_order",
+        viewonly=True,
     )
 
 
@@ -149,6 +157,7 @@ class ContentAssetTopic(Base):
     topic_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("topics.id", ondelete="CASCADE"), primary_key=True
     )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
 
 class ContentAssetCohort(Base):

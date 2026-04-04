@@ -39,6 +39,11 @@ class TopicOut(BaseModel):
     id: uuid.UUID
     airtable_id: str | None
     name: str
+    description: str | None
+    icon_url: str | None
+    slug: str
+    suggested_grades: str | None
+    sort_order: int
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -46,10 +51,45 @@ class TopicOut(BaseModel):
 
 class TopicCreate(BaseModel):
     name: str
+    description: str | None = None
+    icon_url: str | None = None
+    slug: str | None = None  # auto-generated from name if omitted
+    suggested_grades: str | None = None
+    sort_order: int = 0
 
 
 class TopicUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    icon_url: str | None = None
+    slug: str | None = None
+    suggested_grades: str | None = None
+    sort_order: int | None = None
+
+
+class ContentAssetSummary(BaseModel):
+    """Lightweight asset for topic listings."""
+    id: uuid.UUID
     name: str
+    description: str | None
+    image_url: str | None
+    asset_type: AssetTypeOut | None
+
+    model_config = {"from_attributes": True}
+
+
+class TopicWithAssets(BaseModel):
+    """Topic with nested published content assets."""
+    id: uuid.UUID
+    name: str
+    description: str | None
+    icon_url: str | None
+    slug: str
+    suggested_grades: str | None
+    sort_order: int
+    content_assets: list[ContentAssetSummary]
+
+    model_config = {"from_attributes": True}
 
 
 # ── Objectives ────────────────────────────────────────────────────────────────

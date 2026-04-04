@@ -50,6 +50,7 @@ from src.content.schemas import (
     TopicCreate,
     TopicOut,
     TopicUpdate,
+    TopicWithAssets,
 )
 from src.config import settings
 from src.db.deps import DbDep
@@ -112,15 +113,63 @@ def list_topics(db: DbDep):
 @router.get("/topics/public", response_model=list[TopicOut])
 def list_topics_public(db: DbDep):
     """Public endpoint — list all topics."""
-    return db.scalars(select(Topic).order_by(Topic.name)).all()
+    return db.scalars(select(Topic).order_by(Topic.sort_order, Topic.name)).all()
+
+
+@router.get("/topics/public/grade/{grade}", response_model=list[TopicWithAssets])
+def list_topics_by_grade(grade: int, db: DbDep):
+    """Public — return topics for a grade with their published content assets."""
+    import re as _re
+
+    stmt = (
+        select(Topic)
+        .options(selectinload(Topic.content_assets).selectinload(ContentAsset.asset_type))
+        .order_by(Topic.sort_order, Topic.name)
+    )
+    topics = db.scalars(stmt).all()
+
+    grade_str = str(grade)
+    result = []
+    for topic in topics:
+        grades = [g.strip() for g in (topic.suggested_grades or "").split(",") if g.strip()]
+        if grade_str not in grades:
+            continue
+        # Filter to published assets only
+        topic.content_assets = [a for a in topic.content_assets if a.status == "published"]
+        result.append(topic)
+    return result
+
+
+@router.get("/topics/public/slug/{slug}", response_model=TopicWithAssets)
+def get_topic_by_slug(slug: str, db: DbDep):
+    """Public — return a single topic by slug with published content assets."""
+    stmt = (
+        select(Topic)
+        .where(Topic.slug == slug)
+        .options(selectinload(Topic.content_assets).selectinload(ContentAsset.asset_type))
+    )
+    topic = db.scalar(stmt)
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    topic.content_assets = [a for a in topic.content_assets if a.status == "published"]
+    return topic
 
 
 @router.post("/topics", response_model=TopicOut, status_code=status.HTTP_201_CREATED)
 def create_topic(body: TopicCreate, _admin: AdminDep, db: DbDep):
+    import re as _re
+
     existing = db.scalar(select(Topic).where(Topic.name == body.name))
     if existing:
         raise HTTPException(status_code=409, detail="Topic with this name already exists")
-    obj = Topic(**body.model_dump())
+    data = body.model_dump()
+    # Auto-generate slug if not provided
+    if not data.get("slug"):
+        data["slug"] = _re.sub(r"[^a-z0-9]+", "-", body.name.lower()).strip("-")
+    # Check slug uniqueness
+    if db.scalar(select(Topic).where(Topic.slug == data["slug"])):
+        raise HTTPException(status_code=409, detail="Topic with this slug already exists")
+    obj = Topic(**data)
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -132,7 +181,8 @@ def update_topic(topic_id: uuid.UUID, body: TopicUpdate, _admin: AdminDep, db: D
     obj = db.get(Topic, topic_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Topic not found")
-    obj.name = body.name
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(obj, k, v)
     db.commit()
     db.refresh(obj)
     return obj
