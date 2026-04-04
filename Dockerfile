@@ -10,7 +10,7 @@ WORKDIR /app
 FROM base AS deps
 
 # Copy lockfile and project metadata first for layer caching
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml ./
 
 # Install only third-party production dependencies in this cacheable layer.
 # The app source is copied in the runtime stage and run directly from /app.
