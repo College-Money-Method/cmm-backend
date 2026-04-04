@@ -26,3 +26,4 @@ env/
 .DS_Store
 
 airtable_csv_exports/
+./airtable_csv_exports/*/**

@@ -12,8 +12,9 @@ FROM base AS deps
 # Copy lockfile and project metadata first for layer caching
 COPY pyproject.toml uv.lock ./
 
-# Install production dependencies (no scripts extras, no dev tools)
-RUN uv sync --frozen --no-cache --no-dev
+# Install only third-party production dependencies in this cacheable layer.
+# The app source is copied in the runtime stage and run directly from /app.
+RUN uv sync --frozen --no-cache --no-dev --no-install-project
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 FROM base AS runtime

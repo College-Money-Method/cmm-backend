@@ -1,2 +1,0 @@
-id,createdTime,Action,Days Prior,Name,Trigger,Webhook
-rec2WnOgZSS42xTZ8,2024-08-05T08:55:57.000Z,UpdateAllWebinars,1,This Button Updates all Webinars created after the number of days prior to today,"{""label"": ""Trigger"", ""url"": ""https://hook.us1.make.com/63l2y24hgrpbm7n05ab9eiq4wjp90gjd?daysPrior=1&action=UpdateAllWebinars""}",https://hook.us1.make.com/63l2y24hgrpbm7n05ab9eiq4wjp90gjd
