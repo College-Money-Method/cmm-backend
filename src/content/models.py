@@ -31,6 +31,7 @@ class Topic(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     airtable_id: Mapped[str | None] = mapped_column(Text, unique=True)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("topics.id", ondelete="SET NULL"))
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     description: Mapped[str | None] = mapped_column(Text)
     icon_url: Mapped[str | None] = mapped_column(Text)
@@ -39,11 +40,18 @@ class Topic(Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
+    parent: Mapped[Topic | None] = relationship("Topic", remote_side="Topic.id", foreign_keys=[parent_id])
+    children: Mapped[list[Topic]] = relationship("Topic", foreign_keys=[parent_id], order_by="Topic.sort_order")
+
     content_assets: Mapped[list[ContentAsset]] = relationship(
         secondary="content_asset_topics",
         back_populates="topics",
         order_by="ContentAssetTopic.sort_order",
         viewonly=True,
+    )
+
+    __table_args__ = (
+        Index("idx_topics_parent_id", "parent_id"),
     )
 
 
@@ -202,6 +210,42 @@ class ContentAssetResource(Base):
     )
     resource_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("content_assets.id", ondelete="CASCADE"), primary_key=True
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+
+# ── Grade configs ────────────────────────────────────────────────────────────
+
+class GradeConfig(Base):
+    """Per-grade configuration for the public topics page (9th–12th)."""
+    __tablename__ = "grade_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    grade: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)  # 9, 10, 11, 12
+    label: Mapped[str] = mapped_column(Text, nullable=False)  # e.g. "9th Grade"
+    description: Mapped[str | None] = mapped_column(Text)
+    video_overview_url: Mapped[str | None] = mapped_column(Text)
+    icon: Mapped[str | None] = mapped_column(Text)  # lucide icon name e.g. "BookOpen"
+    bg_color: Mapped[str | None] = mapped_column(Text)  # e.g. "rgba(255, 242, 246, 0.6)"
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    topics: Mapped[list[Topic]] = relationship(
+        secondary="grade_config_topics",
+        order_by="GradeConfigTopic.sort_order",
+        viewonly=True,
+    )
+
+
+class GradeConfigTopic(Base):
+    """Join table linking a grade config to selected topics."""
+    __tablename__ = "grade_config_topics"
+
+    grade_config_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("grade_configs.id", ondelete="CASCADE"), primary_key=True
+    )
+    topic_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("topics.id", ondelete="CASCADE"), primary_key=True
     )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 

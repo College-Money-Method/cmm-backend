@@ -38,12 +38,14 @@ class AssetTypeUpdate(BaseModel):
 class TopicOut(BaseModel):
     id: uuid.UUID
     airtable_id: str | None
+    parent_id: uuid.UUID | None
     name: str
     description: str | None
     icon_url: str | None
     slug: str
     suggested_grades: str | None
     sort_order: int
+    children: list[TopicOut] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -51,6 +53,7 @@ class TopicOut(BaseModel):
 
 class TopicCreate(BaseModel):
     name: str
+    parent_id: uuid.UUID | None = None
     description: str | None = None
     icon_url: str | None = None
     slug: str | None = None  # auto-generated from name if omitted
@@ -60,6 +63,7 @@ class TopicCreate(BaseModel):
 
 class TopicUpdate(BaseModel):
     name: str | None = None
+    parent_id: uuid.UUID | None = None
     description: str | None = None
     icon_url: str | None = None
     slug: str | None = None
@@ -266,6 +270,62 @@ class ResourcesUpdate(BaseModel):
 
 
 # ── Reader Questions ───────────────────────────────────────────────────────────
+
+# ── Grade Configs ─────────────────────────────────────────────────────────────
+
+class GradeConfigOut(BaseModel):
+    id: uuid.UUID
+    grade: int
+    label: str
+    description: str | None
+    video_overview_url: str | None
+    icon: str | None
+    bg_color: str | None
+    sort_order: int
+    topics: list[TopicWithAssets]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class GradeConfigSummary(BaseModel):
+    """Lightweight version without nested topic assets."""
+    id: uuid.UUID
+    grade: int
+    label: str
+    description: str | None
+    video_overview_url: str | None
+    icon: str | None
+    bg_color: str | None
+    sort_order: int
+    topic_ids: list[uuid.UUID]
+
+    model_config = {"from_attributes": True}
+
+
+class GradeConfigCreate(BaseModel):
+    grade: int
+    label: str
+    description: str | None = None
+    video_overview_url: str | None = None
+    icon: str | None = None
+    bg_color: str | None = None
+    sort_order: int = 0
+
+
+class GradeConfigUpdate(BaseModel):
+    label: str | None = None
+    description: str | None = None
+    video_overview_url: str | None = None
+    icon: str | None = None
+    bg_color: str | None = None
+    sort_order: int | None = None
+
+
+class GradeConfigTopicsUpdate(BaseModel):
+    """Update the topics assigned to a grade config."""
+    topic_ids: list[uuid.UUID]
+
 
 class ReaderQuestionCreate(BaseModel):
     email: str

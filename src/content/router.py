@@ -23,6 +23,8 @@ from src.content.models import (
     ContentAssetTopic,
     ContentAssetWorkshop,
     Faq,
+    GradeConfig,
+    GradeConfigTopic,
     Objective,
     ReaderQuestion,
     Topic,
@@ -35,11 +37,17 @@ from src.content.schemas import (
     ContentAssetDetail,
     ContentAssetListItem,
     ContentAssetListResponse,
+    ContentAssetSummary,
     ContentAssetUpdate,
     FaqCreate,
     FaqOut,
     FaqsUpdate,
     FaqUpdate,
+    GradeConfigCreate,
+    GradeConfigOut,
+    GradeConfigSummary,
+    GradeConfigTopicsUpdate,
+    GradeConfigUpdate,
     ObjectiveCreate,
     ObjectiveOut,
     ObjectiveUpdate,
@@ -107,7 +115,15 @@ def delete_asset_type(asset_type_id: uuid.UUID, _admin: AdminDep, db: DbDep):
 
 @router.get("/topics", response_model=list[TopicOut])
 def list_topics(db: DbDep):
-    return db.scalars(select(Topic).order_by(Topic.name)).all()
+    """Admin: list all topics as a tree (top-level with children nested)."""
+    topics = (
+        db.query(Topic)
+        .options(selectinload(Topic.children))
+        .filter(Topic.parent_id.is_(None))
+        .order_by(Topic.sort_order, Topic.name)
+        .all()
+    )
+    return topics
 
 
 @router.get("/topics/public", response_model=list[TopicOut])
@@ -173,6 +189,7 @@ def create_topic(body: TopicCreate, _admin: AdminDep, db: DbDep):
     db.add(obj)
     db.commit()
     db.refresh(obj)
+    obj = db.query(Topic).options(selectinload(Topic.children)).filter(Topic.id == obj.id).one()
     return obj
 
 
@@ -184,7 +201,7 @@ def update_topic(topic_id: uuid.UUID, body: TopicUpdate, _admin: AdminDep, db: D
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(obj, k, v)
     db.commit()
-    db.refresh(obj)
+    obj = db.query(Topic).options(selectinload(Topic.children)).filter(Topic.id == obj.id).one()
     return obj
 
 
@@ -703,3 +720,166 @@ def update_question_status(
     db.commit()
     db.refresh(obj)
     return obj
+
+
+# ── Grade Configs ────────────────────────────────────────────────────────────
+
+
+def _load_grade_config(db, gc: GradeConfig) -> GradeConfigOut:
+    """Build a GradeConfigOut with topics and their published assets."""
+    topics_with_assets = []
+    for topic in gc.topics:
+        published = [
+            a for a in topic.content_assets if a.status == "published"
+        ]
+        topics_with_assets.append(
+            TopicWithAssets(
+                id=topic.id,
+                name=topic.name,
+                description=topic.description,
+                icon_url=topic.icon_url,
+                slug=topic.slug,
+                suggested_grades=topic.suggested_grades,
+                sort_order=topic.sort_order,
+                content_assets=[ContentAssetSummary.model_validate(a) for a in published],
+            )
+        )
+    return GradeConfigOut(
+        id=gc.id,
+        grade=gc.grade,
+        label=gc.label,
+        description=gc.description,
+        video_overview_url=gc.video_overview_url,
+        icon=gc.icon,
+        bg_color=gc.bg_color,
+        sort_order=gc.sort_order,
+        topics=topics_with_assets,
+        created_at=gc.created_at,
+    )
+
+
+@router.get("/grade-configs/public", response_model=list[GradeConfigOut])
+def list_grade_configs_public(db: DbDep):
+    """Public: list all grade configs with their topics and published assets."""
+    configs = (
+        db.query(GradeConfig)
+        .options(
+            selectinload(GradeConfig.topics).selectinload(Topic.content_assets).selectinload(ContentAsset.asset_type),
+        )
+        .order_by(GradeConfig.grade)
+        .all()
+    )
+    return [_load_grade_config(db, gc) for gc in configs]
+
+
+@router.get("/grade-configs", response_model=list[GradeConfigSummary])
+def list_grade_configs(_admin: AdminDep, db: DbDep):
+    """Admin: list all grade configs (lightweight, with topic IDs only)."""
+    configs = (
+        db.query(GradeConfig)
+        .options(selectinload(GradeConfig.topics))
+        .order_by(GradeConfig.grade)
+        .all()
+    )
+    results = []
+    for gc in configs:
+        results.append(
+            GradeConfigSummary(
+                id=gc.id,
+                grade=gc.grade,
+                label=gc.label,
+                description=gc.description,
+                video_overview_url=gc.video_overview_url,
+                icon=gc.icon,
+                bg_color=gc.bg_color,
+                sort_order=gc.sort_order,
+                topic_ids=[t.id for t in gc.topics],
+            )
+        )
+    return results
+
+
+@router.post("/grade-configs", response_model=GradeConfigSummary, status_code=201)
+def create_grade_config(body: GradeConfigCreate, _admin: AdminDep, db: DbDep):
+    """Admin: create a new grade config."""
+    existing = db.query(GradeConfig).filter(GradeConfig.grade == body.grade).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Grade {body.grade} config already exists")
+    gc = GradeConfig(**body.model_dump())
+    db.add(gc)
+    db.commit()
+    db.refresh(gc)
+    return GradeConfigSummary(
+        id=gc.id, grade=gc.grade, label=gc.label,
+        description=gc.description, video_overview_url=gc.video_overview_url,
+        icon=gc.icon, bg_color=gc.bg_color, sort_order=gc.sort_order,
+        topic_ids=[],
+    )
+
+
+@router.patch("/grade-configs/{grade_config_id}", response_model=GradeConfigSummary)
+def update_grade_config(
+    grade_config_id: uuid.UUID, body: GradeConfigUpdate, _admin: AdminDep, db: DbDep
+):
+    """Admin: update a grade config's fields."""
+    gc = db.get(GradeConfig, grade_config_id)
+    if not gc:
+        raise HTTPException(status_code=404, detail="Grade config not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(gc, field, value)
+    db.commit()
+    db.refresh(gc)
+    gc = db.query(GradeConfig).options(selectinload(GradeConfig.topics)).filter(GradeConfig.id == gc.id).one()
+    return GradeConfigSummary(
+        id=gc.id, grade=gc.grade, label=gc.label,
+        description=gc.description, video_overview_url=gc.video_overview_url,
+        icon=gc.icon, bg_color=gc.bg_color, sort_order=gc.sort_order,
+        topic_ids=[t.id for t in gc.topics],
+    )
+
+
+@router.delete("/grade-configs/{grade_config_id}", status_code=204)
+def delete_grade_config(grade_config_id: uuid.UUID, _admin: AdminDep, db: DbDep):
+    """Admin: delete a grade config."""
+    gc = db.get(GradeConfig, grade_config_id)
+    if not gc:
+        raise HTTPException(status_code=404, detail="Grade config not found")
+    db.delete(gc)
+    db.commit()
+
+
+@router.put("/grade-configs/{grade_config_id}/topics", response_model=GradeConfigSummary)
+def update_grade_config_topics(
+    grade_config_id: uuid.UUID, body: GradeConfigTopicsUpdate, _admin: AdminDep, db: DbDep
+):
+    """Admin: replace the topics assigned to a grade config. Only top-level topics allowed."""
+    gc = db.get(GradeConfig, grade_config_id)
+    if not gc:
+        raise HTTPException(status_code=404, detail="Grade config not found")
+
+    # Validate: only top-level topics (no parent) can be assigned to grades
+    if body.topic_ids:
+        sub_topics = (
+            db.query(Topic)
+            .filter(Topic.id.in_(body.topic_ids), Topic.parent_id.isnot(None))
+            .all()
+        )
+        if sub_topics:
+            names = ", ".join(t.name for t in sub_topics)
+            raise HTTPException(status_code=400, detail=f"Only top-level topics can be assigned to grades. Sub-topics found: {names}")
+
+    # Clear existing
+    db.query(GradeConfigTopic).filter(GradeConfigTopic.grade_config_id == grade_config_id).delete()
+
+    # Insert new with sort order
+    for i, topic_id in enumerate(body.topic_ids):
+        db.add(GradeConfigTopic(grade_config_id=grade_config_id, topic_id=topic_id, sort_order=i))
+    db.commit()
+
+    gc = db.query(GradeConfig).options(selectinload(GradeConfig.topics)).filter(GradeConfig.id == gc.id).one()
+    return GradeConfigSummary(
+        id=gc.id, grade=gc.grade, label=gc.label,
+        description=gc.description, video_overview_url=gc.video_overview_url,
+        icon=gc.icon, bg_color=gc.bg_color, sort_order=gc.sort_order,
+        topic_ids=[t.id for t in gc.topics],
+    )
