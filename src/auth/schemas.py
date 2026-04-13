@@ -26,6 +26,7 @@ class CounselorCreate(BaseModel):
     last_name: str
     school_id: uuid.UUID
     role: Literal["counselor", "viewer"] = "counselor"
+    title: str | None = None
     # If provided, used as initial password; otherwise Supabase sends invite email
     password: str | None = None
 
@@ -35,6 +36,7 @@ class CounselorUpdate(BaseModel):
     last_name: str | None = None
     school_id: uuid.UUID | None = None
     role: Literal["counselor", "viewer"] | None = None
+    title: str | None = None
 
 
 class CounselorOut(BaseModel):
@@ -46,6 +48,7 @@ class CounselorOut(BaseModel):
     role: str
     school_id: uuid.UUID | None
     school_name: str | None
+    title: str | None = None
 
 
 class CounselorListResponse(BaseModel):

@@ -54,6 +54,7 @@ def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut
         role=role_record.role,
         school_id=role_record.school_id,
         school_name=school_name,
+        title=role_record.title or None,
     )
 
 
@@ -185,6 +186,8 @@ def create_counselor(
     if existing_role:
         existing_role.role = body.role
         existing_role.school_id = body.school_id
+        if body.title is not None:
+            existing_role.title = body.title
         db.commit()
         db.refresh(existing_role)
         role_record = (
@@ -204,6 +207,7 @@ def create_counselor(
         user_id=uuid.UUID(new_user.id),
         role=body.role,
         school_id=body.school_id,
+        title=body.title,
     )
     db.add(role_record)
     db.commit()
@@ -220,6 +224,33 @@ def create_counselor(
     auth_user = {
         "email": new_user.email or "",
         "user_metadata": new_user.user_metadata or {},
+    }
+    return _build_counselor_out(role_record, auth_user)
+
+
+@router.get("/api/v1/counselors/{user_id}", response_model=CounselorOut)
+def get_counselor(
+    user_id: uuid.UUID,
+    _admin: AdminDep,
+    db: DbDep,
+    supabase=Depends(get_supabase),
+) -> CounselorOut:
+    """Fetch a single counselor/viewer by user_id."""
+    role_record = (
+        db.query(UserRole)
+        .options(joinedload(UserRole.school))
+        .filter(UserRole.user_id == user_id)
+        .first()
+    )
+    if not role_record:
+        raise HTTPException(status_code=404, detail="Counselor not found")
+
+    resp = supabase.auth.admin.get_user_by_id(str(user_id))
+    if not resp or not resp.user:
+        raise HTTPException(status_code=404, detail="Auth user not found")
+    auth_user = {
+        "email": resp.user.email or "",
+        "user_metadata": resp.user.user_metadata or {},
     }
     return _build_counselor_out(role_record, auth_user)
 
