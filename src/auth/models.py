@@ -34,6 +34,8 @@ class UserRole(Base):
         nullable=True,
         index=True,
     )
+    # Optional job title (e.g. "Principal", "Vice Principal"); defaults to "<School> Counselor"
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), nullable=False
     )

@@ -145,3 +145,11 @@ class SchoolPublicListResponse(BaseModel):
 
 class SchoolPasswordVerify(BaseModel):
     password: str
+
+
+class CounselorPublicOut(BaseModel):
+    full_name: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    title: str | None = None
+    email: str | None = None

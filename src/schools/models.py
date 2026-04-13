@@ -57,6 +57,11 @@ class School(Base):
     portal_mappings: Mapped[list[PortalMapping]] = relationship(back_populates="school")
     one_on_one_meetings: Mapped[list[OneOnOneMeeting]] = relationship(back_populates="school")
     date_selectors: Mapped[list[SchoolDateSelector]] = relationship(back_populates="school")
+    user_roles: Mapped[list["UserRole"]] = relationship(
+        "UserRole",
+        primaryjoin="School.id == foreign(UserRole.school_id)",
+        viewonly=True,
+    )
 
     __table_args__ = (
         Index("idx_schools_cohort_id", "cohort_id"),

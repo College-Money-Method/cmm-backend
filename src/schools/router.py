@@ -4,11 +4,13 @@ import uuid
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from src.auth.deps import AdminDep, CurrentUserDep
+from src.auth.models import UserRole
+from src.db.client import get_supabase
 from src.db.deps import DbDep
 from src.schools.models import Contact, School
 from src.content.models import GradeSet
@@ -23,9 +25,47 @@ from src.schools.schemas import (
     SchoolPublic,
     SchoolPublicListResponse,
     SchoolUpdate,
+    CounselorPublicOut,
 )
 
 router = APIRouter(prefix="/api/v1/schools", tags=["schools"])
+
+
+@router.get("/slug/{slug}/counselors", response_model=list[CounselorPublicOut])
+def get_school_counselors_public(
+    slug: str,
+    db: DbDep,
+    supabase=Depends(get_supabase),
+) -> list[CounselorPublicOut]:
+    """Return counselors assigned to a school (public, no auth required)."""
+    school = db.query(School).filter(School.slug == slug).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    roles = (
+        db.query(UserRole)
+        .filter(UserRole.school_id == school.id, UserRole.role == "counselor")
+        .all()
+    )
+
+    result: list[CounselorPublicOut] = []
+    for role_record in roles:
+        try:
+            resp = supabase.auth.admin.get_user_by_id(str(role_record.user_id))
+            if resp and resp.user:
+                meta = resp.user.user_metadata or {}
+                first = meta.get("first_name") or ""
+                last = meta.get("last_name") or ""
+                result.append(CounselorPublicOut(
+                    first_name=first or None,
+                    last_name=last or None,
+                    full_name=f"{first} {last}".strip() or None,
+                    title=role_record.title or f"{school.name} Counselor",
+                    email=resp.user.email or None,
+                ))
+        except Exception:
+            pass
+    return result
 
 
 def _check_school_access(school_id: uuid.UUID, user: CurrentUserDep) -> None:
