@@ -192,7 +192,7 @@ def list_schools(
     sort_by: Literal["name", "state", "enrollment"] = Query(default="name"),
     sort_dir: Literal["asc", "desc"] = Query(default="asc"),
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=1000),
 ) -> SchoolListResponse:
     """List schools with optional filters. Counselors are redirected to their own school."""
     # Counselors: return only their school

@@ -37,7 +37,7 @@ def list_cohorts_with_schools(
     sort_by: Literal["name", "state", "enrollment"] = Query(default="name"),
     sort_dir: Literal["asc", "desc"] = Query(default="asc"),
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=5, ge=1, le=200),
+    limit: int = Query(default=5, ge=1, le=1000),
 ) -> CohortWithSchoolsResponse:
     """Return cohorts with their matching schools embedded, paginated by cohort.
     A 'No Cohort' group is appended last if any matching schools have no cohort.

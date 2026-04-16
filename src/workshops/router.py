@@ -366,6 +366,52 @@ def get_school_webinar(school_id: uuid.UUID, webinar_id: uuid.UUID, db: DbDep) -
     return _to_item(mapping)
 
 
+@router.post("/public/webinars/{webinar_id}/register", response_model=RegistrationOut, status_code=status.HTTP_201_CREATED)
+def register_public(webinar_id: uuid.UUID, body: RegistrationCreate, db: DbDep) -> RegistrationOut:
+    """
+    Public registration for a webinar (no auth required).
+
+    Creates a registration with 'approved' status and current timestamp.
+    If the user is already registered (same email + webinar), returns the existing registration.
+    """
+    webinar = db.get(Webinar, webinar_id)
+    if not webinar:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webinar not found")
+
+    # Check if user is already registered (by email)
+    existing = db.execute(
+        select(WorkshopRegistration)
+        .where(
+            WorkshopRegistration.webinar_id == webinar_id,
+            WorkshopRegistration.email == body.email,
+        )
+        .options(selectinload(WorkshopRegistration.school))
+    ).scalar_one_or_none()
+
+    if existing:
+        # Return existing registration (idempotent)
+        return _registration_out(existing)
+
+    # Create new registration
+    reg_data = body.model_dump()
+    reg_data["status"] = "approved"  # Auto-approve public registrations
+    reg_data["registration_time"] = datetime.now(tz=timezone.utc)
+
+    obj = WorkshopRegistration(webinar_id=webinar_id, **reg_data)
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+
+    # Reload with school relationship
+    obj = db.execute(
+        select(WorkshopRegistration)
+        .where(WorkshopRegistration.id == obj.id)
+        .options(selectinload(WorkshopRegistration.school))
+    ).scalar_one()
+
+    return _registration_out(obj)
+
+
 # ── Admin: Workshops (parameterised paths — registered last) ─────────────────
 
 
