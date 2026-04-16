@@ -38,14 +38,12 @@ class AssetTypeUpdate(BaseModel):
 class GoalOut(BaseModel):
     id: uuid.UUID
     airtable_id: str | None
-    parent_id: uuid.UUID | None
     name: str
     description: str | None
     icon_url: str | None
     slug: str
     suggested_grades: str | None
     sort_order: int
-    children: list[GoalOut] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -53,7 +51,6 @@ class GoalOut(BaseModel):
 
 class GoalCreate(BaseModel):
     name: str
-    parent_id: uuid.UUID | None = None
     description: str | None = None
     icon_url: str | None = None
     slug: str | None = None  # auto-generated from name if omitted
@@ -63,7 +60,6 @@ class GoalCreate(BaseModel):
 
 class GoalUpdate(BaseModel):
     name: str | None = None
-    parent_id: uuid.UUID | None = None
     description: str | None = None
     icon_url: str | None = None
     slug: str | None = None

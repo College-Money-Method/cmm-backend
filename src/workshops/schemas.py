@@ -64,6 +64,7 @@ class WorkshopSummary(BaseModel):
 
 
 class WorkshopOut(BaseModel):
+    """Workshop detail without webinars (webinars loaded separately)."""
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -77,7 +78,6 @@ class WorkshopOut(BaseModel):
     workshop_art_url: str | None
     created_at: datetime
     webinar_count: int
-    webinars: list[WebinarSummary]
 
 
 # ── Admin: Webinar schemas ───────────────────────────────────────────────────

@@ -40,8 +40,6 @@ class Goal(Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
-    parent: Mapped[Goal | None] = relationship("Goal", remote_side="Goal.id", foreign_keys=[parent_id])
-    children: Mapped[list[Goal]] = relationship("Goal", foreign_keys=[parent_id], order_by="Goal.sort_order")
 
     content_assets: Mapped[list[ContentAsset]] = relationship(
         secondary="content_asset_goals",
@@ -55,9 +53,6 @@ class Goal(Base):
         order_by="Topic.sort_order",
     )
 
-    __table_args__ = (
-        Index("idx_goals_parent_id", "parent_id"),
-    )
 
 
 class Topic(Base):

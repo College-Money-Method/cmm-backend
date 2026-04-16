@@ -85,35 +85,6 @@ def _registration_out(reg: WorkshopRegistration) -> RegistrationOut:
     )
 
 
-def _workshop_out(obj: Workshop) -> WorkshopOut:
-    webinar_summaries = [
-        WebinarSummary(
-            id=w.id,
-            webinar_name=w.webinar_name,
-            cohort_id=w.cohort_id,
-            start_datetime=w.start_datetime,
-            end_datetime=w.end_datetime,
-            zoom_webinar_id=w.zoom_webinar_id,
-            registration_url=w.registration_url,
-            zoom_link=w.zoom_link,
-            registration_count=len(w.registrations),
-        )
-        for w in obj.webinars
-    ]
-    return WorkshopOut(
-        id=obj.id,
-        name=obj.name,
-        description=obj.description,
-        key_actions=obj.key_actions,
-        body=obj.body,
-        sequence_number=obj.sequence_number,
-        suggested_grades=obj.suggested_grades,
-        resource_center_slug=obj.resource_center_slug,
-        workshop_art_url=obj.workshop_art_url,
-        created_at=obj.created_at,
-        webinar_count=len(obj.webinars),
-        webinars=webinar_summaries,
-    )
 
 
 def _to_item(mapping: PortalMapping) -> WorkshopPortalItem:
@@ -477,21 +448,32 @@ def create_workshop(body: WorkshopCreate, _admin: AdminDep, db: DbDep):
         workshop_art_url=obj.workshop_art_url,
         created_at=obj.created_at,
         webinar_count=0,
-        webinars=[],
     )
 
 
 @router.get("/{workshop_id}", response_model=WorkshopOut)
 def get_workshop(workshop_id: uuid.UUID, _admin: AdminDep, db: DbDep):
-    """Admin: get workshop detail with webinars."""
+    """Admin: get workshop detail (webinars loaded separately via /webinars endpoint)."""
     obj = db.execute(
         select(Workshop)
         .where(Workshop.id == workshop_id)
-        .options(selectinload(Workshop.webinars).selectinload(Webinar.registrations))
+        .options(selectinload(Workshop.webinars))
     ).scalar_one_or_none()
     if not obj:
         raise HTTPException(status_code=404, detail="Workshop not found")
-    return _workshop_out(obj)
+    return WorkshopOut(
+        id=obj.id,
+        name=obj.name,
+        description=obj.description,
+        key_actions=obj.key_actions,
+        body=obj.body,
+        sequence_number=obj.sequence_number,
+        suggested_grades=obj.suggested_grades,
+        resource_center_slug=obj.resource_center_slug,
+        workshop_art_url=obj.workshop_art_url,
+        created_at=obj.created_at,
+        webinar_count=len(obj.webinars),
+    )
 
 
 @router.patch("/{workshop_id}", response_model=WorkshopOut)
@@ -499,7 +481,7 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
     obj = db.execute(
         select(Workshop)
         .where(Workshop.id == workshop_id)
-        .options(selectinload(Workshop.webinars).selectinload(Webinar.registrations))
+        .options(selectinload(Workshop.webinars))
     ).scalar_one_or_none()
     if not obj:
         raise HTTPException(status_code=404, detail="Workshop not found")
@@ -507,7 +489,69 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
         setattr(obj, k, v)
     db.commit()
     db.refresh(obj)
-    return _workshop_out(obj)
+    return WorkshopOut(
+        id=obj.id,
+        name=obj.name,
+        description=obj.description,
+        key_actions=obj.key_actions,
+        body=obj.body,
+        sequence_number=obj.sequence_number,
+        suggested_grades=obj.suggested_grades,
+        resource_center_slug=obj.resource_center_slug,
+        workshop_art_url=obj.workshop_art_url,
+        created_at=obj.created_at,
+        webinar_count=len(obj.webinars),
+    )
+
+
+@router.get("/{workshop_id}/webinars", response_model=list[WebinarSummary])
+def list_workshop_webinars(
+    workshop_id: uuid.UUID,
+    _admin: AdminDep,
+    db: DbDep,
+    search: str | None = None,
+    status: str | None = None,  # "upcoming", "past", or None for all
+    sort: str = "date_desc",  # "date_asc" or "date_desc"
+):
+    """Admin: list webinars for a workshop with filtering and sorting."""
+    workshop = db.get(Workshop, workshop_id)
+    if not workshop:
+        raise HTTPException(status_code=404, detail="Workshop not found")
+
+    now = datetime.now(tz=timezone.utc)
+    stmt = select(Webinar).where(Webinar.workshop_id == workshop_id).options(selectinload(Webinar.registrations))
+
+    # Filter by search term
+    if search:
+        stmt = stmt.where(Webinar.webinar_name.ilike(f"%{search}%"))
+
+    # Filter by status (upcoming/past)
+    if status == "upcoming":
+        stmt = stmt.where((Webinar.start_datetime >= now) | (Webinar.start_datetime.is_(None)))
+    elif status == "past":
+        stmt = stmt.where(Webinar.start_datetime < now)
+
+    # Sort by date
+    if sort == "date_asc":
+        stmt = stmt.order_by(Webinar.start_datetime.asc().nulls_last())
+    else:
+        stmt = stmt.order_by(Webinar.start_datetime.desc().nulls_last())
+
+    webinars = db.execute(stmt).scalars().all()
+    return [
+        WebinarSummary(
+            id=w.id,
+            webinar_name=w.webinar_name,
+            cohort_id=w.cohort_id,
+            start_datetime=w.start_datetime,
+            end_datetime=w.end_datetime,
+            zoom_webinar_id=w.zoom_webinar_id,
+            registration_url=w.registration_url,
+            zoom_link=w.zoom_link,
+            registration_count=len(w.registrations),
+        )
+        for w in webinars
+    ]
 
 
 @router.delete("/{workshop_id}", status_code=status.HTTP_204_NO_CONTENT)

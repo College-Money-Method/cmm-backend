@@ -130,11 +130,9 @@ def delete_asset_type(asset_type_id: uuid.UUID, _admin: AdminDep, db: DbDep):
 
 @router.get("/goals", response_model=list[GoalOut])
 def list_goals(db: DbDep):
-    """Admin: list all goals as a tree (top-level with children nested)."""
+    """Admin: list all goals (flat list)."""
     goals = (
         db.query(Goal)
-        .options(selectinload(Goal.children))
-        .filter(Goal.parent_id.is_(None))
         .order_by(Goal.sort_order, Goal.name)
         .all()
     )
@@ -210,7 +208,6 @@ def create_goal(body: GoalCreate, _admin: AdminDep, db: DbDep):
     db.add(obj)
     db.commit()
     db.refresh(obj)
-    obj = db.query(Goal).options(selectinload(Goal.children)).filter(Goal.id == obj.id).one()
     return obj
 
 
@@ -222,7 +219,7 @@ def update_goal(goal_id: uuid.UUID, body: GoalUpdate, _admin: AdminDep, db: DbDe
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(obj, k, v)
     db.commit()
-    obj = db.query(Goal).options(selectinload(Goal.children)).filter(Goal.id == obj.id).one()
+    db.refresh(obj)
     return obj
 
 
@@ -1196,17 +1193,6 @@ def update_grade_config_goals(
     gc = db.get(GradeConfig, grade_config_id)
     if not gc:
         raise HTTPException(status_code=404, detail="Grade config not found")
-
-    # Validate: only top-level goals (no parent) can be assigned to grades
-    if body.goal_ids:
-        sub_goals = (
-            db.query(Goal)
-            .filter(Goal.id.in_(body.goal_ids), Goal.parent_id.isnot(None))
-            .all()
-        )
-        if sub_goals:
-            names = ", ".join(g.name for g in sub_goals)
-            raise HTTPException(status_code=400, detail=f"Only top-level goals can be assigned to grades. Sub-goals found: {names}")
 
     # Clear existing
     db.query(GradeConfigGoal).filter(GradeConfigGoal.grade_config_id == grade_config_id).delete()
