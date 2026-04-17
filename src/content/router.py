@@ -77,6 +77,7 @@ from src.content.schemas import (
 )
 from src.config import settings
 from src.db.deps import DbDep
+from src.utils.tiptap import extract_text
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
 
@@ -304,6 +305,12 @@ def create_topic(body: TopicCreate, _admin: AdminDep, db: DbDep):
     if data.get("action_items") is None:
         data["action_items"] = []
     obj = Topic(**data)
+    obj.search_text = " ".join(filter(None, [
+        obj.title or "",
+        obj.description or "",
+        extract_text(obj.summary),
+        extract_text(obj.content),
+    ]))
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -317,6 +324,12 @@ def update_topic(topic_id: uuid.UUID, body: TopicUpdate, _admin: AdminDep, db: D
         raise HTTPException(status_code=404, detail="Topic not found")
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(obj, k, v)
+    obj.search_text = " ".join(filter(None, [
+        obj.title or "",
+        obj.description or "",
+        extract_text(obj.summary),
+        extract_text(obj.content),
+    ]))
     db.commit()
     return _load_topic_detail(db, topic_id)
 
@@ -700,6 +713,12 @@ def get_asset(asset_id: uuid.UUID, _admin: AdminDep, db: DbDep):
 @router.post("/assets", response_model=ContentAssetDetail, status_code=status.HTTP_201_CREATED)
 def create_asset(_admin: AdminDep, body: ContentAssetCreate, db: DbDep):
     obj = ContentAsset(**body.model_dump())
+    obj.search_text = " ".join(filter(None, [
+        obj.name or "",
+        obj.description or "",
+        extract_text(obj.summary),
+        extract_text(obj.content),
+    ]))
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -713,6 +732,12 @@ def update_asset(asset_id: uuid.UUID, body: ContentAssetUpdate, _admin: AdminDep
         raise HTTPException(status_code=404, detail="Content asset not found")
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(obj, k, v)
+    obj.search_text = " ".join(filter(None, [
+        obj.name or "",
+        obj.description or "",
+        extract_text(obj.summary),
+        extract_text(obj.content),
+    ]))
     db.commit()
     return _load_asset_detail(db, asset_id)
 

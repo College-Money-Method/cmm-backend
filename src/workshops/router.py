@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
+from src.utils.tiptap import extract_text
 from src.content.models import Objective
 from src.schools.models import School
 from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopRegistration
@@ -436,6 +437,12 @@ def list_workshops(_admin: AdminDep, db: DbDep):
 @router.post("/", response_model=WorkshopOut, status_code=status.HTTP_201_CREATED)
 def create_workshop(body: WorkshopCreate, _admin: AdminDep, db: DbDep):
     obj = Workshop(**body.model_dump())
+    obj.search_text = " ".join(filter(None, [
+        obj.name or "",
+        obj.description or "",
+        extract_text(obj.body),
+        extract_text(obj.key_actions),
+    ]))
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -491,6 +498,12 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
         raise HTTPException(status_code=404, detail="Workshop not found")
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(obj, k, v)
+    obj.search_text = " ".join(filter(None, [
+        obj.name or "",
+        obj.description or "",
+        extract_text(obj.body),
+        extract_text(obj.key_actions),
+    ]))
     db.commit()
     db.refresh(obj)
     return WorkshopOut(

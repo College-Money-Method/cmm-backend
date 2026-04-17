@@ -16,7 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.dialects.postgresql import TIMESTAMP
+from sqlalchemy.dialects.postgresql import TIMESTAMP, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -36,6 +36,8 @@ class Workshop(Base):
     suggested_grades: Mapped[str | None] = mapped_column(Text)
     resource_center_slug: Mapped[str | None] = mapped_column(Text, unique=True)
     workshop_art_url: Mapped[str | None] = mapped_column(Text)
+    search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     webinars: Mapped[list[Webinar]] = relationship(back_populates="workshop")

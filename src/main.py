@@ -25,6 +25,7 @@ import src.guest_contacts.models  # noqa: F401
 from src.auth.router import router as auth_router
 from src.config import settings
 from src.content.router import router as content_router
+from src.search.router import router as search_router
 from src.cycles.router import router as cohorts_router
 from src.db import get_supabase
 from src.schools.router import router as schools_router
@@ -63,6 +64,7 @@ app.include_router(content_router)
 app.include_router(workshops_router)
 app.include_router(guest_contacts_router)
 app.include_router(storage_router)
+app.include_router(search_router)
 
 
 @app.get("/health")
