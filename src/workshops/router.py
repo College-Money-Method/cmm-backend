@@ -113,6 +113,8 @@ def _to_item(mapping: PortalMapping) -> WorkshopPortalItem:
         suggested_grades=workshop.suggested_grades,
         workshop_art_url=workshop.workshop_art_url,
         sequence_number=workshop.sequence_number,
+        action_items=list(workshop.action_items or []),
+        resources=[ContentAssetSummary.model_validate(a) for a in workshop.content_assets],
     )
 
 
@@ -296,7 +298,7 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
             select(PortalMapping)
             .where(PortalMapping.school_id == school_id)
             .options(
-                selectinload(PortalMapping.webinar).selectinload(Webinar.workshop)
+                selectinload(PortalMapping.webinar).selectinload(Webinar.workshop).selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type)
             )
             .order_by(PortalMapping.created_at)
         )
@@ -333,7 +335,7 @@ def get_school_webinar(school_id: uuid.UUID, webinar_id: uuid.UUID, db: DbDep) -
                 PortalMapping.webinar_id == webinar_id,
             )
             .options(
-                selectinload(PortalMapping.webinar).selectinload(Webinar.workshop)
+                selectinload(PortalMapping.webinar).selectinload(Webinar.workshop).selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type)
             )
         )
         .scalar_one_or_none()
@@ -490,6 +492,7 @@ def get_workshop(workshop_id: uuid.UUID, _admin: AdminDep, db: DbDep):
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
+        action_items=list(obj.action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
@@ -530,6 +533,7 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
+        action_items=list(obj.action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
@@ -634,6 +638,7 @@ def update_workshop_objectives(
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
+        action_items=list(obj.action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
@@ -692,6 +697,7 @@ def update_workshop_resources(
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
+        action_items=list(obj.action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 

@@ -23,6 +23,7 @@ class WorkshopCreate(BaseModel):
     suggested_grades: str | None = None
     resource_center_slug: str | None = None
     workshop_art_url: str | None = None
+    action_items: list[str] | None = None
 
 
 class WorkshopUpdate(BaseModel):
@@ -34,6 +35,7 @@ class WorkshopUpdate(BaseModel):
     suggested_grades: str | None = None
     resource_center_slug: str | None = None
     workshop_art_url: str | None = None
+    action_items: list[str] | None = None
 
 
 class WebinarSummary(BaseModel):
@@ -101,6 +103,7 @@ class WorkshopOut(BaseModel):
     created_at: datetime
     webinar_count: int
     objectives: list[ObjectiveSummary] = []
+    action_items: list[str] = []
     resources: list[ContentAssetSummary] = []
 
 
@@ -253,6 +256,8 @@ class WorkshopPortalItem(BaseModel):
     suggested_grades: str | None
     workshop_art_url: str | None
     sequence_number: int | None
+    action_items: list[str] = []
+    resources: list[ContentAssetSummary] = []
 
 
 class SchoolWorkshopsResponse(BaseModel):
