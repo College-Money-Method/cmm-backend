@@ -16,14 +16,15 @@ Dependencies: boto3, requests, python-dotenv (all already in the project).
 from __future__ import annotations
 
 import hashlib
+import io
 import mimetypes
 import sys
-import urllib.parse
 from pathlib import Path
 
 import boto3
 import requests
 from botocore.exceptions import BotoCoreError, ClientError
+from PIL import Image
 
 # Load settings from .env via the project's config
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -31,6 +32,7 @@ from src.config import settings  # noqa: E402
 
 
 S3_PREFIX = "portal/assets"
+RESIZE_SIZES = [128, 256, 512]
 
 
 def _ext_from_content_type(content_type: str) -> str:
@@ -42,37 +44,71 @@ def _ext_from_content_type(content_type: str) -> str:
     return {".jpeg": ".jpg", ".jpe": ".jpg", None: ".bin"}.get(ext, ext or ".bin")
 
 
-def upload_url(url: str, s3_client, bucket: str) -> str:
-    """Download *url* and upload it to S3. Returns the public S3 HTTPS URL."""
-    print(f"  Downloading {url[:80]}...", file=sys.stderr)
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-
-    content_type = resp.headers.get("Content-Type", "application/octet-stream")
-    ext = _ext_from_content_type(content_type)
-
-    # Use a hash of the original URL as the S3 key so re-uploading the same
-    # asset is idempotent.
-    url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-    s3_key = f"{S3_PREFIX}/{url_hash}{ext}"
-
-    print(f"  Uploading to s3://{bucket}/{s3_key} ({content_type})", file=sys.stderr)
-    s3_client.put_object(
-        Bucket=bucket,
-        Key=s3_key,
-        Body=resp.content,
-        ContentType=content_type.split(";")[0].strip(),
-    )
-
+def _put_object(s3_client, bucket: str, key: str, body: bytes, content_type: str) -> str:
+    """Upload *body* to S3 and return the public HTTPS URL."""
+    s3_client.put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type)
     region = settings.aws_region
-    s3_url = f"https://{bucket}.s3.{region}.amazonaws.com/{s3_key}"
-    return s3_url
+    return f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+
+
+def _load_source(source: str) -> tuple[bytes, str]:
+    """Load raw bytes and MIME type from a URL or local file path."""
+    path = Path(source).expanduser()
+    if path.exists():
+        print(f"  Reading local file {path}...", file=sys.stderr)
+        data = path.read_bytes()
+        mime, _ = mimetypes.guess_type(path.name)
+        return data, mime or "application/octet-stream"
+    # Treat as URL
+    print(f"  Downloading {source[:80]}...", file=sys.stderr)
+    resp = requests.get(source, timeout=30)
+    resp.raise_for_status()
+    mime = resp.headers.get("Content-Type", "application/octet-stream").split(";")[0].strip()
+    return resp.content, mime
+
+
+def upload_url(source: str, s3_client, bucket: str) -> dict[str, str]:
+    """Upload a URL or local file path to S3 (original + resized variants).
+
+    Returns a dict mapping ``"original"`` and each size (e.g. ``128``) to its
+    public S3 HTTPS URL.
+    """
+    data, mime = _load_source(source)
+    ext = _ext_from_content_type(mime)
+
+    # Use a hash of the source (URL or resolved path) as the S3 key so
+    # re-uploading the same asset is idempotent.
+    source_key = str(Path(source).expanduser().resolve()) if Path(source).expanduser().exists() else source
+    url_hash = hashlib.sha256(source_key.encode()).hexdigest()[:16]
+
+    results: dict[str, str] = {}
+
+    # Upload original
+    original_key = f"{S3_PREFIX}/{url_hash}{ext}"
+    print(f"  Uploading original to s3://{bucket}/{original_key}", file=sys.stderr)
+    results["original"] = _put_object(s3_client, bucket, original_key, data, mime)
+
+    # Resize and upload each size
+    image = Image.open(io.BytesIO(data))
+    for size in RESIZE_SIZES:
+        resized = image.copy()
+        resized.thumbnail((size, size), Image.LANCZOS)
+        buf = io.BytesIO()
+        fmt = image.format or "PNG"
+        resized.save(buf, format=fmt)
+        buf.seek(0)
+
+        sized_key = f"{S3_PREFIX}/{url_hash}.{size}{ext}"
+        print(f"  Uploading {size}px to s3://{bucket}/{sized_key}", file=sys.stderr)
+        results[str(size)] = _put_object(s3_client, bucket, sized_key, buf.read(), mime)
+
+    return results
 
 
 def main() -> None:
     urls = sys.argv[1:]
     if not urls:
-        print("Usage: python scripts/upload_to_s3.py <url> [<url> ...]", file=sys.stderr)
+        print("Usage: python scripts/upload_to_s3.py <url-or-path> [<url-or-path> ...]", file=sys.stderr)
         sys.exit(1)
 
     if not settings.s3_bucket_name:
@@ -88,9 +124,10 @@ def main() -> None:
 
     for url in urls:
         try:
-            s3_url = upload_url(url, s3, settings.s3_bucket_name)
-            print(s3_url)
-        except (requests.RequestException, BotoCoreError, ClientError) as exc:
+            results = upload_url(url, s3, settings.s3_bucket_name)
+            for label, s3_url in results.items():
+                print(f"{label}: {s3_url}")
+        except (requests.RequestException, BotoCoreError, ClientError, OSError) as exc:
             print(f"Error uploading {url}: {exc}", file=sys.stderr)
             sys.exit(1)
 

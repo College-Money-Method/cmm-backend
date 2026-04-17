@@ -63,6 +63,18 @@ class WorkshopSummary(BaseModel):
     next_webinar_date: datetime | None
 
 
+class ObjectiveSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    description: str | None
+
+
+class ObjectiveIdsBody(BaseModel):
+    ids: list[uuid.UUID] = []
+
+
 class WorkshopOut(BaseModel):
     """Workshop detail without webinars (webinars loaded separately)."""
     model_config = ConfigDict(from_attributes=True)
@@ -78,6 +90,7 @@ class WorkshopOut(BaseModel):
     workshop_art_url: str | None
     created_at: datetime
     webinar_count: int
+    objectives: list[ObjectiveSummary] = []
 
 
 # ── Admin: Webinar schemas ───────────────────────────────────────────────────

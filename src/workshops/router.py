@@ -12,9 +12,12 @@ from sqlalchemy.orm import selectinload
 
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
+from src.content.models import Objective
 from src.schools.models import School
 from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopRegistration
 from src.workshops.schemas import (
+    ObjectiveIdsBody,
+    ObjectiveSummary,
     PortalMappingCreate,
     PortalMappingOut,
     RegistrationCreate,
@@ -457,7 +460,7 @@ def get_workshop(workshop_id: uuid.UUID, _admin: AdminDep, db: DbDep):
     obj = db.execute(
         select(Workshop)
         .where(Workshop.id == workshop_id)
-        .options(selectinload(Workshop.webinars))
+        .options(selectinload(Workshop.webinars), selectinload(Workshop.objectives))
     ).scalar_one_or_none()
     if not obj:
         raise HTTPException(status_code=404, detail="Workshop not found")
@@ -473,6 +476,7 @@ def get_workshop(workshop_id: uuid.UUID, _admin: AdminDep, db: DbDep):
         workshop_art_url=obj.workshop_art_url,
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
+        objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
     )
 
 
@@ -481,7 +485,7 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
     obj = db.execute(
         select(Workshop)
         .where(Workshop.id == workshop_id)
-        .options(selectinload(Workshop.webinars))
+        .options(selectinload(Workshop.webinars), selectinload(Workshop.objectives))
     ).scalar_one_or_none()
     if not obj:
         raise HTTPException(status_code=404, detail="Workshop not found")
@@ -501,6 +505,7 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
         workshop_art_url=obj.workshop_art_url,
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
+        objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
     )
 
 
@@ -552,6 +557,51 @@ def list_workshop_webinars(
         )
         for w in webinars
     ]
+
+
+@router.put("/{workshop_id}/objectives", response_model=WorkshopOut)
+def update_workshop_objectives(
+    workshop_id: uuid.UUID,
+    body: ObjectiveIdsBody,
+    _admin: AdminDep,
+    db: DbDep,
+):
+    """Admin: replace the full set of objectives for a workshop."""
+    obj = db.execute(
+        select(Workshop)
+        .where(Workshop.id == workshop_id)
+        .options(selectinload(Workshop.webinars), selectinload(Workshop.objectives))
+    ).scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Workshop not found")
+
+    new_objectives = db.execute(
+        select(Objective).where(Objective.id.in_(body.ids))
+    ).scalars().all() if body.ids else []
+
+    obj.objectives = list(new_objectives)
+    db.commit()
+    db.refresh(obj)
+    # Reload objectives after commit
+    obj = db.execute(
+        select(Workshop)
+        .where(Workshop.id == workshop_id)
+        .options(selectinload(Workshop.webinars), selectinload(Workshop.objectives))
+    ).scalar_one()
+    return WorkshopOut(
+        id=obj.id,
+        name=obj.name,
+        description=obj.description,
+        key_actions=obj.key_actions,
+        body=obj.body,
+        sequence_number=obj.sequence_number,
+        suggested_grades=obj.suggested_grades,
+        resource_center_slug=obj.resource_center_slug,
+        workshop_art_url=obj.workshop_art_url,
+        created_at=obj.created_at,
+        webinar_count=len(obj.webinars),
+        objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
+    )
 
 
 @router.delete("/{workshop_id}", status_code=status.HTTP_204_NO_CONTENT)
