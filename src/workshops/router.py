@@ -13,7 +13,8 @@ from sqlalchemy.orm import selectinload
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
 from src.utils.tiptap import extract_text
-from src.content.models import Objective
+from src.content.models import ContentAsset, WorkshopResource, Objective
+from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
 from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopRegistration
 from src.workshops.schemas import (
@@ -32,6 +33,7 @@ from src.workshops.schemas import (
     WorkshopCreate,
     WorkshopOut,
     WorkshopPortalItem,
+    WorkshopResourcesUpdate,
     WorkshopSummary,
     WorkshopUpdate,
 )
@@ -467,7 +469,11 @@ def get_workshop(workshop_id: uuid.UUID, _admin: AdminDep, db: DbDep):
     obj = db.execute(
         select(Workshop)
         .where(Workshop.id == workshop_id)
-        .options(selectinload(Workshop.webinars), selectinload(Workshop.objectives))
+        .options(
+            selectinload(Workshop.webinars),
+            selectinload(Workshop.objectives),
+            selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type),
+        )
     ).scalar_one_or_none()
     if not obj:
         raise HTTPException(status_code=404, detail="Workshop not found")
@@ -484,6 +490,7 @@ def get_workshop(workshop_id: uuid.UUID, _admin: AdminDep, db: DbDep):
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
+        resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
 
@@ -492,7 +499,11 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
     obj = db.execute(
         select(Workshop)
         .where(Workshop.id == workshop_id)
-        .options(selectinload(Workshop.webinars), selectinload(Workshop.objectives))
+        .options(
+            selectinload(Workshop.webinars),
+            selectinload(Workshop.objectives),
+            selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type),
+        )
     ).scalar_one_or_none()
     if not obj:
         raise HTTPException(status_code=404, detail="Workshop not found")
@@ -519,6 +530,7 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
+        resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
 
@@ -583,7 +595,11 @@ def update_workshop_objectives(
     obj = db.execute(
         select(Workshop)
         .where(Workshop.id == workshop_id)
-        .options(selectinload(Workshop.webinars), selectinload(Workshop.objectives))
+        .options(
+            selectinload(Workshop.webinars),
+            selectinload(Workshop.objectives),
+            selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type),
+        )
     ).scalar_one_or_none()
     if not obj:
         raise HTTPException(status_code=404, detail="Workshop not found")
@@ -595,11 +611,15 @@ def update_workshop_objectives(
     obj.objectives = list(new_objectives)
     db.commit()
     db.refresh(obj)
-    # Reload objectives after commit
+    # Reload after commit
     obj = db.execute(
         select(Workshop)
         .where(Workshop.id == workshop_id)
-        .options(selectinload(Workshop.webinars), selectinload(Workshop.objectives))
+        .options(
+            selectinload(Workshop.webinars),
+            selectinload(Workshop.objectives),
+            selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type),
+        )
     ).scalar_one()
     return WorkshopOut(
         id=obj.id,
@@ -614,6 +634,65 @@ def update_workshop_objectives(
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
+        resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
+    )
+
+
+@router.put("/{workshop_id}/resources", response_model=WorkshopOut)
+def update_workshop_resources(
+    workshop_id: uuid.UUID,
+    body: WorkshopResourcesUpdate,
+    _admin: AdminDep,
+    db: DbDep,
+):
+    """Admin: replace the full set of linked resources for a workshop (with sort order)."""
+    obj = db.execute(
+        select(Workshop)
+        .where(Workshop.id == workshop_id)
+        .options(selectinload(Workshop.webinars), selectinload(Workshop.objectives))
+    ).scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Workshop not found")
+
+    # Delete existing junction rows and re-insert with new sort order
+    db.execute(
+        WorkshopResource.__table__.delete().where(
+            WorkshopResource.workshop_id == workshop_id
+        )
+    )
+    for item in body.items:
+        db.execute(
+            WorkshopResource.__table__.insert().values(
+                content_asset_id=item.content_asset_id,
+                workshop_id=workshop_id,
+                sort_order=item.sort_order,
+            )
+        )
+    db.commit()
+
+    obj = db.execute(
+        select(Workshop)
+        .where(Workshop.id == workshop_id)
+        .options(
+            selectinload(Workshop.webinars),
+            selectinload(Workshop.objectives),
+            selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type),
+        )
+    ).scalar_one()
+    return WorkshopOut(
+        id=obj.id,
+        name=obj.name,
+        description=obj.description,
+        key_actions=obj.key_actions,
+        body=obj.body,
+        sequence_number=obj.sequence_number,
+        suggested_grades=obj.suggested_grades,
+        resource_center_slug=obj.resource_center_slug,
+        workshop_art_url=obj.workshop_art_url,
+        created_at=obj.created_at,
+        webinar_count=len(obj.webinars),
+        objectives=[ObjectiveSummary(id=o.id, name=o.name, description=o.description) for o in obj.objectives],
+        resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
 

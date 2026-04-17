@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import uuid
 from typing import Annotated
 
@@ -21,7 +22,7 @@ from src.content.models import (
     ContentAssetGoal,
     ContentAssetObjective,
     ContentAssetResource,
-    ContentAssetWorkshop,
+    WorkshopResource,
     Faq,
     Goal,
     GradeConfig,
@@ -80,6 +81,17 @@ from src.db.deps import DbDep
 from src.utils.tiptap import extract_text
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
+
+
+def _calculate_read_time(content: str | None, summary: str | None = None) -> int | None:
+    """Estimate reading time in minutes at ~200 wpm from TipTap JSON or HTML content."""
+    combined = " ".join(filter(None, [extract_text(content), extract_text(summary)]))
+    if not combined:
+        # Fallback: strip HTML tags for plain-HTML content
+        raw = (content or "") + " " + (summary or "")
+        combined = re.sub(r"<[^>]+>", " ", raw)
+    words = len(combined.split())
+    return max(1, round(words / 200)) if words > 0 else None
 
 # ── Asset Types ───────────────────────────────────────────────────────────────
 
@@ -719,6 +731,7 @@ def create_asset(_admin: AdminDep, body: ContentAssetCreate, db: DbDep):
         extract_text(obj.summary),
         extract_text(obj.content),
     ]))
+    obj.read_time_minutes = _calculate_read_time(obj.content, obj.summary)
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -738,6 +751,7 @@ def update_asset(asset_id: uuid.UUID, body: ContentAssetUpdate, _admin: AdminDep
         extract_text(obj.summary),
         extract_text(obj.content),
     ]))
+    obj.read_time_minutes = _calculate_read_time(obj.content, obj.summary)
     db.commit()
     return _load_asset_detail(db, asset_id)
 
@@ -833,9 +847,9 @@ def update_asset_workshops(asset_id: uuid.UUID, body: RelationshipsUpdate, _admi
     obj = db.get(ContentAsset, asset_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Content asset not found")
-    db.query(ContentAssetWorkshop).filter_by(content_asset_id=asset_id).delete()
+    db.query(WorkshopResource).filter_by(content_asset_id=asset_id).delete()
     for wid in body.ids:
-        db.add(ContentAssetWorkshop(content_asset_id=asset_id, workshop_id=wid))
+        db.add(WorkshopResource(content_asset_id=asset_id, workshop_id=wid))
     db.commit()
     return _load_asset_detail(db, asset_id)
 

@@ -237,6 +237,9 @@ class ContentAssetListItem(BaseModel):
     link: str | None
     asset_type: AssetTypeOut | None
     created_at: datetime
+    updated_at: datetime | None = None
+    read_time_minutes: int | None = None
+    video_duration_seconds: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -258,6 +261,9 @@ class ContentAssetDetail(BaseModel):
     wp_post_id: str | None
     wp_synced_at: datetime | None
     created_at: datetime
+    updated_at: datetime | None = None
+    read_time_minutes: int | None = None
+    video_duration_seconds: int | None = None
     asset_type: AssetTypeOut | None
     objectives: list[ObjectiveOut]
     goals: list[GoalOut]
@@ -317,6 +323,7 @@ class ContentAssetUpdate(BaseModel):
     is_featured: bool | None = None
     status: str | None = None
     wp_post_id: str | None = None
+    video_duration_seconds: int | None = None
 
     @field_validator("status")
     @classmethod

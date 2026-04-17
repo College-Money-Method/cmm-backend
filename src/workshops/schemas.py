@@ -7,6 +7,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from src.content.schemas import ContentAssetSummary
 from src.db.enums import RegistrationStatus
 
 
@@ -75,6 +76,15 @@ class ObjectiveIdsBody(BaseModel):
     ids: list[uuid.UUID] = []
 
 
+class WorkshopResourceItem(BaseModel):
+    content_asset_id: uuid.UUID
+    sort_order: int
+
+
+class WorkshopResourcesUpdate(BaseModel):
+    items: list[WorkshopResourceItem] = []
+
+
 class WorkshopOut(BaseModel):
     """Workshop detail without webinars (webinars loaded separately)."""
     model_config = ConfigDict(from_attributes=True)
@@ -91,6 +101,7 @@ class WorkshopOut(BaseModel):
     created_at: datetime
     webinar_count: int
     objectives: list[ObjectiveSummary] = []
+    resources: list[ContentAssetSummary] = []
 
 
 # ── Admin: Webinar schemas ───────────────────────────────────────────────────

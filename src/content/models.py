@@ -132,6 +132,9 @@ class ContentAsset(Base):
     search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    read_time_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    video_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     asset_type: Mapped[AssetType | None] = relationship(back_populates="content_assets")
     objectives: Mapped[list[Objective]] = relationship(
@@ -147,7 +150,7 @@ class ContentAsset(Base):
         order_by="TopicResource.sort_order",
         viewonly=True,
     )
-    workshops = relationship("Workshop", secondary="content_asset_workshops", back_populates="content_assets")
+    workshops = relationship("Workshop", secondary="workshop_resources", back_populates="content_assets")
     cohorts = relationship("Cohort", secondary="content_asset_cohorts", back_populates="content_assets")
     faqs: Mapped[list[Faq]] = relationship(
         secondary="content_asset_faqs",
@@ -194,8 +197,8 @@ class ContentAssetObjective(Base):
     )
 
 
-class ContentAssetWorkshop(Base):
-    __tablename__ = "content_asset_workshops"
+class WorkshopResource(Base):
+    __tablename__ = "workshop_resources"
 
     content_asset_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("content_assets.id", ondelete="CASCADE"), primary_key=True
@@ -203,6 +206,7 @@ class ContentAssetWorkshop(Base):
     workshop_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("workshops.id", ondelete="CASCADE"), primary_key=True
     )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
 
 class ContentAssetGoal(Base):
