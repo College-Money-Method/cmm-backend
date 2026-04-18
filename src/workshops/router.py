@@ -14,6 +14,7 @@ from src.auth.deps import AdminDep
 from src.db.deps import DbDep
 from src.utils.tiptap import extract_text
 from src.content.models import ContentAsset, WorkshopResource, Objective
+from src.cycles.models import Cycle
 from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
 from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopRegistration
@@ -93,7 +94,11 @@ def _registration_out(reg: WorkshopRegistration) -> RegistrationOut:
 
 
 
-def _to_item(mapping: PortalMapping) -> WorkshopPortalItem:
+def _to_item(
+    mapping: PortalMapping,
+    prev_cycle_video_embed_code: str | None = None,
+    prev_cycle_name: str | None = None,
+) -> WorkshopPortalItem:
     webinar: Webinar = mapping.webinar
     workshop: Workshop = webinar.workshop
     return WorkshopPortalItem(
@@ -115,6 +120,9 @@ def _to_item(mapping: PortalMapping) -> WorkshopPortalItem:
         sequence_number=workshop.sequence_number,
         action_items=list(workshop.action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in workshop.content_assets],
+        cycle_name=webinar.cycle.name if webinar.cycle else None,
+        prev_cycle_video_embed_code=prev_cycle_video_embed_code,
+        prev_cycle_name=prev_cycle_name,
     )
 
 
@@ -290,6 +298,25 @@ def delete_registration(registration_id: uuid.UUID, _admin: AdminDep, db: DbDep)
 # ── Public endpoints (literal prefix) ───────────────────────────────────────
 
 
+def _get_prev_cycle_recording(workshop_id: uuid.UUID, db: DbDep) -> tuple[str | None, str | None]:
+    """Return (video_embed_code, cycle_name) for the most recent past webinar
+    of the given workshop that has a recording. Returns (None, None) if none found."""
+    row = db.execute(
+        select(Webinar)
+        .where(
+            Webinar.workshop_id == workshop_id,
+            Webinar.video_embed_code.isnot(None),
+            Webinar.video_embed_code != "",
+        )
+        .options(selectinload(Webinar.cycle))
+        .order_by(Webinar.start_datetime.desc().nulls_last())
+        .limit(1)
+    ).scalar_one_or_none()
+    if row is None:
+        return None, None
+    return row.video_embed_code, (row.cycle.name if row.cycle else None)
+
+
 @router.get("/public/school/{school_id}", response_model=SchoolWorkshopsResponse)
 def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResponse:
     """Return upcoming and past workshops for a school portal (no auth)."""
@@ -298,7 +325,10 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
             select(PortalMapping)
             .where(PortalMapping.school_id == school_id)
             .options(
-                selectinload(PortalMapping.webinar).selectinload(Webinar.workshop).selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type)
+                selectinload(PortalMapping.webinar).options(
+                    selectinload(Webinar.workshop).selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type),
+                    selectinload(Webinar.cycle),
+                )
             )
             .order_by(PortalMapping.created_at)
         )
@@ -311,10 +341,20 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
     past: list[WorkshopPortalItem] = []
 
     for mapping in mappings:
-        item = _to_item(mapping)
-        if item.start_datetime is None or item.start_datetime >= now:
+        webinar = mapping.webinar
+        is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
+        # Past: only include webinars from the current cycle (or with no cycle set)
+        if not is_upcoming:
+            cycle = webinar.cycle
+            if cycle is not None and not cycle.is_current:
+                continue
+
+        if is_upcoming:
+            prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, db)
+            item = _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
             upcoming.append(item)
         else:
+            item = _to_item(mapping)
             past.append(item)
 
     # Sort upcoming ascending (soonest first), past descending (most recent first)
@@ -335,13 +375,23 @@ def get_school_webinar(school_id: uuid.UUID, webinar_id: uuid.UUID, db: DbDep) -
                 PortalMapping.webinar_id == webinar_id,
             )
             .options(
-                selectinload(PortalMapping.webinar).selectinload(Webinar.workshop).selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type)
+                selectinload(PortalMapping.webinar).options(
+                    selectinload(Webinar.workshop).selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type),
+                    selectinload(Webinar.cycle),
+                )
             )
         )
         .scalar_one_or_none()
     )
     if mapping is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workshop not found")
+
+    webinar = mapping.webinar
+    now = datetime.now(tz=timezone.utc)
+    is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
+    if is_upcoming:
+        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, db)
+        return _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
     return _to_item(mapping)
 
 

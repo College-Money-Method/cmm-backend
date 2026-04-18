@@ -259,6 +259,11 @@ class WorkshopPortalItem(BaseModel):
     action_items: list[str] = []
     resources: list[ContentAssetSummary] = []
 
+    # Cycle metadata
+    cycle_name: str | None = None
+    prev_cycle_video_embed_code: str | None = None
+    prev_cycle_name: str | None = None
+
 
 class SchoolWorkshopsResponse(BaseModel):
     upcoming: list[WorkshopPortalItem]
