@@ -22,6 +22,7 @@ class AssetType(Base):
     color: Mapped[str | None] = mapped_column(Text)
     icon: Mapped[str | None] = mapped_column(Text)
     icon_url: Mapped[str | None] = mapped_column(Text)
+    is_upload: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     content_assets: Mapped[list[ContentAsset]] = relationship(back_populates="asset_type")

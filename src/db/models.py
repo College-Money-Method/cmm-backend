@@ -29,6 +29,7 @@ from src.meetings.models import OneOnOneMeeting
 from src.sales.models import Invoice, Sale
 from src.schools.models import Contact, School, SchoolDateSelector
 from src.settings.models import Setting
+from src.storage.models import StorageFile
 from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopAsset, WorkshopRegistration
 
 __all__ = [
@@ -62,6 +63,7 @@ __all__ = [
     "School",
     "SchoolDateSelector",
     "Setting",
+    "StorageFile",
     "Topic",
     "Webinar",
     "Workshop",

@@ -21,6 +21,7 @@ import src.schools.models  # noqa: F401
 import src.settings.models  # noqa: F401
 import src.workshops.models  # noqa: F401
 import src.guest_contacts.models  # noqa: F401
+import src.storage.models  # noqa: F401
 
 from src.auth.router import router as auth_router
 from src.config import settings

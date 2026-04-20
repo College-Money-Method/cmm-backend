@@ -23,7 +23,7 @@ help:
 	@echo "    make shell            Open a shell inside the running container"
 	@echo ""
 	@echo "  Alembic"
-	@echo "    make upgrade          Apply all pending migrations (alembic upgrade head)"
+	@echo "    make upgrade          Apply all pending migrations (alembic upgrade heads)"
 	@echo "    make downgrade        Roll back one migration (alembic downgrade -1)"
 	@echo "    make revision MSG=... Auto-generate a new migration"
 	@echo "    make history          Show migration history"
@@ -68,7 +68,7 @@ shell:
 # ── Alembic ───────────────────────────────────────────────────────────────────
 
 upgrade:
-	uv run alembic upgrade head
+	uv run alembic upgrade heads
 
 downgrade:
 	uv run alembic downgrade -1

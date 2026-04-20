@@ -17,6 +17,7 @@ class AssetTypeOut(BaseModel):
     color: str | None
     icon: str | None
     icon_url: str | None
+    is_upload: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -27,6 +28,7 @@ class AssetTypeCreate(BaseModel):
     color: str | None = None
     icon: str | None = None
     icon_url: str | None = None
+    is_upload: bool = False
 
 
 class AssetTypeUpdate(BaseModel):
@@ -34,6 +36,7 @@ class AssetTypeUpdate(BaseModel):
     color: str | None = None
     icon: str | None = None
     icon_url: str | None = None
+    is_upload: bool | None = None
 
 
 # ── Goals (formerly Topics) ──────────────────────────────────────────────────

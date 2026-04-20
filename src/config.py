@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     s3_bucket_name: str = ""
 
+    # WordPress (for media migration script)
+    wordpress_application_password: str = ""
+
     # App
     log_level: str = "DEBUG"
     debug: bool = False

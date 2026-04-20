@@ -78,6 +78,7 @@ from src.content.schemas import (
 )
 from src.config import settings
 from src.db.deps import DbDep
+from src.storage.models import StorageFile
 from src.utils.tiptap import extract_text
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
@@ -825,6 +826,56 @@ async def upload_asset_image(asset_id: uuid.UUID, file: UploadFile, _admin: Admi
         ContentType=file.content_type,
     )
     obj.image_url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
+    db.commit()
+    return _load_asset_detail(db, asset_id)
+
+
+@router.post("/assets/{asset_id}/file", response_model=ContentAssetDetail)
+async def upload_asset_file(asset_id: uuid.UUID, file: UploadFile, _admin: AdminDep, db: DbDep):
+    """Admin — upload any file to S3 at resources/{asset_id}/{filename}, stored as content_assets.link."""
+    obj = db.get(ContentAsset, asset_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Content asset not found")
+
+    filename = file.filename or "file"
+    s3_key = f"resources/{asset_id}/{filename}"
+    mime_type = file.content_type or "application/octet-stream"
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else None
+
+    data = await file.read()
+    s3 = boto3.client(
+        "s3",
+        aws_access_key_id=settings.aws_access_key_id,
+        aws_secret_access_key=settings.aws_secret_access_key,
+        region_name=settings.aws_region,
+    )
+    s3.put_object(
+        Bucket=settings.s3_bucket_name,
+        Key=s3_key,
+        Body=data,
+        ContentType=mime_type,
+    )
+    s3_url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
+    obj.link = s3_url
+
+    # Upsert storage_files registry (same s3_key = re-upload of this asset)
+    existing = db.execute(select(StorageFile).where(StorageFile.s3_key == s3_key)).scalar_one_or_none()
+    if existing:
+        existing.s3_url = s3_url
+        existing.original_filename = filename
+        existing.extension = extension
+        existing.mime_type = mime_type
+        existing.file_size_bytes = len(data)
+    else:
+        db.add(StorageFile(
+            s3_key=s3_key,
+            s3_url=s3_url,
+            original_filename=filename,
+            extension=extension,
+            mime_type=mime_type,
+            file_size_bytes=len(data),
+        ))
+
     db.commit()
     return _load_asset_detail(db, asset_id)
 
