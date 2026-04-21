@@ -9,8 +9,9 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
-from src.auth.deps import AdminDep
+from src.auth.deps import AdminDep, CurrentUserDep
 from src.db.deps import DbDep
 from src.integrations import zoom as zoom_client
 from src.utils.tiptap import extract_text
@@ -24,6 +25,7 @@ from src.workshops.schemas import (
     ObjectiveSummary,
     PortalMappingCreate,
     PortalMappingOut,
+    PortalMappingOverrideUpdate,
     RegistrationCreate,
     RegistrationOut,
     RegistrationUpdate,
@@ -136,7 +138,16 @@ def _to_item(
 ) -> WorkshopPortalItem:
     webinar: Webinar = mapping.webinar
     workshop: Workshop = webinar.workshop
+    override = mapping.school_override or {}
+    # Use override value if the key is present (even if null); else fall back to workshop default
+    effective_grades = (
+        override["suggested_grades"]
+        if "suggested_grades" in override
+        else workshop.suggested_grades
+    )
     return WorkshopPortalItem(
+        portal_mapping_id=mapping.id,
+        school_override=override or None,
         webinar_id=webinar.id,
         start_datetime=webinar.start_datetime,
         end_datetime=webinar.end_datetime,
@@ -150,7 +161,7 @@ def _to_item(
         description=workshop.description,
         key_actions=workshop.key_actions,
         body=workshop.body,
-        suggested_grades=workshop.suggested_grades,
+        suggested_grades=effective_grades,
         workshop_art_url=workshop.workshop_art_url,
         sequence_number=workshop.sequence_number,
         action_items=list(workshop.action_items or []),
@@ -308,6 +319,35 @@ def remove_webinar_school(webinar_id: uuid.UUID, school_id: uuid.UUID, _admin: A
         raise HTTPException(status_code=404, detail="School is not mapped to this webinar")
     db.delete(mapping)
     db.commit()
+
+
+# ── Counselor: Portal mapping override ───────────────────────────────────────
+
+
+@router.patch("/portal-mappings/{portal_mapping_id}", status_code=200)
+def update_portal_mapping_override(
+    portal_mapping_id: uuid.UUID,
+    body: PortalMappingOverrideUpdate,
+    user: CurrentUserDep,
+    db: DbDep,
+) -> dict:
+    """Counselor: shallow-merge override fields into portal_mapping.school_override.
+    Only updates the keys present in the request body; other keys are preserved.
+    Verifies the mapping belongs to the counselor's own school.
+    """
+    mapping = db.get(PortalMapping, portal_mapping_id)
+    if not mapping:
+        raise HTTPException(status_code=404, detail="Portal mapping not found")
+    if user.role != "super_admin" and mapping.school_id != user.school_id:
+        raise HTTPException(status_code=403, detail="Access restricted to your own school")
+
+    override = dict(mapping.school_override or {})
+    for field, value in body.model_dump(exclude_unset=True).items():
+        override[field] = value
+    mapping.school_override = override
+    flag_modified(mapping, "school_override")
+    db.commit()
+    return {"ok": True}
 
 
 # ── Admin: Registrations (literal prefix) ────────────────────────────────────

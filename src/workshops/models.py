@@ -151,6 +151,7 @@ class PortalMapping(Base):
     pre_webinar_reminder_sent_on: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     post_webinar_update_sent_on: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     show_zoom: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    school_override: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     school: Mapped[School] = relationship(back_populates="portal_mappings")

@@ -630,6 +630,7 @@ def list_assets_public(
     topic_id: Annotated[uuid.UUID | None, Query()] = None,
     topic_ids: Annotated[str | None, Query()] = None,
     cohort_id: Annotated[uuid.UUID | None, Query()] = None,
+    school_id: Annotated[uuid.UUID | None, Query()] = None,
     is_featured: Annotated[bool | None, Query()] = None,
     sort_by: Annotated[str, Query()] = "created_at",
     sort_dir: Annotated[str, Query()] = "desc",
@@ -693,7 +694,24 @@ def list_assets_public(
     elif topic_id:
         stmt = stmt.join(TopicResource, TopicResource.content_asset_id == ContentAsset.id).where(TopicResource.topic_id == topic_id)
 
-    if cohort_id:
+    if school_id:
+        # Return assets accessible to this school:
+        # published AND (attached to school's cohort OR attached to no cohort at all)
+        school = db.get(School, school_id)
+        if school and school.cohort_id:
+            has_cohort_subq = select(ContentAssetCohort.content_asset_id)
+            stmt = stmt.where(
+                or_(
+                    ~ContentAsset.id.in_(has_cohort_subq),
+                    ContentAsset.id.in_(
+                        select(ContentAssetCohort.content_asset_id).where(
+                            ContentAssetCohort.cohort_id == school.cohort_id
+                        )
+                    ),
+                )
+            )
+        # If school has no cohort_id, all published assets are accessible (no extra filter)
+    elif cohort_id:
         stmt = stmt.join(ContentAssetCohort).where(ContentAssetCohort.cohort_id == cohort_id)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())

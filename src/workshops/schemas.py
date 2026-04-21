@@ -237,6 +237,10 @@ class WorkshopPortalItem(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    # Portal mapping fields
+    portal_mapping_id: uuid.UUID
+    school_override: dict | None = None  # e.g. {"suggested_grades": "9,10"}
+
     # Webinar fields
     webinar_id: uuid.UUID
     start_datetime: datetime | None
@@ -253,7 +257,7 @@ class WorkshopPortalItem(BaseModel):
     description: str | None
     key_actions: str | None
     body: str | None
-    suggested_grades: str | None
+    suggested_grades: str | None  # effective value: school_override wins if set
     workshop_art_url: str | None
     sequence_number: int | None
     action_items: list[str] = []
@@ -263,6 +267,13 @@ class WorkshopPortalItem(BaseModel):
     cycle_name: str | None = None
     prev_cycle_video_embed_code: str | None = None
     prev_cycle_name: str | None = None
+
+
+class PortalMappingOverrideUpdate(BaseModel):
+    """Counselor: shallow-merge patch into portal_mapping.school_override.
+    Only keys present in the request body are updated; other keys are preserved.
+    """
+    suggested_grades: str | None = None
 
 
 class SchoolWorkshopsResponse(BaseModel):

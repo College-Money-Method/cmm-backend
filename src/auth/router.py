@@ -60,7 +60,7 @@ def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut
 
 @router.get("/api/v1/counselors", response_model=CounselorListResponse)
 def list_counselors(
-    _admin: AdminDep,
+    user: CurrentUserDep,
     db: DbDep,
     supabase=Depends(get_supabase),
     search: str | None = Query(default=None),
@@ -69,7 +69,16 @@ def list_counselors(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> CounselorListResponse:
-    """List counselor/viewer accounts with pagination, search, and filters."""
+    """List counselor/viewer accounts with pagination, search, and filters.
+    Super admins see all; counselors/viewers are scoped to their own school.
+    """
+    # Counselors and viewers may only query their own school
+    if user.role not in ("super_admin",):
+        if school_id is None:
+            school_id = user.school_id
+        elif school_id != user.school_id:
+            raise HTTPException(status_code=403, detail="Access restricted to your own school")
+
     # Build base query
     q = (
         db.query(UserRole)
@@ -259,11 +268,13 @@ def get_counselor(
 def update_counselor(
     user_id: uuid.UUID,
     body: CounselorUpdate,
-    _admin: AdminDep,
+    user: CurrentUserDep,
     db: DbDep,
     supabase=Depends(get_supabase),
 ) -> CounselorOut:
-    """Update a counselor's school assignment or role."""
+    """Update a counselor's profile. Super admins can update all fields.
+    Counselors/viewers may only update the title of teammates at their own school.
+    """
     role_record = (
         db.query(UserRole)
         .options(joinedload(UserRole.school))
@@ -273,9 +284,19 @@ def update_counselor(
     if not role_record:
         raise HTTPException(status_code=404, detail="Counselor not found")
 
-    # Use exclude_unset so explicitly-passed null (e.g. school_id=null) is honoured,
-    # while omitted fields are ignored.
-    update_data = body.model_dump(exclude_unset=True)
+    if user.role != "super_admin":
+        # Scope: may only edit counselors at their own school
+        if role_record.school_id != user.school_id:
+            raise HTTPException(status_code=403, detail="Access restricted to your own school")
+        # Field whitelist: only title is allowed
+        update_data = {}
+        if body.title is not None:
+            update_data["title"] = body.title
+    else:
+        # Use exclude_unset so explicitly-passed null (e.g. school_id=null) is honoured,
+        # while omitted fields are ignored.
+        update_data = body.model_dump(exclude_unset=True)
+
     if "school_id" in update_data and update_data["school_id"] is not None:
         school = db.query(School).filter(School.id == update_data["school_id"]).first()
         if not school:
