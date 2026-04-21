@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # WordPress (for media migration script)
     wordpress_application_password: str = ""
 
+    # Zoom (Server-to-Server OAuth — for webinar registrations)
+    zoom_account_id: str = ""
+    zoom_client_id: str = ""
+    zoom_client_secret: str = ""
+
     # App
     log_level: str = "DEBUG"
     debug: bool = False

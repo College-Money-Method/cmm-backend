@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
+from src.integrations import zoom as zoom_client
 from src.utils.tiptap import extract_text
 from src.content.models import ContentAsset, WorkshopResource, Objective
 from src.cycles.models import Cycle
@@ -68,6 +69,40 @@ def _webinar_out(webinar: Webinar) -> WebinarOut:
         cohort_name=webinar.cohort.name if webinar.cohort else None,
         registration_count=len(webinar.registrations),
     )
+
+
+def _apply_zoom_details(data: dict, zoom: dict, *, use_setdefault: bool = False) -> None:
+    """Populate webinar fields from a Zoom API webinar response dict.
+
+    When ``use_setdefault`` is True (update path), only fills in keys that are
+    not already present in ``data`` — so explicit admin overrides always win.
+    When False (create path), uses ``if not data.get(...)`` to skip non-empty values.
+    """
+    def _set(key: str, value: object) -> None:
+        if value is None:
+            return
+        if use_setdefault:
+            data.setdefault(key, value)
+        elif not data.get(key):
+            data[key] = value
+
+    _set("join_url", zoom.get("join_url"))
+    _set("start_url", zoom.get("start_url"))
+    _set("zoom_link", zoom.get("join_url"))
+    _set("registration_url", zoom.get("registration_url"))
+    _set("webinar_name", zoom.get("topic"))
+
+    # Parse start_time (ISO 8601, Zoom uses UTC "Z" suffix)
+    start_str: str | None = zoom.get("start_time")
+    if start_str:
+        try:
+            start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            _set("start_datetime", start_dt)
+            duration_min: int | None = zoom.get("duration")
+            if duration_min:
+                _set("end_datetime", start_dt + timedelta(minutes=duration_min))
+        except ValueError:
+            pass
 
 
 def _registration_out(reg: WorkshopRegistration) -> RegistrationOut:
@@ -150,7 +185,15 @@ def update_webinar(webinar_id: uuid.UUID, body: WebinarUpdate, _admin: AdminDep,
     ).scalar_one_or_none()
     if not obj:
         raise HTTPException(status_code=404, detail="Webinar not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
+    update_data = body.model_dump(exclude_unset=True)
+
+    # Auto-populate fields from Zoom API when zoom_webinar_id is being set
+    if "zoom_webinar_id" in update_data and update_data["zoom_webinar_id"]:
+        zoom_details = zoom_client.get_webinar(update_data["zoom_webinar_id"])
+        if zoom_details:
+            _apply_zoom_details(update_data, zoom_details, use_setdefault=True)
+
+    for k, v in update_data.items():
         setattr(obj, k, v)
     db.commit()
     db.refresh(obj)
@@ -430,6 +473,19 @@ def register_public(webinar_id: uuid.UUID, body: RegistrationCreate, db: DbDep) 
     db.add(obj)
     db.commit()
     db.refresh(obj)
+
+    # Register on Zoom if this webinar has a Zoom ID (non-fatal if it fails)
+    if webinar.zoom_webinar_id:
+        zoom_registrant_id = zoom_client.register_webinar(
+            zoom_webinar_id=webinar.zoom_webinar_id,
+            email=body.email,
+            first_name=body.first_name,
+            last_name=body.last_name,
+            questions=body.questions,
+        )
+        if zoom_registrant_id:
+            obj.zoom_registrant_id = zoom_registrant_id
+            db.commit()
 
     # Reload with school relationship
     obj = db.execute(
@@ -770,6 +826,13 @@ def create_webinar(workshop_id: uuid.UUID, body: WebinarCreate, _admin: AdminDep
     # Create the webinar (workshop_id from URL, exclude school_ids — not a model field)
     webinar_data = body.model_dump(exclude={"school_ids"})
     webinar_data["workshop_id"] = workshop_id
+
+    # Auto-populate fields from Zoom API when a zoom_webinar_id is provided
+    if webinar_data.get("zoom_webinar_id"):
+        zoom_details = zoom_client.get_webinar(webinar_data["zoom_webinar_id"])
+        if zoom_details:
+            _apply_zoom_details(webinar_data, zoom_details)
+
     obj = Webinar(**webinar_data)
     db.add(obj)
     db.flush()  # get obj.id without committing
