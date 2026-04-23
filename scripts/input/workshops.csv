@@ -1,0 +1,3 @@
+source,workshop_id,name,description,sequence_number,suggested_grades,resource_center_slug,workshop_art_url
+scripts/input/workshop_ingest/Workshop1Workshopdetailspagecontent.docx.html,,,, 1,9th grade,workshop-1,
+scripts/input/workshop_ingest/Workshop_2_Workshop_details_page_content.doc.html,,,,2,10th grade,workshop-2,
