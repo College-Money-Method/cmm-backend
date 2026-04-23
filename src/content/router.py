@@ -19,7 +19,6 @@ from src.content.models import (
     ContentAsset,
     ContentAssetCohort,
     ContentAssetFaq,
-    ContentAssetGoal,
     ContentAssetObjective,
     ContentAssetResource,
     WorkshopResource,
@@ -28,13 +27,22 @@ from src.content.models import (
     GradeConfig,
     GradeConfigGoal,
     GradeSet,
+    Milestone,
+    MilestoneGoal,
+    MilestoneGradeConfig,
+    MilestoneTopic,
+    MilestoneWorkshop,
     Objective,
     ReaderQuestion,
+    ResourceCategory,
+    ResourceCategoryTopic,
+    ResourceCategoryWorkshop,
     Topic,
     TopicFaq,
     TopicResource,
 )
 from src.schools.models import School
+from src.workshops.models import Workshop
 from src.content.schemas import (
     AssetTypeCreate,
     AssetTypeOut,
@@ -61,12 +69,20 @@ from src.content.schemas import (
     GradeSetCreate,
     GradeSetSummary,
     GradeSetUpdate,
+    MilestoneCreate,
+    MilestoneDetail,
+    MilestoneOut,
+    MilestoneUpdate,
     ObjectiveCreate,
     ObjectiveOut,
     ObjectiveUpdate,
     ReaderQuestionCreate,
     ReaderQuestionOut,
     RelationshipsUpdate,
+    ResourceCategoryCreate,
+    ResourceCategoryDetail,
+    ResourceCategoryOut,
+    ResourceCategoryUpdate,
     ResourcesUpdate,
     TopicCreate,
     TopicDetail,
@@ -514,7 +530,6 @@ def _load_asset_detail(db: DbDep, asset_id: uuid.UUID) -> ContentAsset:
         .options(
             selectinload(ContentAsset.asset_type),
             selectinload(ContentAsset.objectives),
-            selectinload(ContentAsset.goals),
             selectinload(ContentAsset.topics).selectinload(Topic.goal),
             selectinload(ContentAsset.workshops),
             selectinload(ContentAsset.cohorts),
@@ -534,14 +549,14 @@ def _resolve_resources(db: DbDep, asset: ContentAsset) -> list[ContentAsset]:
         return [r for r in asset.resources if r.status == "published"]
 
     obj_ids = [o.id for o in asset.objectives]
-    goal_ids = [g.id for g in asset.goals]
-    if not obj_ids and not goal_ids:
+    topic_ids = [t.id for t in asset.topics]
+    if not obj_ids and not topic_ids:
         return []
 
-    from src.content.models import ContentAssetObjective as CAO, ContentAssetGoal as CAG
+    from src.content.models import ContentAssetObjective as CAO
 
     subq_obj = select(CAO.content_asset_id).where(CAO.objective_id.in_(obj_ids))
-    subq_goal = select(CAG.content_asset_id).where(CAG.goal_id.in_(goal_ids))
+    subq_topic = select(TopicResource.content_asset_id).where(TopicResource.topic_id.in_(topic_ids))
     stmt = (
         select(ContentAsset)
         .options(selectinload(ContentAsset.asset_type))
@@ -550,7 +565,7 @@ def _resolve_resources(db: DbDep, asset: ContentAsset) -> list[ContentAsset]:
             ContentAsset.id != asset.id,
             or_(
                 ContentAsset.id.in_(subq_obj),
-                ContentAsset.id.in_(subq_goal),
+                ContentAsset.id.in_(subq_topic),
             ),
         )
         .limit(6)
@@ -587,7 +602,10 @@ def list_assets(
     if objective_id:
         stmt = stmt.join(ContentAssetObjective).where(ContentAssetObjective.objective_id == objective_id)
     if goal_id:
-        stmt = stmt.join(ContentAssetGoal).where(ContentAssetGoal.goal_id == goal_id)
+        goal_topic_subq = select(Topic.id).where(Topic.goal_id == goal_id)
+        stmt = stmt.where(ContentAsset.id.in_(
+            select(TopicResource.content_asset_id).where(TopicResource.topic_id.in_(goal_topic_subq))
+        ))
     if topic_id:
         stmt = stmt.join(TopicResource, TopicResource.content_asset_id == ContentAsset.id).where(TopicResource.topic_id == topic_id)
     if cohort_id:
@@ -617,18 +635,41 @@ def _parse_csv_uuids(value: str | None) -> list[uuid.UUID]:
         return []
 
 
+# Ranking formula weights — admin boost has ~3.0 weight so 1 boost ≈ 20 clicks.
+_POPULARITY_BOOST_WEIGHT = 3.0
+
+
+def _parse_csv_ints(value: str | None) -> list[int]:
+    if not value:
+        return []
+    try:
+        return [int(p.strip()) for p in value.split(",") if p.strip()]
+    except ValueError:
+        return []
+
+
+def _parse_csv_strings(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [p.strip() for p in value.split(",") if p.strip()]
+
+
 @router.get("/assets/public", response_model=ContentAssetListResponse)
 def list_assets_public(
     db: DbDep,
     search: Annotated[str | None, Query()] = None,
     asset_type_id: Annotated[uuid.UUID | None, Query()] = None,
     asset_type_ids: Annotated[str | None, Query()] = None,
+    asset_buckets: Annotated[str | None, Query()] = None,
     objective_id: Annotated[uuid.UUID | None, Query()] = None,
     objective_ids: Annotated[str | None, Query()] = None,
     goal_id: Annotated[uuid.UUID | None, Query()] = None,
     goal_ids: Annotated[str | None, Query()] = None,
     topic_id: Annotated[uuid.UUID | None, Query()] = None,
     topic_ids: Annotated[str | None, Query()] = None,
+    category_ids: Annotated[str | None, Query()] = None,
+    milestone_ids: Annotated[str | None, Query()] = None,
+    grades: Annotated[str | None, Query()] = None,
     cohort_id: Annotated[uuid.UUID | None, Query()] = None,
     school_id: Annotated[uuid.UUID | None, Query()] = None,
     is_featured: Annotated[bool | None, Query()] = None,
@@ -637,14 +678,18 @@ def list_assets_public(
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 50,
 ):
-    """Public endpoint — only returns published assets."""
+    """Public endpoint — only returns published assets with public asset types."""
     _NAME_THRESHOLD = 0.3
     _DESC_THRESHOLD = 0.4
 
+    # Base query: published assets with public asset types. LEFT JOIN asset_types
+    # so assets with no asset_type (shouldn't happen but safe) still appear.
     stmt = (
         select(ContentAsset)
         .options(selectinload(ContentAsset.asset_type))
+        .outerjoin(AssetType, ContentAsset.asset_type_id == AssetType.id)
         .where(ContentAsset.status == "published")
+        .where(or_(AssetType.id.is_(None), AssetType.is_public.is_(True)))
     )
 
     has_search = bool(search and search.strip())
@@ -670,29 +715,143 @@ def list_assets_public(
     elif asset_type_id:
         stmt = stmt.where(ContentAsset.asset_type_id == asset_type_id)
 
+    # Asset bucket filtering (tools / video / guide)
+    # "tools" resolves to all asset types with is_tool=True;
+    # "video" and "guide" match display_bucket directly.
+    buckets = _parse_csv_strings(asset_buckets)
+    if buckets:
+        bucket_conditions = []
+        non_tool_buckets = [b for b in buckets if b != "tools"]
+        if "tools" in buckets:
+            bucket_conditions.append(AssetType.is_tool.is_(True))
+        if non_tool_buckets:
+            bucket_conditions.append(AssetType.display_bucket.in_(non_tool_buckets))
+        if bucket_conditions:
+            stmt = stmt.where(or_(*bucket_conditions))
+
     if is_featured is not None:
         stmt = stmt.where(ContentAsset.is_featured == is_featured)
 
     # Objective filtering (single or multi)
     obj_ids = _parse_csv_uuids(objective_ids)
     if obj_ids:
-        stmt = stmt.join(ContentAssetObjective).where(ContentAssetObjective.objective_id.in_(obj_ids))
+        stmt = stmt.where(
+            ContentAsset.id.in_(
+                select(ContentAssetObjective.content_asset_id).where(
+                    ContentAssetObjective.objective_id.in_(obj_ids)
+                )
+            )
+        )
     elif objective_id:
-        stmt = stmt.join(ContentAssetObjective).where(ContentAssetObjective.objective_id == objective_id)
+        stmt = stmt.where(
+            ContentAsset.id.in_(
+                select(ContentAssetObjective.content_asset_id).where(
+                    ContentAssetObjective.objective_id == objective_id
+                )
+            )
+        )
 
-    # Goal filtering (single or multi)
+    # Goal filtering: goal → topics → topic_resources → assets
     g_ids = _parse_csv_uuids(goal_ids)
     if g_ids:
-        stmt = stmt.join(ContentAssetGoal).where(ContentAssetGoal.goal_id.in_(g_ids))
+        goal_topic_subq = select(Topic.id).where(Topic.goal_id.in_(g_ids))
+        stmt = stmt.where(
+            ContentAsset.id.in_(
+                select(TopicResource.content_asset_id).where(TopicResource.topic_id.in_(goal_topic_subq))
+            )
+        )
     elif goal_id:
-        stmt = stmt.join(ContentAssetGoal).where(ContentAssetGoal.goal_id == goal_id)
+        goal_topic_subq = select(Topic.id).where(Topic.goal_id == goal_id)
+        stmt = stmt.where(
+            ContentAsset.id.in_(
+                select(TopicResource.content_asset_id).where(TopicResource.topic_id.in_(goal_topic_subq))
+            )
+        )
 
     # Topic filtering (single or multi)
     t_ids = _parse_csv_uuids(topic_ids)
     if t_ids:
-        stmt = stmt.join(TopicResource, TopicResource.content_asset_id == ContentAsset.id).where(TopicResource.topic_id.in_(t_ids))
+        stmt = stmt.where(
+            ContentAsset.id.in_(
+                select(TopicResource.content_asset_id).where(
+                    TopicResource.topic_id.in_(t_ids)
+                )
+            )
+        )
     elif topic_id:
-        stmt = stmt.join(TopicResource, TopicResource.content_asset_id == ContentAsset.id).where(TopicResource.topic_id == topic_id)
+        stmt = stmt.where(
+            ContentAsset.id.in_(
+                select(TopicResource.content_asset_id).where(
+                    TopicResource.topic_id == topic_id
+                )
+            )
+        )
+
+    # Category filtering: category → (topics ∪ workshops) → assets
+    cat_ids = _parse_csv_uuids(category_ids)
+    if cat_ids:
+        cat_topic_subq = select(ResourceCategoryTopic.topic_id).where(
+            ResourceCategoryTopic.resource_category_id.in_(cat_ids)
+        )
+        cat_workshop_subq = select(ResourceCategoryWorkshop.workshop_id).where(
+            ResourceCategoryWorkshop.resource_category_id.in_(cat_ids)
+        )
+        cat_asset_subq = select(TopicResource.content_asset_id).where(
+            TopicResource.topic_id.in_(cat_topic_subq)
+        ).union(
+            select(WorkshopResource.content_asset_id).where(
+                WorkshopResource.workshop_id.in_(cat_workshop_subq)
+            )
+        )
+        stmt = stmt.where(ContentAsset.id.in_(cat_asset_subq))
+
+    # Grade filtering: grade_configs(grade) → goals → topics → topic_resources
+    #                  + workshops(suggested_grades contains grade) → workshop_resources
+    grade_ints = _parse_csv_ints(grades)
+    if grade_ints:
+        goal_id_subq = (
+            select(GradeConfigGoal.goal_id)
+            .join(GradeConfig, GradeConfig.id == GradeConfigGoal.grade_config_id)
+            .where(GradeConfig.grade.in_(grade_ints))
+        )
+        topic_id_subq = select(Topic.id).where(Topic.goal_id.in_(goal_id_subq))
+        topic_asset_subq = (
+            select(TopicResource.content_asset_id)
+            .where(TopicResource.topic_id.in_(topic_id_subq))
+        )
+        workshop_grade_conditions = [
+            Workshop.suggested_grades.op("~")(f"(^|,){g}(,|$)")
+            for g in grade_ints
+        ]
+        workshop_asset_subq = (
+            select(WorkshopResource.content_asset_id)
+            .join(Workshop, Workshop.id == WorkshopResource.workshop_id)
+            .where(or_(*workshop_grade_conditions))
+        )
+        grade_asset_combined = topic_asset_subq.union(workshop_asset_subq)
+        stmt = stmt.where(ContentAsset.id.in_(grade_asset_combined))
+
+    # Milestone filtering: milestone → (goals→topics ∪ direct topics ∪ workshops) → assets
+    ms_ids = _parse_csv_uuids(milestone_ids)
+    if ms_ids:
+        ms_goal_subq = select(MilestoneGoal.goal_id).where(MilestoneGoal.milestone_id.in_(ms_ids))
+        ms_topics_from_goals_subq = select(Topic.id).where(Topic.goal_id.in_(ms_goal_subq))
+        ms_direct_topic_subq = select(MilestoneTopic.topic_id).where(MilestoneTopic.milestone_id.in_(ms_ids))
+        ms_all_topics_subq = ms_topics_from_goals_subq.union(ms_direct_topic_subq)
+        ms_workshop_subq = select(MilestoneWorkshop.workshop_id).where(
+            MilestoneWorkshop.milestone_id.in_(ms_ids)
+        )
+        ms_asset_subq = (
+            select(TopicResource.content_asset_id).where(
+                TopicResource.topic_id.in_(ms_all_topics_subq)
+            )
+            .union(
+                select(WorkshopResource.content_asset_id).where(
+                    WorkshopResource.workshop_id.in_(ms_workshop_subq)
+                )
+            )
+        )
+        stmt = stmt.where(ContentAsset.id.in_(ms_asset_subq))
 
     if school_id:
         # Return assets accessible to this school:
@@ -712,7 +871,13 @@ def list_assets_public(
             )
         # If school has no cohort_id, all published assets are accessible (no extra filter)
     elif cohort_id:
-        stmt = stmt.join(ContentAssetCohort).where(ContentAssetCohort.cohort_id == cohort_id)
+        stmt = stmt.where(
+            ContentAsset.id.in_(
+                select(ContentAssetCohort.content_asset_id).where(
+                    ContentAssetCohort.cohort_id == cohort_id
+                )
+            )
+        )
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = db.scalar(count_stmt)
@@ -725,6 +890,14 @@ def list_assets_public(
         )
         relevance = name_sim * literal(2) + desc_sim
         stmt = stmt.order_by(relevance.desc(), ContentAsset.created_at.desc())
+    elif sort_by == "popularity":
+        # score = popularity_score * w + ln(1 + click_count)
+        ranking = (
+            func.coalesce(ContentAsset.popularity_score, literal(0))
+            * literal(_POPULARITY_BOOST_WEIGHT)
+            + func.ln(literal(1) + ContentAsset.click_count)
+        )
+        stmt = stmt.order_by(ranking.desc(), ContentAsset.created_at.desc())
     else:
         sort_col = getattr(ContentAsset, sort_by, ContentAsset.created_at)
         if sort_dir == "desc":
@@ -908,18 +1081,6 @@ def update_asset_objectives(asset_id: uuid.UUID, body: RelationshipsUpdate, _adm
     db.query(ContentAssetObjective).filter_by(content_asset_id=asset_id).delete()
     for oid in body.ids:
         db.add(ContentAssetObjective(content_asset_id=asset_id, objective_id=oid))
-    db.commit()
-    return _load_asset_detail(db, asset_id)
-
-
-@router.put("/assets/{asset_id}/goals", response_model=ContentAssetDetail)
-def update_asset_goals(asset_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep):
-    obj = db.get(ContentAsset, asset_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="Content asset not found")
-    db.query(ContentAssetGoal).filter_by(content_asset_id=asset_id).delete()
-    for gid in body.ids:
-        db.add(ContentAssetGoal(content_asset_id=asset_id, goal_id=gid))
     db.commit()
     return _load_asset_detail(db, asset_id)
 
@@ -1339,3 +1500,250 @@ def update_grade_config_goals(
 
     gc = db.query(GradeConfig).options(selectinload(GradeConfig.goals)).filter(GradeConfig.id == gc.id).one()
     return _gc_summary(gc)
+
+
+# ── Click tracking ───────────────────────────────────────────────────────────
+
+@router.post("/assets/{asset_id}/click", status_code=status.HTTP_204_NO_CONTENT)
+def track_asset_click(asset_id: uuid.UUID, db: DbDep):
+    """Public — increment click_count for a content asset."""
+    result = (
+        db.query(ContentAsset)
+        .filter(ContentAsset.id == asset_id, ContentAsset.status == "published")
+        .update(
+            {ContentAsset.click_count: ContentAsset.click_count + 1},
+            synchronize_session=False,
+        )
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Content asset not found")
+    db.commit()
+
+
+# ── Resource Categories ──────────────────────────────────────────────────────
+
+def _slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def _load_resource_category_detail(db: DbDep, cat_id: uuid.UUID) -> ResourceCategory:
+    stmt = (
+        select(ResourceCategory)
+        .where(ResourceCategory.id == cat_id)
+        .options(
+            selectinload(ResourceCategory.topics),
+            selectinload(ResourceCategory.workshops),
+        )
+    )
+    obj = db.scalar(stmt)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Resource category not found")
+    return obj
+
+
+@router.get("/resource-categories", response_model=list[ResourceCategoryOut])
+def list_resource_categories(_admin: AdminDep, db: DbDep):
+    return db.scalars(
+        select(ResourceCategory).order_by(ResourceCategory.sort_order, ResourceCategory.name)
+    ).all()
+
+
+@router.get("/resource-categories/public", response_model=list[ResourceCategoryOut])
+def list_resource_categories_public(db: DbDep):
+    """Public — list published categories."""
+    return db.scalars(
+        select(ResourceCategory)
+        .where(ResourceCategory.status == "published")
+        .order_by(ResourceCategory.sort_order, ResourceCategory.name)
+    ).all()
+
+
+@router.get("/resource-categories/{cat_id}", response_model=ResourceCategoryDetail)
+def get_resource_category(cat_id: uuid.UUID, _admin: AdminDep, db: DbDep):
+    return _load_resource_category_detail(db, cat_id)
+
+
+@router.post("/resource-categories", response_model=ResourceCategoryDetail, status_code=status.HTTP_201_CREATED)
+def create_resource_category(body: ResourceCategoryCreate, _admin: AdminDep, db: DbDep):
+    if db.scalar(select(ResourceCategory).where(ResourceCategory.name == body.name)):
+        raise HTTPException(status_code=409, detail="Resource category with this name already exists")
+    data = body.model_dump()
+    if not data.get("slug"):
+        data["slug"] = _slugify(body.name)
+    if db.scalar(select(ResourceCategory).where(ResourceCategory.slug == data["slug"])):
+        raise HTTPException(status_code=409, detail="Resource category with this slug already exists")
+    obj = ResourceCategory(**data)
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return _load_resource_category_detail(db, obj.id)
+
+
+@router.patch("/resource-categories/{cat_id}", response_model=ResourceCategoryDetail)
+def update_resource_category(
+    cat_id: uuid.UUID, body: ResourceCategoryUpdate, _admin: AdminDep, db: DbDep
+):
+    obj = db.get(ResourceCategory, cat_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Resource category not found")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(obj, k, v)
+    db.commit()
+    return _load_resource_category_detail(db, cat_id)
+
+
+@router.delete("/resource-categories/{cat_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_resource_category(cat_id: uuid.UUID, _admin: AdminDep, db: DbDep):
+    obj = db.get(ResourceCategory, cat_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Resource category not found")
+    db.delete(obj)
+    db.commit()
+
+
+@router.put("/resource-categories/{cat_id}/topics", response_model=ResourceCategoryDetail)
+def update_resource_category_topics(
+    cat_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep
+):
+    if not db.get(ResourceCategory, cat_id):
+        raise HTTPException(status_code=404, detail="Resource category not found")
+    db.query(ResourceCategoryTopic).filter_by(resource_category_id=cat_id).delete()
+    for tid in body.ids:
+        db.add(ResourceCategoryTopic(resource_category_id=cat_id, topic_id=tid))
+    db.commit()
+    return _load_resource_category_detail(db, cat_id)
+
+
+@router.put("/resource-categories/{cat_id}/workshops", response_model=ResourceCategoryDetail)
+def update_resource_category_workshops(
+    cat_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep
+):
+    if not db.get(ResourceCategory, cat_id):
+        raise HTTPException(status_code=404, detail="Resource category not found")
+    db.query(ResourceCategoryWorkshop).filter_by(resource_category_id=cat_id).delete()
+    for wid in body.ids:
+        db.add(ResourceCategoryWorkshop(resource_category_id=cat_id, workshop_id=wid))
+    db.commit()
+    return _load_resource_category_detail(db, cat_id)
+
+
+# ── Milestones ───────────────────────────────────────────────────────────────
+
+def _load_milestone_detail(db: DbDep, ms_id: uuid.UUID) -> Milestone:
+    stmt = (
+        select(Milestone)
+        .where(Milestone.id == ms_id)
+        .options(
+            selectinload(Milestone.grade_configs),
+            selectinload(Milestone.goals),
+            selectinload(Milestone.topics),
+            selectinload(Milestone.workshops),
+        )
+    )
+    obj = db.scalar(stmt)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+    return obj
+
+
+@router.get("/milestones", response_model=list[MilestoneOut])
+def list_milestones(_admin: AdminDep, db: DbDep):
+    return db.scalars(select(Milestone).order_by(Milestone.sort_order, Milestone.name)).all()
+
+
+@router.get("/milestones/public", response_model=list[MilestoneOut])
+def list_milestones_public(db: DbDep):
+    return db.scalars(select(Milestone).order_by(Milestone.sort_order, Milestone.name)).all()
+
+
+@router.get("/milestones/{ms_id}", response_model=MilestoneDetail)
+def get_milestone(ms_id: uuid.UUID, _admin: AdminDep, db: DbDep):
+    return _load_milestone_detail(db, ms_id)
+
+
+@router.post("/milestones", response_model=MilestoneDetail, status_code=status.HTTP_201_CREATED)
+def create_milestone(body: MilestoneCreate, _admin: AdminDep, db: DbDep):
+    if db.scalar(select(Milestone).where(Milestone.name == body.name)):
+        raise HTTPException(status_code=409, detail="Milestone with this name already exists")
+    data = body.model_dump()
+    if not data.get("slug"):
+        data["slug"] = _slugify(body.name)
+    if db.scalar(select(Milestone).where(Milestone.slug == data["slug"])):
+        raise HTTPException(status_code=409, detail="Milestone with this slug already exists")
+    obj = Milestone(**data)
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return _load_milestone_detail(db, obj.id)
+
+
+@router.patch("/milestones/{ms_id}", response_model=MilestoneDetail)
+def update_milestone(ms_id: uuid.UUID, body: MilestoneUpdate, _admin: AdminDep, db: DbDep):
+    obj = db.get(Milestone, ms_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(obj, k, v)
+    db.commit()
+    return _load_milestone_detail(db, ms_id)
+
+
+@router.delete("/milestones/{ms_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_milestone(ms_id: uuid.UUID, _admin: AdminDep, db: DbDep):
+    obj = db.get(Milestone, ms_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+    db.delete(obj)
+    db.commit()
+
+
+@router.put("/milestones/{ms_id}/grade-configs", response_model=MilestoneDetail)
+def update_milestone_grade_configs(
+    ms_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep
+):
+    if not db.get(Milestone, ms_id):
+        raise HTTPException(status_code=404, detail="Milestone not found")
+    db.query(MilestoneGradeConfig).filter_by(milestone_id=ms_id).delete()
+    for gcid in body.ids:
+        db.add(MilestoneGradeConfig(milestone_id=ms_id, grade_config_id=gcid))
+    db.commit()
+    return _load_milestone_detail(db, ms_id)
+
+
+@router.put("/milestones/{ms_id}/goals", response_model=MilestoneDetail)
+def update_milestone_goals(
+    ms_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep
+):
+    if not db.get(Milestone, ms_id):
+        raise HTTPException(status_code=404, detail="Milestone not found")
+    db.query(MilestoneGoal).filter_by(milestone_id=ms_id).delete()
+    for gid in body.ids:
+        db.add(MilestoneGoal(milestone_id=ms_id, goal_id=gid))
+    db.commit()
+    return _load_milestone_detail(db, ms_id)
+
+
+@router.put("/milestones/{ms_id}/topics", response_model=MilestoneDetail)
+def update_milestone_topics(
+    ms_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep
+):
+    if not db.get(Milestone, ms_id):
+        raise HTTPException(status_code=404, detail="Milestone not found")
+    db.query(MilestoneTopic).filter_by(milestone_id=ms_id).delete()
+    for tid in body.ids:
+        db.add(MilestoneTopic(milestone_id=ms_id, topic_id=tid))
+    db.commit()
+    return _load_milestone_detail(db, ms_id)
+
+
+@router.put("/milestones/{ms_id}/workshops", response_model=MilestoneDetail)
+def update_milestone_workshops(
+    ms_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep
+):
+    if not db.get(Milestone, ms_id):
+        raise HTTPException(status_code=404, detail="Milestone not found")
+    db.query(MilestoneWorkshop).filter_by(milestone_id=ms_id).delete()
+    for wid in body.ids:
+        db.add(MilestoneWorkshop(milestone_id=ms_id, workshop_id=wid))
+    db.commit()
+    return _load_milestone_detail(db, ms_id)

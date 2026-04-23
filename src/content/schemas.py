@@ -18,6 +18,9 @@ class AssetTypeOut(BaseModel):
     icon: str | None
     icon_url: str | None
     is_upload: bool
+    is_public: bool = True
+    is_tool: bool = False
+    display_bucket: str | None = None  # "tools" | "video" | "guide"
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -29,6 +32,9 @@ class AssetTypeCreate(BaseModel):
     icon: str | None = None
     icon_url: str | None = None
     is_upload: bool = False
+    is_public: bool = True
+    is_tool: bool = False
+    display_bucket: str | None = None
 
 
 class AssetTypeUpdate(BaseModel):
@@ -37,6 +43,9 @@ class AssetTypeUpdate(BaseModel):
     icon: str | None = None
     icon_url: str | None = None
     is_upload: bool | None = None
+    is_public: bool | None = None
+    is_tool: bool | None = None
+    display_bucket: str | None = None
 
 
 # ── Goals (formerly Topics) ──────────────────────────────────────────────────
@@ -246,6 +255,8 @@ class ContentAssetListItem(BaseModel):
     updated_at: datetime | None = None
     read_time_minutes: int | None = None
     video_duration_seconds: int | None = None
+    popularity_score: int | None = None
+    click_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -270,9 +281,10 @@ class ContentAssetDetail(BaseModel):
     updated_at: datetime | None = None
     read_time_minutes: int | None = None
     video_duration_seconds: int | None = None
+    popularity_score: int | None = None
+    click_count: int = 0
     asset_type: AssetTypeOut | None
     objectives: list[ObjectiveOut]
-    goals: list[GoalOut]
     topics: list[TopicListItem]
     workshops: list[WorkshopRef]
     cohorts: list[CohortRef]
@@ -330,6 +342,7 @@ class ContentAssetUpdate(BaseModel):
     status: str | None = None
     wp_post_id: str | None = None
     video_duration_seconds: int | None = None
+    popularity_score: int | None = None
 
     @field_validator("status")
     @classmethod
@@ -442,6 +455,7 @@ class GradeConfigOut(BaseModel):
     page_description: str | None = None
     banner_image_url: str | None = None
     sort_order: int
+    milestone_label: str | None = None
     goals: list[GoalWithTopics]
     created_at: datetime
 
@@ -462,6 +476,7 @@ class GradeConfigSummary(BaseModel):
     page_description: str | None = None
     banner_image_url: str | None = None
     sort_order: int
+    milestone_label: str | None = None
     goal_ids: list[uuid.UUID]
 
     model_config = {"from_attributes": True}
@@ -479,6 +494,7 @@ class GradeConfigCreate(BaseModel):
     page_description: str | None = None
     banner_image_url: str | None = None
     sort_order: int = 0
+    milestone_label: str | None = None
 
 
 class GradeConfigUpdate(BaseModel):
@@ -491,6 +507,7 @@ class GradeConfigUpdate(BaseModel):
     page_description: str | None = None
     banner_image_url: str | None = None
     sort_order: int | None = None
+    milestone_label: str | None = None
 
 
 class GradeConfigGoalsUpdate(BaseModel):
@@ -511,3 +528,123 @@ class ReaderQuestionOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── Resource Categories ──────────────────────────────────────────────────────
+
+class TopicRef(BaseModel):
+    id: uuid.UUID
+    title: str
+    slug: str
+
+    model_config = {"from_attributes": True}
+
+
+class ResourceCategoryOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    description: str | None
+    sort_order: int
+    status: str
+    created_at: datetime
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ResourceCategoryDetail(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    description: str | None
+    sort_order: int
+    status: str
+    created_at: datetime
+    updated_at: datetime | None = None
+    topics: list[TopicRef]
+    workshops: list[WorkshopRef]
+
+    model_config = {"from_attributes": True}
+
+
+class ResourceCategoryCreate(BaseModel):
+    name: str
+    slug: str | None = None
+    description: str | None = None
+    sort_order: int = 0
+    status: str = "published"
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in ("draft", "published"):
+            raise ValueError("status must be draft or published")
+        return v
+
+
+class ResourceCategoryUpdate(BaseModel):
+    name: str | None = None
+    slug: str | None = None
+    description: str | None = None
+    sort_order: int | None = None
+    status: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("draft", "published"):
+            raise ValueError("status must be draft or published")
+        return v
+
+
+# ── Milestones ───────────────────────────────────────────────────────────────
+
+class GradeConfigRef(BaseModel):
+    id: uuid.UUID
+    grade: int
+    label: str
+
+    model_config = {"from_attributes": True}
+
+
+class MilestoneOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    description: str | None
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class MilestoneDetail(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    description: str | None
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime | None = None
+    grade_configs: list[GradeConfigRef]
+    goals: list[GoalOut]
+    topics: list[TopicRef]
+    workshops: list[WorkshopRef]
+
+    model_config = {"from_attributes": True}
+
+
+class MilestoneCreate(BaseModel):
+    name: str
+    slug: str | None = None
+    description: str | None = None
+    sort_order: int = 0
+
+
+class MilestoneUpdate(BaseModel):
+    name: str | None = None
+    slug: str | None = None
+    description: str | None = None
+    sort_order: int | None = None
