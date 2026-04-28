@@ -289,3 +289,20 @@ class PortalMappingOverrideUpdate(BaseModel):
 class SchoolWorkshopsResponse(BaseModel):
     upcoming: list[WorkshopPortalItem]
     past: list[WorkshopPortalItem]
+
+
+class AirtableSyncResult(BaseModel):
+    matched: int
+    updated: int
+    skipped: int
+    synced_at: datetime
+
+
+class AirtableSyncLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    synced_at: datetime
+    matched: int
+    updated: int
+    skipped: int

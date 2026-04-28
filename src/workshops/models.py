@@ -74,6 +74,7 @@ class Webinar(Base):
             "END"
         ),
     )
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     join_url: Mapped[str | None] = mapped_column(Text)
     start_url: Mapped[str | None] = mapped_column(Text)
     registration_url: Mapped[str | None] = mapped_column(Text)
@@ -132,6 +133,20 @@ class WorkshopRegistration(Base):
         Index("idx_workshop_reg_webinar_id", "webinar_id"),
         Index("idx_workshop_reg_school_id", "school_id"),
         Index("idx_workshop_reg_email", "email"),
+    )
+
+
+class AirtableSyncLog(Base):
+    __tablename__ = "airtable_sync_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    synced_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    matched: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated: Mapped[int] = mapped_column(Integer, nullable=False)
+    skipped: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index("idx_airtable_sync_logs_synced_at", "synced_at"),
     )
 
 

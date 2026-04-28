@@ -1389,18 +1389,22 @@ def _upsert_topic(
 ) -> tuple[str, str]:
     existing = None
 
+    # Compute title early so we can derive a candidate slug for lookup
+    final_title = row.title or payload.title
+    # Slug precedence: explicit CSV value → slugified title
+    candidate_slug = row.slug or _slugify(final_title)
+
     if row.topic_id:
         existing = conn.execute(
             text("SELECT id, slug, sort_order FROM topics WHERE id = :id LIMIT 1"),
             {"id": row.topic_id},
         ).fetchone()
-    elif row.slug:
+    else:
+        # Always look up by slug (explicit or derived from title)
         existing = conn.execute(
             text("SELECT id, slug, sort_order FROM topics WHERE slug = :slug LIMIT 1"),
-            {"slug": row.slug},
+            {"slug": candidate_slug},
         ).fetchone()
-
-    final_title = row.title or payload.title
     final_description = row.description if row.description is not None else payload.description
     final_summary = payload.summary_html
     final_content = payload.content_html
@@ -1421,11 +1425,11 @@ def _upsert_topic(
 
     if existing:
         if not overwrite:
-            final_slug = row.slug or str(existing[1])
+            final_slug = candidate_slug
             return "skipped", final_slug
 
         topic_id = str(existing[0])
-        final_slug = row.slug or str(existing[1])
+        final_slug = candidate_slug
         final_sort_order = row.sort_order if row.sort_order is not None else int(existing[2] or 0)
 
         if dry_run:
@@ -1475,12 +1479,12 @@ def _upsert_topic(
         return "updated", final_slug
 
     if not create_missing:
-        lookup = row.topic_id or row.slug or "(none)"
+        lookup = row.topic_id or candidate_slug
         raise RuntimeError(
             f"Topic not found for row {row.row_number} (topic_id/slug={lookup}). Use --create-missing to insert."
         )
 
-    final_slug = row.slug or _slugify(final_title)
+    final_slug = candidate_slug
     final_sort_order = row.sort_order or 0
 
     # Ensure slug is unique — append UTC timestamp if a collision exists

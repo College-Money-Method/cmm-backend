@@ -19,8 +19,10 @@ from src.content.models import ContentAsset, WorkshopResource, Objective
 from src.cycles.models import Cycle
 from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
-from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopRegistration
+from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopRegistration
 from src.workshops.schemas import (
+    AirtableSyncLogOut,
+    AirtableSyncResult,
     ObjectiveIdsBody,
     ObjectiveSummary,
     PortalMappingCreate,
@@ -633,6 +635,21 @@ def create_workshop(body: WorkshopCreate, _admin: AdminDep, db: DbDep):
         created_at=obj.created_at,
         webinar_count=0,
     )
+
+
+@router.post("/sync-airtable", response_model=AirtableSyncResult)
+def sync_webinars_airtable(_admin: AdminDep, db: DbDep):
+    """Admin: pull video embed codes and URLs from Airtable into all matched webinars."""
+    from src.workshops.sync import sync_webinars_from_airtable
+    return sync_webinars_from_airtable(db)
+
+
+@router.get("/sync-airtable/last", response_model=AirtableSyncLogOut | None)
+def get_last_airtable_sync(_admin: AdminDep, db: DbDep):
+    """Admin: return the most recent Airtable sync log entry."""
+    return db.execute(
+        select(AirtableSyncLog).order_by(AirtableSyncLog.synced_at.desc()).limit(1)
+    ).scalar_one_or_none()
 
 
 @router.get("/{workshop_id}", response_model=WorkshopOut)

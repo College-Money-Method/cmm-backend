@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Batch import Google Docs workshop detail pages into the workshops table.
 
-Parses HTML exported from Google Docs ("Web page (.html)") and writes structured
-content into `workshops.key_actions` and `workshops.body` as Tiptap JSON.
-
-Resource card tables (▶ Title / Resource: link / description) are converted to
-styled rawHtml blocks. Once a dedicated Tiptap `resourceCard` extension is built,
-re-run with --overwrite to migrate them to structured nodes.
+Uses an LLM (OpenAI or Claude) to reliably extract structured metadata from
+Google Docs HTML exports — workshop name, description, grade level, key action
+items, and the "WHAT WE COVER" objectives. Objectives are matched against the
+database and linked via the objective_workshops junction table.
 
 Input file: CSV or JSON array.
 
@@ -24,13 +22,13 @@ Optional CSV columns:
 
 Examples:
   uv run python scripts/import_workshops_from_google_docs.py \\
-      --input scripts/input/workshops.csv --dry-run
+      --input scripts/input/workshops.csv --provider openai --dry-run
 
   uv run python scripts/import_workshops_from_google_docs.py \\
-      --input scripts/input/workshops.csv --create-missing
+      --input scripts/input/workshops.csv --provider openai --create-missing
 
   uv run python scripts/import_workshops_from_google_docs.py \\
-      --input scripts/input/workshops.csv --overwrite
+      --input scripts/input/workshops.csv --provider openai --overwrite
 """
 
 from __future__ import annotations
@@ -48,6 +46,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from sqlalchemy import text
+import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -58,8 +57,10 @@ from scripts.import_topics_from_google_docs import (
     _HN,
     _clean_google_export_html,
     _dom_find,
+    _extract_json_object,
     _html_to_tiptap,
     _load_source,
+    _sanitize_html,
     _serialize_node,
     _strip_html,
 )
@@ -98,8 +99,107 @@ class WorkshopPayload:
     description: str | None
     suggested_grades: str | None
     key_actions: str | None  # Tiptap JSON string
-    body: str | None  # Tiptap JSON string
+    body: str | None  # Tiptap JSON string (kept for legacy compat; set to None when objectives are linked)
     action_items: list[str]
+    objective_names: list[str]  # raw names extracted from "WHAT WE COVER" section
+
+
+# ── Objective name extraction ────────────────────────────────────────────────
+
+
+_MAX_OBJECTIVE_LEN = 120  # longer lines are section descriptions, not objective names
+
+
+def _get_text_lines(node: _HN) -> list[str]:
+    """
+    Collect non-empty text lines from a node, treating <br> children as line breaks.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+
+    def _walk(n: _HN | str) -> None:
+        if isinstance(n, str):
+            current.append(n)
+        elif n.tag == "br":
+            line = "".join(current).strip()
+            if line:
+                parts.append(line)
+            current.clear()
+        else:
+            for child in n.children:
+                _walk(child)
+
+    _walk(node)
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _extract_objective_names_from_html(html: str) -> list[str]:
+    """
+    Extract the objective names listed under the 'WHAT WE COVER' section.
+
+    Handles three HTML patterns seen across workshop docs:
+    - Separate <p> per objective (Workshop 5 / new format)
+    - Single <p> with <br>-separated items (Workshop 1 & 2 / old format)
+    - Separate <p> per objective before an empty <p> separator (Workshop 3 & 4)
+
+    Stops at: h1/h2/h3, empty <p>, or a paragraph longer than _MAX_OBJECTIVE_LEN chars.
+    """
+    builder = _DOMBuilder()
+    builder.feed(html)
+    root = _dom_find(builder.root, "body") or builder.root
+    children = [c for c in _top_children(root) if isinstance(c, _HN)]
+
+    names: list[str] = []
+    collecting = False
+
+    for node in children:
+        text = _get_text(node).strip()
+
+        # Detect the 'WHAT WE COVER' marker
+        if re.search(r"WHAT\s+WE\s+COVER", text, re.IGNORECASE):
+            collecting = True
+            # Strip the marker; remaining text may contain inline items
+            remainder = re.sub(r".*WHAT\s+WE\s+COVER\s*", "", text, flags=re.IGNORECASE).strip()
+            if remainder:
+                for line in remainder.splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("[") and len(line) <= _MAX_OBJECTIVE_LEN:
+                        names.append(line)
+            continue
+
+        if not collecting:
+            continue
+
+        # Stop at any heading
+        if node.tag in ("h1", "h2", "h3"):
+            break
+
+        if node.tag == "p":
+            # Empty paragraph = end of the objective list (Workshop 3 & 4 pattern)
+            if not text:
+                if names:  # only stop once we've collected at least one
+                    break
+                continue
+
+            # Use <br>-aware line splitting (Workshop 1 & 2 have all items in one <p>)
+            lines = _get_text_lines(node)
+            if not lines:
+                lines = [text]  # fallback: treat the whole paragraph as one line
+
+            for line in lines:
+                line = line.strip()
+                if (
+                    line
+                    and not line.startswith("[")
+                    and not re.search(r"WHAT\s+WE\s+COVER", line, re.IGNORECASE)
+                    and len(line) <= _MAX_OBJECTIVE_LEN
+                ):
+                    names.append(line)
+
+    return names
 
 
 # ── DOM helpers ───────────────────────────────────────────────────────────────
@@ -272,137 +372,180 @@ def _build_body_tiptap(body_html: str) -> dict:
     return {"type": "doc", "content": all_nodes or [{"type": "paragraph"}]}
 
 
-# ── HTML metadata extraction ──────────────────────────────────────────────────
+# ── LLM metadata extraction ───────────────────────────────────────────────────
+
+_WORKSHOP_LLM_SYSTEM = (
+    "You are a content processing assistant for College Money Method (CMM), "
+    "an educational platform helping families navigate college financial aid. "
+    "Extract structured metadata from a Google Docs workshop detail page. "
+    "Return valid JSON only — no markdown fences, no extra text."
+)
+
+_WORKSHOP_LLM_PROMPT = """\
+Extract structured metadata from this Google Docs workshop detail page HTML.
+
+## Output JSON Schema
+{
+  "name": "string — the workshop title (clean, strip bracketed editor notes like [Workshop 3 details page])",
+  "description": "string | null — 1–3 sentence overview paragraph immediately below the title",
+  "suggested_grades": "string | null — grade level, e.g. '9th grade', '10th grade', '11th/12th grade'",
+  "action_items": ["string"] — bullet items from the 'Key Actions and Insights' or similar section,
+  "objective_names": ["string"] — short section titles listed under 'WHAT WE COVER' (3–6 words each, not descriptions)
+}
+
+## Rules
+- `name`: the main workshop title. Strip any bracketed editor notes (e.g. "[Workshop 5 details page]").
+- `description`: the descriptive paragraph immediately below the title. Do not include the grade/length line.
+- `suggested_grades`: extract from patterns like "[11th grade]", "[11th/12th grade]", "11th grade", etc. Return null if absent.
+- `action_items`: bullets from "Key Actions and Insights" / "Key Takeaways" / "YOUR KEY TAKEAWAYS". These are short imperative or descriptive bullets (1 sentence each).
+- `objective_names`: ONLY the short section headings listed under "WHAT WE COVER" — typically 3–6 words each. Do NOT include the longer description paragraphs or sub-section content.
+
+## HTML
+{HTML}
+"""
 
 
-def _split_preamble_and_body(html: str) -> tuple[str, str]:
-    """
-    Split workshop HTML into preamble (everything before the first <h1>)
-    and body (from the first <h1> to end, excluding trailing annotation divs).
-    """
-    builder = _DOMBuilder()
-    builder.feed(html)
-    root = _dom_find(builder.root, "body") or builder.root
+def _call_llm_workshop(provider: str, model: str, html: str) -> dict[str, Any]:
+    """Call the configured LLM provider to extract workshop metadata."""
+    # Strip to plain text of body for token efficiency
+    clean = _sanitize_html(html)
+    prompt = _WORKSHOP_LLM_PROMPT.replace("{HTML}", clean)
 
-    preamble: list[str] = []
-    body: list[str] = []
-    in_body = False
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is required when provider=openai")
 
-    for child in _top_children(root):
-        if isinstance(child, _HN):
-            if not in_body and child.tag == "h1":
-                in_body = True
-            if in_body:
-                # Skip Google Docs comment annotation divs ("[a]", "[b]", etc.)
-                text = _get_text(child).strip()
-                if re.match(r"^\[[a-z0-9]\]", text):
-                    continue
-                body.append(_serialize_node(child))
-            else:
-                preamble.append(_serialize_node(child))
-        elif isinstance(child, str):
-            (body if in_body else preamble).append(child)
+        schema = {
+            "name": "workshop_metadata",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "description": {"type": ["string", "null"]},
+                    "suggested_grades": {"type": ["string", "null"]},
+                    "action_items": {"type": "array", "items": {"type": "string"}},
+                    "objective_names": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["name", "description", "suggested_grades", "action_items", "objective_names"],
+                "additionalProperties": False,
+            },
+        }
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": model,
+                "temperature": 0,
+                "messages": [
+                    {"role": "system", "content": _WORKSHOP_LLM_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                "response_format": {"type": "json_schema", "json_schema": schema},
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return _extract_json_object(resp.json()["choices"][0]["message"]["content"])
 
-    return "".join(preamble), "".join(body)
+    elif provider == "claude":
+        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is required when provider=claude")
 
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 2048,
+                "temperature": 0,
+                "system": _WORKSHOP_LLM_SYSTEM,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        blocks = [b.get("text", "") for b in resp.json().get("content", []) if b.get("type") == "text"]
+        return _extract_json_object("\n".join(blocks))
 
-def _extract_preamble_metadata(
-    preamble_html: str, row: WorkshopImportRow
-) -> dict[str, Any]:
-    """
-    Extract name, description, suggested_grades, key_actions (Tiptap JSON),
-    and action_items (list[str]) from the preamble HTML.
-
-    Values from the CSV row take precedence over extracted values.
-    """
-    builder = _DOMBuilder()
-    builder.feed(preamble_html)
-    root = _dom_find(builder.root, "body") or builder.root
-
-    nodes = [c for c in _top_children(root) if isinstance(c, _HN)]
-
-    # ── Name: first <p class="...title..."> ──────────────────────────────────
-    name = row.name
-    for node in nodes:
-        if "title" in node.attrs.get("class", ""):
-            text = _get_text(node).strip()
-            # Strip trailing Google Docs annotation markers like [a], [b]
-            text = re.sub(r"\[[a-z0-9]\]\s*$", "", text).strip()
-            if text and not text.startswith("["):
-                name = name or text
-                break
-
-    # ── Description: italic/colored <p> immediately after title ─────────────
-    description = row.description
-    title_seen = False
-    for node in nodes:
-        if "title" in node.attrs.get("class", ""):
-            title_seen = True
-            continue
-        if title_seen and node.tag == "p":
-            text = _get_text(node).strip()
-            if text and not text.startswith("["):
-                description = description or text
-                break
-
-    # ── Suggested grades: "[9th grade]" / "[10th grade]" pattern ────────────
-    suggested_grades = row.suggested_grades
-    for node in nodes:
-        m = re.search(r"\[(\d+(?:th|st|nd|rd)\s+grade)\]", _get_text(node), re.IGNORECASE)
-        if m:
-            suggested_grades = suggested_grades or m.group(1)
-            break
-
-    # ── Key actions: <ul> bullet list in preamble ────────────────────────────
-    action_items: list[str] = []
-    key_actions_html_parts: list[str] = []
-
-    for node in nodes:
-        if node.tag == "ul":
-            for li in _top_children(node):
-                if isinstance(li, _HN) and li.tag == "li":
-                    text = _get_text(li).strip()
-                    if text:
-                        action_items.append(text)
-            key_actions_html_parts.append(_serialize_node(node))
-
-    key_actions_tiptap: str | None = None
-    if key_actions_html_parts:
-        key_actions_tiptap = json.dumps(_html_to_tiptap("".join(key_actions_html_parts)))
-
-    return {
-        "name": name or "Untitled Workshop",
-        "description": description,
-        "suggested_grades": suggested_grades,
-        "key_actions": key_actions_tiptap,
-        "action_items": action_items,
-    }
+    else:
+        raise ValueError(f"Unsupported provider: {provider!r}")
 
 
 # ── Top-level HTML → WorkshopPayload ─────────────────────────────────────────
 
 
-def _parse_workshop_html(raw_html: str, row: WorkshopImportRow) -> WorkshopPayload:
+def _parse_workshop_html(
+    raw_html: str,
+    row: WorkshopImportRow,
+    provider: str = "none",
+    model: str = "gpt-4o-mini",
+) -> WorkshopPayload:
     """
     Parse a Google Docs workshop HTML export into a WorkshopPayload.
+
+    When provider != 'none', uses an LLM to reliably extract metadata regardless
+    of document styling changes. Falls back to basic heuristics when provider='none'.
     """
     html = _clean_google_export_html(raw_html)
-    preamble_html, body_html = _split_preamble_and_body(html)
 
-    meta = _extract_preamble_metadata(preamble_html, row)
+    if provider != "none":
+        parsed = _call_llm_workshop(provider=provider, model=model, html=html)
+        name = row.name or parsed.get("name") or "Untitled Workshop"
+        description = row.description or parsed.get("description")
+        suggested_grades = row.suggested_grades or parsed.get("suggested_grades")
+        action_items: list[str] = parsed.get("action_items") or []
+        objective_names: list[str] = parsed.get("objective_names") or []
 
-    body_tiptap: str | None = None
-    if body_html.strip():
-        body_tiptap = json.dumps(_build_body_tiptap(body_html))
+        # Build key_actions Tiptap JSON from action_items
+        key_actions_tiptap: str | None = None
+        if action_items:
+            items_html = "<ul>" + "".join(f"<li>{item}</li>" for item in action_items) + "</ul>"
+            key_actions_tiptap = json.dumps(_html_to_tiptap(items_html))
+
+        return WorkshopPayload(
+            name=name,
+            description=description,
+            suggested_grades=suggested_grades,
+            key_actions=key_actions_tiptap,
+            body=None,  # objectives rendering replaces body
+            action_items=action_items,
+            objective_names=objective_names,
+        )
+
+    # ── Heuristic fallback (provider='none') ─────────────────────────────────
+    # Used for dry-runs or when no LLM key is available.
+    # Kept intentionally simple — just grab the first non-bracketed <p> as name.
+    builder = _DOMBuilder()
+    builder.feed(html)
+    root = _dom_find(builder.root, "body") or builder.root
+    nodes = [c for c in _top_children(root) if isinstance(c, _HN)]
+
+    name = row.name
+    for node in nodes:
+        t = _get_text(node).strip()
+        if t and not t.startswith("["):
+            name = name or t
+            break
 
     return WorkshopPayload(
-        name=meta["name"],
-        description=meta["description"],
-        suggested_grades=meta["suggested_grades"],
-        key_actions=meta["key_actions"],
-        body=body_tiptap,
-        action_items=meta["action_items"],
+        name=name or "Untitled Workshop",
+        description=row.description,
+        suggested_grades=row.suggested_grades,
+        key_actions=None,
+        body=None,
+        action_items=[],
+        objective_names=_extract_objective_names_from_html(html),
     )
+
+
+
 
 
 # ── Input loading ─────────────────────────────────────────────────────────────
@@ -506,6 +649,34 @@ def _compute_search_text(payload: WorkshopPayload) -> str:
 # ── Database write ────────────────────────────────────────────────────────────
 
 
+def _resolve_objective_ids(
+    conn: Any,
+    objective_names: list[str],
+) -> list[str]:
+    """
+    Look up objective UUIDs by fuzzy (case-insensitive substring) name match.
+    Returns a list of UUID strings for matched objectives, preserving order.
+    Warns for names that have no match.
+    """
+    ids: list[str] = []
+    for name in objective_names:
+        row = conn.execute(
+            text(
+                "SELECT id FROM objectives "
+                "WHERE LOWER(name) LIKE :pat "
+                "ORDER BY name "
+                "LIMIT 1"
+            ),
+            {"pat": f"%{name.lower()}%"},
+        ).fetchone()
+        if row:
+            ids.append(str(row[0]))
+            print(f"  [objective] matched '{name}' → {row[0]}")
+        else:
+            print(f"  [WARN] objective not found: '{name}'")
+    return ids
+
+
 def _upsert_workshop(
     conn: Any,
     row: WorkshopImportRow,
@@ -581,6 +752,24 @@ def _upsert_workshop(
                 "search_text": search_text,
             },
         )
+
+        # Link objectives
+        if payload.objective_names:
+            obj_ids = _resolve_objective_ids(conn, payload.objective_names)
+            if obj_ids:
+                conn.execute(
+                    text("DELETE FROM objective_workshops WHERE workshop_id = :wid"),
+                    {"wid": wid},
+                )
+                for oid in obj_ids:
+                    conn.execute(
+                        text(
+                            "INSERT INTO objective_workshops (objective_id, workshop_id) "
+                            "VALUES (:oid, :wid) ON CONFLICT DO NOTHING"
+                        ),
+                        {"oid": oid, "wid": wid},
+                    )
+
         return "updated", f"id={wid}"
 
     if not create_missing:
@@ -628,6 +817,19 @@ def _upsert_workshop(
             "search_text": search_text,
         },
     )
+
+    # Link objectives
+    if payload.objective_names:
+        obj_ids = _resolve_objective_ids(conn, payload.objective_names)
+        for oid in obj_ids:
+            conn.execute(
+                text(
+                    "INSERT INTO objective_workshops (objective_id, workshop_id) "
+                    "VALUES (:oid, :wid) ON CONFLICT DO NOTHING"
+                ),
+                {"oid": oid, "wid": new_id},
+            )
+
     return "inserted", f"id={new_id}"
 
 
@@ -639,6 +841,17 @@ def main() -> int:
         description="Batch import Google Docs workshop HTML exports into the workshops table"
     )
     parser.add_argument("--input", required=True, help="Path to CSV or JSON input file")
+    parser.add_argument(
+        "--provider",
+        default="none",
+        choices=["none", "openai", "claude"],
+        help="LLM provider for metadata extraction (default: none — heuristic fallback)",
+    )
+    parser.add_argument(
+        "--model",
+        default="gpt-4o-mini",
+        help="LLM model name (default: gpt-4o-mini)",
+    )
     parser.add_argument(
         "--create-missing",
         action="store_true",
@@ -666,6 +879,7 @@ def main() -> int:
     print(f"  Rows  : {len(rows)}")
     if args.dry_run:
         print("  Mode  : DRY RUN — no database writes")
+    print(f"  LLM   : {args.provider}" + (f" / {args.model}" if args.provider != "none" else " (heuristic)"))
     if args.create_missing:
         print("  Mode  : --create-missing enabled")
     if args.overwrite:
@@ -690,7 +904,7 @@ def main() -> int:
 
                 # 2. Parse to WorkshopPayload
                 print("  [2/3] Parsing workshop content …", end="", flush=True)
-                payload = _parse_workshop_html(raw_html, row)
+                payload = _parse_workshop_html(raw_html, row, provider=args.provider, model=args.model)
 
                 body_blocks = (
                     len(json.loads(payload.body).get("content", []))
@@ -711,6 +925,7 @@ def main() -> int:
                     f"       name         : {payload.name!r}\n"
                     f"       grades       : {payload.suggested_grades or '—'}\n"
                     f"       action_items : {len(payload.action_items)}\n"
+                    f"       objectives   : {len(payload.objective_names)} found in HTML\n"
                     f"       body blocks  : {body_blocks} total, {raw_blocks} resource cards"
                 )
 
