@@ -102,6 +102,48 @@ def _calculate_read_time(content: str | None, summary: str | None = None) -> int
     words = len(combined.split())
     return max(1, round(words / 200)) if words > 0 else None
 
+
+def _extract_video_duration(embed_code: str | None) -> int | None:
+    """Extract video duration in seconds by calling Vimeo oEmbed or YouTube Data API."""
+    if not embed_code:
+        return None
+
+    vimeo_match = re.search(r'player\.vimeo\.com/video/(\d+)', embed_code)
+    if vimeo_match:
+        try:
+            resp = requests.get(
+                f"https://vimeo.com/api/oembed.json?url=https://vimeo.com/{vimeo_match.group(1)}",
+                timeout=5,
+            )
+            if resp.ok:
+                return resp.json().get("duration")
+        except Exception:
+            pass
+
+    yt_match = re.search(r'youtube(?:-nocookie)?\.com/embed/([a-zA-Z0-9_-]+)', embed_code)
+    if yt_match:
+        import os
+        api_key = os.environ.get("YOUTUBE_API_KEY")
+        if api_key:
+            try:
+                resp = requests.get(
+                    "https://www.googleapis.com/youtube/v3/videos",
+                    params={"id": yt_match.group(1), "part": "contentDetails", "key": api_key},
+                    timeout=5,
+                )
+                if resp.ok:
+                    items = resp.json().get("items", [])
+                    if items:
+                        dur = items[0]["contentDetails"]["duration"]
+                        h = int(re.search(r'(\d+)H', dur).group(1)) if re.search(r'(\d+)H', dur) else 0
+                        m = int(re.search(r'(\d+)M', dur).group(1)) if re.search(r'(\d+)M', dur) else 0
+                        s = int(re.search(r'(\d+)S', dur).group(1)) if re.search(r'(\d+)S', dur) else 0
+                        return h * 3600 + m * 60 + s
+            except Exception:
+                pass
+
+    return None
+
 # ── Asset Types ───────────────────────────────────────────────────────────────
 
 @router.get("/asset-types", response_model=list[AssetTypeOut])
@@ -354,6 +396,8 @@ def create_topic(body: TopicCreate, _admin: AdminDep, db: DbDep):
         extract_text(obj.summary),
         extract_text(obj.content),
     ]))
+    obj.read_time_minutes = _calculate_read_time(obj.content, obj.summary)
+    obj.video_duration_seconds = _extract_video_duration(obj.video_embed_code)
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -373,6 +417,8 @@ def update_topic(topic_id: uuid.UUID, body: TopicUpdate, _admin: AdminDep, db: D
         extract_text(obj.summary),
         extract_text(obj.content),
     ]))
+    obj.read_time_minutes = _calculate_read_time(obj.content, obj.summary)
+    obj.video_duration_seconds = _extract_video_duration(obj.video_embed_code)
     db.commit()
     return _load_topic_detail(db, topic_id)
 
@@ -955,6 +1001,7 @@ def create_asset(_admin: AdminDep, body: ContentAssetCreate, db: DbDep):
         extract_text(obj.content),
     ]))
     obj.read_time_minutes = _calculate_read_time(obj.content, obj.summary)
+    obj.video_duration_seconds = _extract_video_duration(obj.embed_code)
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -975,6 +1022,7 @@ def update_asset(asset_id: uuid.UUID, body: ContentAssetUpdate, _admin: AdminDep
         extract_text(obj.content),
     ]))
     obj.read_time_minutes = _calculate_read_time(obj.content, obj.summary)
+    obj.video_duration_seconds = _extract_video_duration(obj.embed_code)
     db.commit()
     return _load_asset_detail(db, asset_id)
 

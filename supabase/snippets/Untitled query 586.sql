@@ -1,3 +1,3 @@
-UPDATE content_assets
+UPDATE topics
 SET status = 'published'
-WHERE is_featured = true
+WHERE status = 'draft'

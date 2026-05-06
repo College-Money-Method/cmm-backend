@@ -148,6 +148,8 @@ class TopicDetail(BaseModel):
     goal: GoalSummary | None
     faqs: list[FaqOut]
     resources: list[ContentAssetListItem]
+    read_time_minutes: int | None = None
+    video_duration_seconds: int | None = None
 
     model_config = {"from_attributes": True}
 

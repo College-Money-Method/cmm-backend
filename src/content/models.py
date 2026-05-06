@@ -65,6 +65,8 @@ class Topic(Base):
     content: Mapped[str | None] = mapped_column(Text)  # sanitized HTML, edited via Tiptap
     action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     video_embed_code: Mapped[str | None] = mapped_column(Text)
+    read_time_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    video_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     image_url: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="draft", server_default="draft")
     goal_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("goals.id", ondelete="SET NULL"))
