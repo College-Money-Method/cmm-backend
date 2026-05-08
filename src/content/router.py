@@ -93,14 +93,14 @@ router = APIRouter(prefix="/api/v1/content", tags=["content"])
 
 
 def _calculate_read_time(content: str | None, summary: str | None = None) -> int | None:
-    """Estimate reading time in minutes at ~200 wpm from TipTap JSON or HTML content."""
+    """Estimate reading time in minutes at ~50 wpm from TipTap JSON or HTML content."""
     combined = " ".join(filter(None, [extract_text(content), extract_text(summary)]))
     if not combined:
         # Fallback: strip HTML tags for plain-HTML content
         raw = (content or "") + " " + (summary or "")
         combined = re.sub(r"<[^>]+>", " ", raw)
     words = len(combined.split())
-    return max(1, round(words / 200)) if words > 0 else None
+    return max(1, round(words / 50)) if words > 0 else None
 
 
 def _extract_video_duration(embed_code: str | None) -> int | None:
