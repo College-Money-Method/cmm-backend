@@ -36,6 +36,11 @@ class School(Base):
     )
     cmm_website_password: Mapped[str | None] = mapped_column(Text)
     slug: Mapped[str | None] = mapped_column(Text, unique=True)
+
+    @property
+    def has_password(self) -> bool:
+        return bool(self.cmm_website_password)
+
     school_resource_center_url: Mapped[str | None] = mapped_column(Text)
     appointlet_link: Mapped[str | None] = mapped_column(Text)
     calendar_link: Mapped[str | None] = mapped_column(Text)

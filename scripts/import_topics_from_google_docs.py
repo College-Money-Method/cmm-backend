@@ -1386,6 +1386,7 @@ def _upsert_topic(
     dry_run: bool,
     overwrite: bool = False,
     raw_html: str | None = None,
+    relink_goals: bool = False,
 ) -> tuple[str, str]:
     existing = None
 
@@ -1409,11 +1410,11 @@ def _upsert_topic(
     final_summary = payload.summary_html
     final_content = payload.content_html
     final_action_items = row.action_items if row.action_items is not None else payload.action_items
-    final_status = row.status or "draft"
+    final_status = row.status or "published"
     final_goal_id = _resolve_goal_id(conn, row, raw_html=raw_html)
 
     if final_status not in VALID_STATUS:
-        final_status = "draft"
+        final_status = "published"
 
     search_text = _compute_search_text(
         title=final_title,
@@ -1426,6 +1427,15 @@ def _upsert_topic(
     if existing:
         if not overwrite:
             final_slug = candidate_slug
+            if relink_goals:
+                # Only update goal_id and ensure published status — leave all other content untouched
+                new_goal_id = _resolve_goal_id(conn, row, raw_html=raw_html)
+                if not dry_run:
+                    conn.execute(
+                        text("UPDATE topics SET goal_id = :goal_id, status = 'published' WHERE id = :id"),
+                        {"goal_id": new_goal_id, "id": str(existing[0])},
+                    )
+                return "relinked", final_slug
             return "skipped", final_slug
 
         topic_id = str(existing[0])
@@ -1588,6 +1598,15 @@ def main() -> int:
         default=False,
         help="Convert HTML <table> elements to native Tiptap table nodes instead of rawHtml",
     )
+    parser.add_argument(
+        "--relink-goals",
+        action="store_true",
+        help=(
+            "Before importing, NULL out goal_id on every topic matched by this CSV "
+            "(by topic_id or derived slug), then re-link according to the HTML breadcrumb "
+            "or CSV goal_slug. Use this when the CSV is the source of truth for goal assignment."
+        ),
+    )
     args = parser.parse_args()
 
     # Wire the module-level flag so _html_to_tiptap picks it up
@@ -1614,19 +1633,90 @@ def main() -> int:
         print("  Mode  : --overwrite enabled (existing topics will be overwritten)")
     else:
         print("  Mode  : existing topics will be skipped (use --overwrite to update)")
+    if args.relink_goals:
+        print("  Mode  : --relink-goals enabled (goal_id will be cleared then re-linked from CSV/HTML)")
     print(_sep)
 
     inserted = 0
     updated = 0
     skipped = 0
+    relinked = 0
     failed = 0
 
     with get_engine().begin() as conn:
+        if args.relink_goals and not args.dry_run:
+            # Collect the unique goal_ids referenced by this CSV (via HTML breadcrumbs
+            # or explicit goal_slug).  Then NULL goal_id on ALL topics linked to those
+            # goals — not just the ones in this CSV — so stale/duplicate links are removed.
+            print("  [relink-goals] Scanning CSV rows to collect referenced goals …")
+            goal_ids_to_clear: set[str] = set()
+            for row in rows:
+                if row.goal_id:
+                    goal_ids_to_clear.add(row.goal_id)
+                else:
+                    goal_slug: str | None = row.goal_slug
+                    if not goal_slug:
+                        try:
+                            raw_html_temp, _ = _load_source(row.source)
+                            goal_slug = _extract_goal_slug_from_breadcrumb(raw_html_temp)
+                        except Exception:
+                            pass
+                    if goal_slug:
+                        result_g = conn.execute(
+                            text("SELECT id FROM goals WHERE slug = :slug LIMIT 1"),
+                            {"slug": goal_slug},
+                        ).fetchone()
+                        if result_g:
+                            goal_ids_to_clear.add(str(result_g[0]))
+
+            unlinked = 0
+            for gid in goal_ids_to_clear:
+                res = conn.execute(
+                    text("UPDATE topics SET goal_id = NULL WHERE goal_id = :gid"),
+                    {"gid": gid},
+                )
+                unlinked += res.rowcount
+                print(f"  [relink-goals] Cleared {res.rowcount} topic(s) from goal id={gid}")
+            print(f"  [relink-goals] Total unlinked: {unlinked} topic(s)")
+            print(_sep)
+
         for row in rows:
             try:
                 print(f"\n{'━' * 60}")
                 print(f"  Row {row.row_number}/{len(rows)}  {row.source}")
                 print(f"{'━' * 60}")
+
+                # Early-exit for existing topics when --overwrite is not set.
+                # Avoids loading HTML, uploading images, and calling the LLM.
+                if not args.overwrite:
+                    candidate_slug = row.slug or _slugify(row.title or "topic")
+                    if row.topic_id:
+                        existing_check = conn.execute(
+                            text("SELECT id FROM topics WHERE id = :id LIMIT 1"),
+                            {"id": row.topic_id},
+                        ).fetchone()
+                    else:
+                        existing_check = conn.execute(
+                            text("SELECT id FROM topics WHERE slug = :slug LIMIT 1"),
+                            {"slug": candidate_slug},
+                        ).fetchone()
+
+                    if existing_check:
+                        if args.relink_goals:
+                            # Resolve goal from HTML breadcrumb — requires loading the file
+                            raw_html_for_goal, _ = _load_source(row.source)
+                            new_goal_id = _resolve_goal_id(conn, row, raw_html=raw_html_for_goal)
+                            if not args.dry_run:
+                                conn.execute(
+                                    text("UPDATE topics SET goal_id = :goal_id, status = 'published' WHERE id = :id"),
+                                    {"goal_id": new_goal_id, "id": str(existing_check[0])},
+                                )
+                            print(f"  [relinked] goal_id={new_goal_id}  slug={candidate_slug}")
+                            relinked += 1
+                        else:
+                            print(f"  [skipped]  slug={candidate_slug}  (use --overwrite to update)")
+                            skipped += 1
+                        continue
 
                 # 1. Load HTML + image bytes
                 print("  [1/5] Loading source HTML …", end="", flush=True)
@@ -1702,11 +1792,14 @@ def main() -> int:
                     dry_run=args.dry_run,
                     overwrite=args.overwrite,
                     raw_html=raw_html,
+                    relink_goals=args.relink_goals,
                 )
                 if operation == "inserted":
                     inserted += 1
                 elif operation == "updated":
                     updated += 1
+                elif operation == "relinked":
+                    relinked += 1
                 else:
                     skipped += 1
                 print(f" done  [{operation}] slug={slug}")
@@ -1720,6 +1813,7 @@ def main() -> int:
     print(f"{'─' * 60}")
     print(f"  inserted : {inserted}")
     print(f"  updated  : {updated}")
+    print(f"  relinked : {relinked}")
     print(f"  skipped  : {skipped}")
     print(f"  failed   : {failed}")
     if args.dry_run:

@@ -134,6 +134,7 @@ class SchoolPublic(BaseModel):
     logo_thumb_url: str | None = None
     is_current_customer: bool = False
     grade_set_id: uuid.UUID | None = None
+    has_password: bool = False
 
 
 class SchoolPublicListResponse(BaseModel):
