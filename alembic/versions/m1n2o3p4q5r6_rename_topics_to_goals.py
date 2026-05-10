@@ -10,7 +10,8 @@ import sqlalchemy as sa
 
 
 revision = "m1n2o3p4q5r6"
-down_revision = "k8l9m0n1o2p3"
+# Depends on both: grade_config page fields AND topic parent_id (which creates idx_topics_parent_id)
+down_revision = ("k8l9m0n1o2p3", "k7l8m9n0o1p2")
 branch_labels = None
 depends_on = None
 

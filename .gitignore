@@ -20,6 +20,8 @@ env/
 # Env
 .env
 .env.local
+.env.dev
+.env.prod
 
 # Misc
 .DS_Store
@@ -29,3 +31,4 @@ airtable_csv_exports/
 .gitnexus
 scripts/input/
 scripts/output/
+.claude

@@ -11,7 +11,8 @@ help:
 	@echo "  CMM Backend"
 	@echo ""
 	@echo "  Dev"
-	@echo "    make dev              Start API with hot reload (uvicorn)"
+	@echo "    make dev              Start API with hot reload (ENV=dev by default)"
+	@echo "    make dev ENV=prod     Start API loaded with .env.prod"
 	@echo "    make install          Install all dependencies via uv"
 	@echo "    make install-scripts  Install + scripts extras (pandas etc.)"
 	@echo ""
@@ -22,8 +23,9 @@ help:
 	@echo "    make logs             Tail container logs"
 	@echo "    make shell            Open a shell inside the running container"
 	@echo ""
-	@echo "  Alembic"
+	@echo "  Alembic  (pass ENV=prod to target production)"
 	@echo "    make upgrade          Apply all pending migrations (alembic upgrade heads)"
+	@echo "    make upgrade ENV=prod Apply migrations against prod DB"
 	@echo "    make downgrade        Roll back one migration (alembic downgrade -1)"
 	@echo "    make revision MSG=... Auto-generate a new migration"
 	@echo "    make history          Show migration history"
@@ -37,10 +39,12 @@ help:
 	@echo ""
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
-PORT ?= 8000
+PORT ?= 8001
+ENV  ?= dev
 
 dev:
-	uv run uvicorn src.main:app --reload --host 0.0.0.0 --port $(PORT) --log-level debug
+	@test -f .env.$(ENV) || (echo "Error: .env.$(ENV) not found" && exit 1)
+	uv run --env-file .env.$(ENV) uvicorn src.main:app --reload --host 0.0.0.0 --port $(PORT) --log-level debug
 
 install:
 	uv sync --frozen
@@ -68,21 +72,25 @@ shell:
 # ── Alembic ───────────────────────────────────────────────────────────────────
 
 upgrade:
-	uv run alembic upgrade heads
+	@test -f .env.$(ENV) || (echo "Error: .env.$(ENV) not found" && exit 1)
+	uv run --env-file .env.$(ENV) alembic upgrade heads
 
 downgrade:
-	uv run alembic downgrade -1
+	@test -f .env.$(ENV) || (echo "Error: .env.$(ENV) not found" && exit 1)
+	uv run --env-file .env.$(ENV) alembic downgrade -1
 
 # Usage: make revision MSG="add something"
 revision:
 	@if [ -z "$(MSG)" ]; then echo "Usage: make revision MSG=\"describe the change\"" && exit 1; fi
-	uv run alembic revision --autogenerate -m "$(MSG)"
+	@test -f .env.$(ENV) || (echo "Error: .env.$(ENV) not found" && exit 1)
+	uv run --env-file .env.$(ENV) alembic revision --autogenerate -m "$(MSG)"
 
 history:
 	uv run alembic history --verbose
 
 current:
-	uv run alembic current
+	@test -f .env.$(ENV) || (echo "Error: .env.$(ENV) not found" && exit 1)
+	uv run --env-file .env.$(ENV) alembic current
 
 # ── Scripts ───────────────────────────────────────────────────────────────────
 

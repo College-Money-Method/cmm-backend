@@ -2,7 +2,7 @@ name: Deploy Backend
 
 on:
   push:
-    branches: [main]
+    branches: [main, production]
   workflow_dispatch:
     inputs:
       environment:
@@ -27,10 +27,10 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'dev' }}
+    environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/production' && 'prod' || 'dev') }}
 
     env:
-      ENV: ${{ github.event.inputs.environment || 'dev' }}
+      ENV: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/production' && 'prod' || 'dev') }}
 
     steps:
       - name: Checkout
