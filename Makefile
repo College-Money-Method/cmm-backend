@@ -40,7 +40,7 @@ help:
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 PORT ?= 8001
-ENV  ?= dev
+ENV  ?= local
 
 dev:
 	@test -f .env.$(ENV) || (echo "Error: .env.$(ENV) not found" && exit 1)

@@ -61,7 +61,8 @@ class Topic(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     description: Mapped[str | None] = mapped_column(Text)
-    summary: Mapped[str | None] = mapped_column(Text)  # rich HTML for "What You'll Learn"
+    summary: Mapped[str | None] = mapped_column(Text)  # legacy single rich-text blob
+    summary_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     content: Mapped[str | None] = mapped_column(Text)  # sanitized HTML, edited via Tiptap
     action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     video_embed_code: Mapped[str | None] = mapped_column(Text)

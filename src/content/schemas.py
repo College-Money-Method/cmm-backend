@@ -138,6 +138,7 @@ class TopicDetail(BaseModel):
     slug: str
     description: str | None
     summary: str | None
+    summary_items: list[str] = []
     content: str | None
     action_items: list[str]
     video_embed_code: str | None
@@ -159,6 +160,7 @@ class TopicCreate(BaseModel):
     slug: str | None = None  # auto-generated from title if omitted
     description: str | None = None
     summary: str | None = None
+    summary_items: list[str] | None = None
     content: str | None = None
     action_items: list[str] | None = None
     video_embed_code: str | None = None
@@ -180,6 +182,7 @@ class TopicUpdate(BaseModel):
     slug: str | None = None
     description: str | None = None
     summary: str | None = None
+    summary_items: list[str] | None = None
     content: str | None = None
     action_items: list[str] | None = None
     video_embed_code: str | None = None
