@@ -117,6 +117,8 @@ class TopicSummary(BaseModel):
     image_url: str | None
     status: str
     sort_order: int
+    read_time_minutes: int | None = None
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -478,6 +480,8 @@ class GradeConfigOut(BaseModel):
     sort_order: int
     goals: list[GoalWithTopics]
     created_at: datetime
+    total_read_time_minutes: int | None = None
+    topics_last_updated: datetime | None = None
 
     model_config = {"from_attributes": True}
 

@@ -28,6 +28,7 @@ class AssetType(Base):
     is_tool: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     display_bucket: Mapped[str | None] = mapped_column(Text, nullable=True)  # "tools" | "video" | "guide"
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     content_assets: Mapped[list[ContentAsset]] = relationship(back_populates="asset_type")
 
@@ -45,7 +46,7 @@ class Goal(Base):
     suggested_grades: Mapped[str | None] = mapped_column(Text)  # e.g. "9,10"
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
-
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     topics: Mapped[list[Topic]] = relationship(
         back_populates="goal",
@@ -76,6 +77,7 @@ class Topic(Base):
     search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     goal: Mapped[Goal | None] = relationship(back_populates="topics")
 
@@ -105,6 +107,7 @@ class Objective(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     workshops = relationship("Workshop", secondary="objective_workshops", back_populates="objectives")
     content_assets: Mapped[list[ContentAsset]] = relationship(
@@ -230,6 +233,7 @@ class Faq(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
 
 class ContentAssetFaq(Base):
@@ -292,6 +296,7 @@ class GradeSet(Base):
     description: Mapped[str | None] = mapped_column(Text)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     grade_configs: Mapped[list[GradeConfig]] = relationship(back_populates="grade_set")
 
@@ -319,6 +324,7 @@ class GradeConfig(Base):
     banner_image_url: Mapped[str | None] = mapped_column(Text)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     grade_set: Mapped[GradeSet] = relationship(back_populates="grade_configs")
     goals: Mapped[list[Goal]] = relationship(

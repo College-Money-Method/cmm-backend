@@ -1373,10 +1373,10 @@ def _gc_summary(gc: GradeConfig) -> GradeConfigSummary:
 def _load_grade_config(db, gc: GradeConfig) -> GradeConfigOut:
     """Build a GradeConfigOut with goals and their published topics/assets."""
     goals_with_topics = []
+    all_published_topics = []
     for goal in gc.goals:
-        published_topics = [
-            t for t in goal.topics if t.status == "published"
-        ]
+        published_topics = [t for t in goal.topics if t.status == "published"]
+        all_published_topics.extend(published_topics)
         goals_with_topics.append(
             GoalWithTopics(
                 id=goal.id,
@@ -1389,6 +1389,16 @@ def _load_grade_config(db, gc: GradeConfig) -> GradeConfigOut:
                 topics=[TopicSummary.model_validate(t) for t in published_topics],
             )
         )
+
+    read_times = [t.read_time_minutes for t in all_published_topics if t.read_time_minutes is not None]
+    total_read_time = sum(read_times) if read_times else None
+
+    last_updated = None
+    for t in all_published_topics:
+        effective = t.updated_at or t.created_at
+        if last_updated is None or effective > last_updated:
+            last_updated = effective
+
     return GradeConfigOut(
         id=gc.id,
         grade_set_id=gc.grade_set_id,
@@ -1404,6 +1414,8 @@ def _load_grade_config(db, gc: GradeConfig) -> GradeConfigOut:
         sort_order=gc.sort_order,
         goals=goals_with_topics,
         created_at=gc.created_at,
+        total_read_time_minutes=total_read_time,
+        topics_last_updated=last_updated,
     )
 
 
