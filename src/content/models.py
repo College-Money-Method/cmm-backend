@@ -22,6 +22,7 @@ class AssetType(Base):
     color: Mapped[str | None] = mapped_column(Text)
     icon: Mapped[str | None] = mapped_column(Text)
     icon_url: Mapped[str | None] = mapped_column(Text)
+    default_thumbnail_url: Mapped[str | None] = mapped_column(Text)
     is_upload: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     is_tool: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")

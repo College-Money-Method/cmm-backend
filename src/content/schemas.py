@@ -17,6 +17,7 @@ class AssetTypeOut(BaseModel):
     color: str | None
     icon: str | None
     icon_url: str | None
+    default_thumbnail_url: str | None = None
     is_upload: bool
     is_public: bool = True
     is_tool: bool = False
@@ -31,6 +32,7 @@ class AssetTypeCreate(BaseModel):
     color: str | None = None
     icon: str | None = None
     icon_url: str | None = None
+    default_thumbnail_url: str | None = None
     is_upload: bool = False
     is_public: bool = True
     is_tool: bool = False
@@ -42,6 +44,7 @@ class AssetTypeUpdate(BaseModel):
     color: str | None = None
     icon: str | None = None
     icon_url: str | None = None
+    default_thumbnail_url: str | None = None
     is_upload: bool | None = None
     is_public: bool | None = None
     is_tool: bool | None = None

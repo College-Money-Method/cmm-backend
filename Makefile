@@ -2,7 +2,14 @@
 .PHONY: help dev build run stop logs shell \
         migrate upgrade downgrade revision history current \
         seed-admins import-assets migrate-wp \
-        lint format typecheck
+        lint format typecheck uv-run
+
+# Capture extra args after "uv-run" so you can do:
+#   ENV=dev make uv-run python scripts/foo.py
+ifeq (uv-run,$(firstword $(MAKECMDGOALS)))
+  UV_RUN_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+  $(eval $(UV_RUN_ARGS):;@:)
+endif
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
@@ -36,6 +43,7 @@ help:
 	@echo "    make import-assets    Import content assets from Airtable"
 	@echo "    make migrate-wp       Migrate WordPress content (set WP_DOMAIN=...)"
 	@echo "    make migrate-wp-dry   Dry run WordPress migration"
+	@echo "    ENV=dev make uv-run python scripts/foo.py  Run any command with uv + env file"
 	@echo ""
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
@@ -93,6 +101,11 @@ current:
 	uv run --env-file .env.$(ENV) alembic current
 
 # ── Scripts ───────────────────────────────────────────────────────────────────
+
+# Usage: ENV=dev make uv-run python scripts/foo.py
+uv-run:
+	@test -f .env.$(ENV) || (echo "Error: .env.$(ENV) not found" && exit 1)
+	uv run --env-file .env.$(ENV) $(UV_RUN_ARGS)
 
 seed-admins:
 	uv run python scripts/seed_super_admins.py
