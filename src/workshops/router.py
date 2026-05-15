@@ -33,6 +33,7 @@ from src.workshops.schemas import (
     RegistrationUpdate,
     SchoolWorkshopsResponse,
     WebinarCreate,
+    WebinarListItem,
     WebinarOut,
     WebinarSummary,
     WebinarUpdate,
@@ -193,6 +194,72 @@ def _to_item(
 
 
 # ── Admin: Webinars (literal prefix — registered before /{workshop_id}) ─────
+
+
+@router.get("/webinars", response_model=list[WebinarListItem])
+def list_all_webinars(
+    _admin: AdminDep,
+    db: DbDep,
+    search: str | None = None,
+    status: str | None = None,  # "upcoming", "past", or None for all
+    sort: str = "date_asc",  # "date_asc" or "date_desc"
+    school_id: uuid.UUID | None = None,
+    workshop_id: uuid.UUID | None = None,
+):
+    """Admin: global webinar list filterable by school, workshop, status, and search."""
+    now = datetime.now(tz=timezone.utc)
+    stmt = select(Webinar).options(
+        selectinload(Webinar.workshop),
+        selectinload(Webinar.cohort),
+        selectinload(Webinar.cycle),
+        selectinload(Webinar.registrations),
+    )
+
+    if workshop_id:
+        stmt = stmt.where(Webinar.workshop_id == workshop_id)
+
+    if school_id:
+        # Filter to webinars mapped to this school via portal_mapping
+        stmt = stmt.where(
+            select(PortalMapping)
+            .where(PortalMapping.webinar_id == Webinar.id, PortalMapping.school_id == school_id)
+            .exists()
+        )
+
+    if search:
+        stmt = stmt.where(Webinar.webinar_name.ilike(f"%{search}%"))
+
+    if status == "upcoming":
+        stmt = stmt.where((Webinar.start_datetime >= now) | (Webinar.start_datetime.is_(None)))
+    elif status == "past":
+        stmt = stmt.where(Webinar.start_datetime < now)
+
+    stmt = stmt.order_by(
+        Webinar.start_datetime.asc().nulls_last()
+        if sort == "date_asc"
+        else Webinar.start_datetime.desc().nulls_last()
+    )
+
+    webinars = db.execute(stmt).scalars().all()
+    return [
+        WebinarListItem(
+            id=w.id,
+            webinar_name=w.webinar_name,
+            cohort_id=w.cohort_id,
+            start_datetime=w.start_datetime,
+            end_datetime=w.end_datetime,
+            zoom_webinar_id=w.zoom_webinar_id,
+            registration_url=w.registration_url,
+            zoom_link=w.zoom_link,
+            registration_count=len(w.registrations),
+            workshop_id=w.workshop_id,
+            workshop_name=w.workshop.name,
+            cohort_name=w.cohort.name if w.cohort else None,
+            cycle_id=w.cycle_id,
+            cycle_name=w.cycle.name if w.cycle else None,
+        )
+        for w in webinars
+    ]
 
 
 @router.get("/webinars/{webinar_id}", response_model=WebinarOut)

@@ -52,6 +52,16 @@ class WebinarSummary(BaseModel):
     registration_count: int
 
 
+class WebinarListItem(WebinarSummary):
+    """WebinarSummary enriched with workshop/cohort/cycle names for the global admin list."""
+
+    workshop_id: uuid.UUID
+    workshop_name: str
+    cohort_name: str | None
+    cycle_id: uuid.UUID | None
+    cycle_name: str | None
+
+
 class WorkshopSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
