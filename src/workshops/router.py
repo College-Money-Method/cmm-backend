@@ -205,8 +205,9 @@ def list_all_webinars(
     sort: str = "date_asc",  # "date_asc" or "date_desc"
     school_id: uuid.UUID | None = None,
     workshop_id: uuid.UUID | None = None,
+    cycle_id: uuid.UUID | None = None,
 ):
-    """Admin: global webinar list filterable by school, workshop, status, and search."""
+    """Admin: global webinar list filterable by cycle, school, workshop, status, and search."""
     now = datetime.now(tz=timezone.utc)
     stmt = select(Webinar).options(
         selectinload(Webinar.workshop),
@@ -214,6 +215,9 @@ def list_all_webinars(
         selectinload(Webinar.cycle),
         selectinload(Webinar.registrations),
     )
+
+    if cycle_id:
+        stmt = stmt.where(Webinar.cycle_id == cycle_id)
 
     if workshop_id:
         stmt = stmt.where(Webinar.workshop_id == workshop_id)
