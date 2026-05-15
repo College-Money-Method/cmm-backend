@@ -105,7 +105,7 @@ class SchoolUpdate(BaseModel):
 
 
 class SchoolPasswordUpdate(BaseModel):
-    password: str
+    password: str | None = None
 
 
 class SchoolListResponse(BaseModel):

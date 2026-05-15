@@ -49,17 +49,26 @@ S3_PREFIX = "portal/assets/thumbnails"
 MIN_MATCH_SCORE = 0.65
 
 # Exact DB title overrides for slugs where fuzzy matching is unreliable
-# (title uses &/vs/abbreviations that differ from the slug form).
+# (title uses &/vs/abbreviations/parenthetical suffixes that differ from slug).
 TITLE_OVERRIDES: dict[str, str] = {
     "completing the income sections": "Completing the Income Sections on Your Applications",
     "completing the assets special circumstances sectio": "Completing the Assets & Special Circumstances Sections on Your Applications",
-    # Grade 12 "Putting Your Money to Work" — & vs and, vs. vs vs, etc.
-    "loan repayment and management": "Loan Repayment & Management",
+    # & vs and, (Scholarships) suffix, etc.
+    "calculating student income and assets": "Calculating Student Income & Assets",
+    "developing a merit aid strategy": "Developing a Merit Aid Strategy (Scholarships)",
+    "loan repayment and management": "Loan Repayment & Management (Overview)",
+    # Grade 12 "Putting Your Money to Work" — vs. vs vs, hyphens, etc.
     "applying for additional loans": "Applying for Additional Loans",
     "calculating your four year commitment": "Calculating Your Four-Year Commitment",
     "using college savings vs current income vs loans": "Using College Savings vs. Current Income vs. Loans",
     "utilizing tax strategies": "Utilizing Tax Strategies",
     "planning for contingencies": "Planning for Contingencies",
+}
+
+# Same SVG reused for multiple topics (e.g. overview vs. detail version of same topic).
+# Key = primary DB title (from TITLE_OVERRIDES or fuzzy match); value = extra titles to also set.
+ALSO_APPLY_TO: dict[str, list[str]] = {
+    "Loan Repayment & Management (Overview)": ["Loan Repayment & Management"],
 }
 
 
@@ -219,6 +228,8 @@ def print_topic_section(results: list[dict]) -> None:
         current = "(already set)" if r["current"] else "(empty)"
         print(f"  {badge}  [{r['grade']}]  {r['label']}")
         print(f"         → DB title: {r['matched_text']!r}   score={r['score']:.2f}  {current}{skip}")
+        for alias in ALSO_APPLY_TO.get(r["matched_text"], []):
+            print(f"         → also: {alias!r}")
     print()
 
 
@@ -228,6 +239,7 @@ def print_topic_section(results: list[dict]) -> None:
 
 def apply_all(db, s3_client, bucket: str, region: str,
               hero_results: list[dict], topic_results: list[dict]) -> None:
+    title_map = {t.title: t for t in db.query(Topic).all()}
     uploaded = 0
     updated = 0
 
@@ -260,6 +272,16 @@ def apply_all(db, s3_client, bucket: str, region: str,
             sys.exit(1)
         r["record"].image_url = url
         updated += 1
+
+        # Propagate the same URL to aliased topics (same content, different title variant)
+        for alias_title in ALSO_APPLY_TO.get(r["matched_text"], []):
+            alias_rec = title_map.get(alias_title)
+            if alias_rec:
+                alias_rec.image_url = url
+                updated += 1
+                print(f"       ↳ also set → {alias_title!r}")
+            else:
+                print(f"       ↳ alias not found in DB: {alias_title!r}")
 
     db.commit()
     print(f"\nUploaded {uploaded} SVGs, updated {updated} DB records.")
