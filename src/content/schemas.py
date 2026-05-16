@@ -8,6 +8,16 @@ from datetime import datetime
 from pydantic import BaseModel, field_validator
 
 
+# ── Tags ─────────────────────────────────────────────────────────────────────
+
+class TagOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+
+    model_config = {"from_attributes": True}
+
+
 # ── Asset Types ───────────────────────────────────────────────────────────────
 
 class AssetTypeOut(BaseModel):
@@ -306,6 +316,10 @@ class ContentAssetDetail(BaseModel):
     video_duration_seconds: int | None = None
     popularity_score: int | None = None
     click_count: int = 0
+    why_important: str | None = None
+    how_to_use: str | None = None
+    suggested_grades: str | None = None
+    time_estimate_minutes: int | None = None
     asset_type: AssetTypeOut | None
     objectives: list[ObjectiveOut]
     topics: list[TopicListItem]
@@ -313,6 +327,7 @@ class ContentAssetDetail(BaseModel):
     cohorts: list[CohortRef]
     faqs: list[FaqOut]
     resources: list[ContentAssetListItem]
+    tags: list[TagOut] = []
 
     model_config = {"from_attributes": True}
 
@@ -342,6 +357,9 @@ class ContentAssetCreate(BaseModel):
     is_featured: bool = False
     status: str = "draft"
     wp_post_id: str | None = None
+    why_important: str | None = None
+    how_to_use: str | None = None
+    time_estimate_minutes: int | None = None
 
     @field_validator("status")
     @classmethod
@@ -366,6 +384,9 @@ class ContentAssetUpdate(BaseModel):
     wp_post_id: str | None = None
     video_duration_seconds: int | None = None
     popularity_score: int | None = None
+    why_important: str | None = None
+    how_to_use: str | None = None
+    time_estimate_minutes: int | None = None
 
     @field_validator("status")
     @classmethod
