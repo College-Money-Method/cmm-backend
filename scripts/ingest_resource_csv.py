@@ -13,7 +13,9 @@ Actions per row:
 Usage (from project root):
   uv run python scripts/ingest_resource_csv.py
   uv run python scripts/ingest_resource_csv.py --dry-run
-  uv run python scripts/ingest_resource_csv.py --reset
+
+On every run: rows with airtable_id matching R[0-9]+ (incorrectly ingested CSV refs)
+are removed first, then each row is matched by slugified name and updated/inserted.
 """
 
 from __future__ import annotations
@@ -222,15 +224,28 @@ def upsert_asset_type(conn, name: str, asset_type_map: dict[str, str], dry_run: 
     return actual_id
 
 
+def slugify(name: str) -> str:
+    """'College Financial Aid Data' → 'college-financial-aid-data'"""
+    s = name.lower().strip()
+    s = re.sub(r'[^a-z0-9]+', '-', s)
+    return s.strip('-')
+
+
 def upsert_content_asset(conn, row: dict, asset_type_id: str | None, dry_run: bool) -> str | None:
-    """Insert or update content_asset row; returns DB UUID string."""
-    airtable_id = row["ID"].strip()
+    """
+    Find existing row by slug-matched name and UPDATE, or INSERT new row.
+    The CSV 'ID' column (R1, R2…) is the content team's reference, NOT an airtable_id.
+    We never write it to airtable_id to avoid shadowing real Airtable sync records.
+    Returns DB UUID string.
+    """
+    csv_ref = row["ID"].strip()
 
     name = row["Edited Resource Name"].strip() or row["Asset Name"].strip() or row.get("Resource Name", "").strip()
     if not name:
-        print(f"  [skip] {airtable_id}: no name")
+        print(f"  [skip] {csv_ref}: no name")
         return None
 
+    slug = slugify(name)
     link = row["Link"].strip() or None
     notes = row["Notes"].strip()
 
@@ -242,68 +257,87 @@ def upsert_content_asset(conn, row: dict, asset_type_id: str | None, dry_run: bo
     how_to_use = row["How to Use This"].strip() or None
     suggested_grades = parse_grades(row["Grades"].strip())
 
-    row_id = str(uuid.uuid4())
-
     if dry_run:
         tags = parse_tags(row.get("Tags", ""))
         print(
-            f"  [dry-run] {airtable_id}: {name!r} | status={status} "
+            f"  [dry-run] {csv_ref}: {name!r} | slug={slug} status={status} "
             f"is_featured={is_featured} time_estimate={time_estimate} "
             f"grades={suggested_grades} tags={tags}"
         )
-        return row_id
+        return str(uuid.uuid4())
 
+    fields = {
+        "asset_type_id": asset_type_id,
+        "name": name,
+        "description": description,
+        "link": link,
+        "is_featured": is_featured,
+        "status": status,
+        "why_important": why_important,
+        "how_to_use": how_to_use,
+        "suggested_grades": suggested_grades,
+        "time_estimate_minutes": time_estimate,
+    }
+
+    # Slug match: find any existing row whose name slugifies to the same value
+    existing = conn.execute(
+        text(
+            """
+            SELECT id FROM content_assets
+            WHERE lower(regexp_replace(name, '[^a-zA-Z0-9]+', '-', 'g')) = :slug
+            LIMIT 1
+            """
+        ),
+        {"slug": slug},
+    ).fetchone()
+
+    if existing:
+        db_id = str(existing[0])
+        conn.execute(
+            text(
+                """
+                UPDATE content_assets
+                SET asset_type_id         = :asset_type_id,
+                    name                  = :name,
+                    description           = :description,
+                    link                  = :link,
+                    is_featured           = :is_featured,
+                    status                = :status,
+                    why_important         = :why_important,
+                    how_to_use            = :how_to_use,
+                    suggested_grades      = :suggested_grades,
+                    time_estimate_minutes = :time_estimate_minutes,
+                    updated_at            = now()
+                WHERE id = :id
+                """
+            ),
+            {"id": db_id, **fields},
+        )
+        return db_id
+
+    # No existing row — insert fresh (no airtable_id; real ID comes from Airtable sync)
+    new_id = str(uuid.uuid4())
     conn.execute(
         text(
             """
             INSERT INTO content_assets (
-                id, airtable_id, asset_type_id, name, description,
+                id, asset_type_id, name, description,
                 link, is_featured, status,
                 why_important, how_to_use, suggested_grades,
                 time_estimate_minutes
             )
             VALUES (
-                :id, :airtable_id, :asset_type_id, :name, :description,
+                :id, :asset_type_id, :name, :description,
                 :link, :is_featured, :status,
                 :why_important, :how_to_use, :suggested_grades,
                 :time_estimate_minutes
             )
-            ON CONFLICT (airtable_id) DO UPDATE
-                SET asset_type_id        = EXCLUDED.asset_type_id,
-                    name                 = EXCLUDED.name,
-                    description          = EXCLUDED.description,
-                    link                 = EXCLUDED.link,
-                    is_featured          = EXCLUDED.is_featured,
-                    status               = EXCLUDED.status,
-                    why_important        = EXCLUDED.why_important,
-                    how_to_use           = EXCLUDED.how_to_use,
-                    suggested_grades     = EXCLUDED.suggested_grades,
-                    time_estimate_minutes = EXCLUDED.time_estimate_minutes,
-                    updated_at           = now()
             """
         ),
-        {
-            "id": row_id,
-            "airtable_id": airtable_id,
-            "asset_type_id": asset_type_id,
-            "name": name,
-            "description": description,
-            "link": link,
-            "is_featured": is_featured,
-            "status": status,
-            "why_important": why_important,
-            "how_to_use": how_to_use,
-            "suggested_grades": suggested_grades,
-            "time_estimate_minutes": time_estimate,
-        },
+        {"id": new_id, **fields},
     )
-
-    # Fetch the real DB id (handles ON CONFLICT case)
-    result = conn.execute(
-        text("SELECT id FROM content_assets WHERE airtable_id = :aid"),
-        {"aid": airtable_id},
-    ).fetchone()
-    return str(result[0]) if result else row_id
+    print(f"  [new] {csv_ref}: {name!r} — no existing row, inserted {new_id[:8]}…")
+    return new_id
 
 
 def link_topics(
@@ -433,19 +467,16 @@ def link_tags(conn, db_asset_id: str, tag_names: list[str], dry_run: bool) -> in
     return linked
 
 
-# ── Reset ─────────────────────────────────────────────────────────────────────
+# ── Cleanup ───────────────────────────────────────────────────────────────────
 
-def reset_csv_assets(conn) -> None:
-    """Remove all content_assets rows ingested from this CSV (airtable_id LIKE 'R%' and numeric)."""
+def cleanup_wrong_airtable_ids(conn) -> None:
+    """Remove rows that were incorrectly ingested with CSV ref IDs (R1…R99) as airtable_id.
+    These are duplicates of the real Airtable-synced rows; slug matching now handles updates."""
     result = conn.execute(
-        text(
-            """
-            DELETE FROM content_assets
-            WHERE airtable_id ~ '^R[0-9]+$'
-            """
-        )
+        text("DELETE FROM content_assets WHERE airtable_id ~ '^R[0-9]+$'")
     )
-    print(f"  reset: deleted {result.rowcount} content_asset rows with airtable_id R[0-9]+")
+    if result.rowcount:
+        print(f"  cleanup: removed {result.rowcount} rows with incorrect R* airtable_ids")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -453,7 +484,6 @@ def reset_csv_assets(conn) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ingest Resource Center CSV into Postgres")
     parser.add_argument("--dry-run", action="store_true", help="No DB writes")
-    parser.add_argument("--reset", action="store_true", help="Delete R* assets before ingest")
     parser.add_argument("--csv", default=str(CSV_PATH), help="Path to CSV file")
     args = parser.parse_args()
 
@@ -468,9 +498,8 @@ def main() -> int:
     print(f"  {len(rows)} rows found")
 
     with get_engine().begin() as conn:
-        if args.reset and not args.dry_run:
-            print("Resetting R* assets...")
-            reset_csv_assets(conn)
+        if not args.dry_run:
+            cleanup_wrong_airtable_ids(conn)
 
         topic_entries = load_topic_map(conn)
         workshop_map = load_workshop_map(conn)
@@ -482,8 +511,8 @@ def main() -> int:
         all_unmatched_workshops: list[str] = []
 
         for row in rows:
-            airtable_id = row.get("ID", "").strip()
-            if not airtable_id:
+            csv_ref = row.get("ID", "").strip()
+            if not csv_ref:
                 continue
 
             # Resolve asset type (use first if combined like "Calculator, Guide")
@@ -502,17 +531,17 @@ def main() -> int:
             if not args.dry_run:
                 # Topic links
                 topic_titles = parse_topic_titles(row.get("Topics", ""))
-                tlinked, tunmatched = link_topics(conn, db_id, airtable_id, topic_titles, topic_entries, args.dry_run)
+                tlinked, tunmatched = link_topics(conn, db_id, csv_ref, topic_titles, topic_entries, args.dry_run)
                 topic_links += tlinked
                 if tunmatched:
-                    all_unmatched_topics.extend(f"{airtable_id} → {t!r}" for t in tunmatched)
+                    all_unmatched_topics.extend(f"{csv_ref} → {t!r}" for t in tunmatched)
 
                 # Workshop links (match by sequence_number)
                 wnums = parse_workshop_numbers(row.get("Workshops", ""))
-                wlinked, wunmatched = link_workshops(conn, db_id, airtable_id, wnums, workshop_map, args.dry_run)
+                wlinked, wunmatched = link_workshops(conn, db_id, csv_ref, wnums, workshop_map, args.dry_run)
                 workshop_links += wlinked
                 if wunmatched:
-                    all_unmatched_workshops.extend(f"{airtable_id} → Workshop #{w}" for w in wunmatched)
+                    all_unmatched_workshops.extend(f"{csv_ref} → Workshop #{w}" for w in wunmatched)
 
                 # Tag links
                 tag_names = parse_tags(row.get("Tags", ""))

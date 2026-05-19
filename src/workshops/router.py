@@ -185,6 +185,7 @@ def _to_item(
         workshop_art_url=workshop.workshop_art_url,
         sequence_number=workshop.sequence_number,
         action_items=list(workshop.action_items or []),
+        key_action_items=list(workshop.key_action_items or []),
         objectives=[_objective_with_resources(o, published_only=True) for o in workshop.objectives],
         resources=[ContentAssetSummary.model_validate(a) for a in workshop.content_assets if a.status == "published"],
         cycle_name=webinar.cycle.name if webinar.cycle else None,
@@ -751,6 +752,7 @@ def get_workshop(workshop_id: uuid.UUID, _admin: AdminDep, db: DbDep):
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
         action_items=list(obj.action_items or []),
+        key_action_items=list(obj.key_action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
@@ -792,6 +794,7 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
         action_items=list(obj.action_items or []),
+        key_action_items=list(obj.key_action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
@@ -920,6 +923,7 @@ def update_workshop_objectives(
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
         action_items=list(obj.action_items or []),
+        key_action_items=list(obj.key_action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
@@ -979,6 +983,7 @@ def update_workshop_resources(
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
         action_items=list(obj.action_items or []),
+        key_action_items=list(obj.key_action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 

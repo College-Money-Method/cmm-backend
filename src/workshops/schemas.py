@@ -18,6 +18,7 @@ class WorkshopCreate(BaseModel):
     name: str
     description: str | None = None
     key_actions: str | None = None
+    key_action_items: list[str] | None = None
     body: str | None = None
     sequence_number: int | None = None
     suggested_grades: str | None = None
@@ -30,6 +31,7 @@ class WorkshopUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     key_actions: str | None = None
+    key_action_items: list[str] | None = None
     body: str | None = None
     sequence_number: int | None = None
     suggested_grades: str | None = None
@@ -123,6 +125,7 @@ class WorkshopOut(BaseModel):
     webinar_count: int
     objectives: list[WorkshopObjectiveWithResources] = []
     action_items: list[str] = []
+    key_action_items: list[str] = []
     resources: list[ContentAssetSummary] = []
 
 
@@ -280,6 +283,7 @@ class WorkshopPortalItem(BaseModel):
     workshop_art_url: str | None
     sequence_number: int | None
     action_items: list[str] = []
+    key_action_items: list[str] = []
     objectives: list[WorkshopObjectiveWithResources] = []
     resources: list[ContentAssetSummary] = []
 

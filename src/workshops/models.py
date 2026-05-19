@@ -37,6 +37,7 @@ class Workshop(Base):
     resource_center_slug: Mapped[str | None] = mapped_column(Text, unique=True)
     workshop_art_url: Mapped[str | None] = mapped_column(Text)
     action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    key_action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
