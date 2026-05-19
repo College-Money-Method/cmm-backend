@@ -14,6 +14,7 @@ dependencies = [
     "alembic>=1.14.0",
     "psycopg2-binary>=2.9.0",
     "pillow>=12.1.1",
+    "pyspellchecker>=0.8",
 ]
 
 [project.optional-dependencies]
