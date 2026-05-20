@@ -19,10 +19,12 @@ from src.content.models import ContentAsset, WorkshopResource, Objective
 from src.cycles.models import Cycle
 from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
-from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopRegistration
+from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopNotificationSubscriber, WorkshopRegistration
 from src.workshops.schemas import (
     AirtableSyncLogOut,
     AirtableSyncResult,
+    NotificationSubscribeRequest,
+    NotificationSubscriberOut,
     ObjectiveIdsBody,
     ObjectiveSummary,
     PortalMappingCreate,
@@ -148,6 +150,19 @@ def _registration_out(reg: WorkshopRegistration) -> RegistrationOut:
         school_name=reg.school.name if reg.school else None,
     )
 
+
+def _subscriber_out(sub: "WorkshopNotificationSubscriber") -> NotificationSubscriberOut:
+    return NotificationSubscriberOut(
+        id=sub.id,
+        email=sub.email,
+        first_name=sub.first_name,
+        last_name=sub.last_name,
+        school_id=sub.school_id,
+        school_name=sub.school.name if sub.school else None,
+        cycle_name=sub.cycle_name,
+        subscribed_at=sub.subscribed_at,
+        notification_types=list(sub.notification_types or []),
+    )
 
 
 
@@ -470,6 +485,31 @@ def delete_registration(registration_id: uuid.UUID, _admin: AdminDep, db: DbDep)
     db.commit()
 
 
+# ── Admin: Notification subscribers (literal prefix) ────────────────────────
+
+
+@router.get("/notifications", response_model=list[NotificationSubscriberOut])
+def list_notification_subscribers(
+    _admin: AdminDep,
+    db: DbDep,
+    school_id: uuid.UUID | None = None,
+    cycle_name: str | None = None,
+) -> list[NotificationSubscriberOut]:
+    """Admin: list notification subscribers, filterable by school and cycle."""
+    stmt = (
+        select(WorkshopNotificationSubscriber)
+        .options(selectinload(WorkshopNotificationSubscriber.school))
+        .order_by(WorkshopNotificationSubscriber.subscribed_at.desc())
+    )
+    if school_id:
+        stmt = stmt.where(WorkshopNotificationSubscriber.school_id == school_id)
+    if cycle_name:
+        stmt = stmt.where(WorkshopNotificationSubscriber.cycle_name == cycle_name)
+
+    rows = db.execute(stmt).scalars().all()
+    return [_subscriber_out(r) for r in rows]
+
+
 # ── Public endpoints (literal prefix) ───────────────────────────────────────
 
 
@@ -490,6 +530,49 @@ def _get_prev_cycle_recording(workshop_id: uuid.UUID, db: DbDep) -> tuple[str | 
     if row is None:
         return None, None
     return row.video_embed_code, (row.cycle.name if row.cycle else None)
+
+
+@router.post(
+    "/public/notifications/subscribe",
+    response_model=NotificationSubscriberOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def subscribe_notifications(
+    body: NotificationSubscribeRequest,
+    db: DbDep,
+) -> NotificationSubscriberOut:
+    """Public: subscribe to registration-open notifications. Idempotent on duplicate."""
+    existing = db.execute(
+        select(WorkshopNotificationSubscriber)
+        .where(
+            WorkshopNotificationSubscriber.email == body.email,
+            WorkshopNotificationSubscriber.school_id == body.school_id,
+            WorkshopNotificationSubscriber.cycle_name == body.cycle_name,
+        )
+        .options(selectinload(WorkshopNotificationSubscriber.school))
+    ).scalar_one_or_none()
+
+    if existing:
+        return _subscriber_out(existing)
+
+    obj = WorkshopNotificationSubscriber(
+        email=body.email,
+        first_name=body.first_name,
+        last_name=body.last_name,
+        school_id=body.school_id,
+        cycle_name=body.cycle_name,
+        notification_types=body.notification_types,
+    )
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+
+    obj = db.execute(
+        select(WorkshopNotificationSubscriber)
+        .where(WorkshopNotificationSubscriber.id == obj.id)
+        .options(selectinload(WorkshopNotificationSubscriber.school))
+    ).scalar_one()
+    return _subscriber_out(obj)
 
 
 @router.get("/public/school/{school_id}", response_model=SchoolWorkshopsResponse)

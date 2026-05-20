@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 from src.content.schemas import ContentAssetSummary
 from src.db.enums import RegistrationStatus
@@ -320,3 +320,29 @@ class AirtableSyncLogOut(BaseModel):
     matched: int
     updated: int
     skipped: int
+
+
+# ── Notification subscriber schemas ──────────────────────────────────
+
+
+class NotificationSubscribeRequest(BaseModel):
+    email: EmailStr
+    first_name: str | None = None
+    last_name: str | None = None
+    school_id: uuid.UUID | None = None
+    cycle_name: str | None = None
+    notification_types: list[str] = ["registration_open"]
+
+
+class NotificationSubscriberOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    email: str
+    first_name: str | None
+    last_name: str | None
+    school_id: uuid.UUID | None
+    school_name: str | None = None
+    cycle_name: str | None
+    subscribed_at: datetime
+    notification_types: list[str]
