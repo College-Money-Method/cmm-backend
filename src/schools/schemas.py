@@ -46,6 +46,7 @@ class SchoolListItem(BaseModel):
     logo_url: str | None = None
     logo_thumb_url: str | None = None
     slug: str | None = None
+    nickname: str | None = None
     cohort_id: uuid.UUID | None = None
     cohort: CohortSummary | None = None
     grade_set_id: uuid.UUID | None = None
@@ -70,6 +71,7 @@ class SchoolDetail(SchoolListItem):
 
 class SchoolCreate(BaseModel):
     name: str
+    nickname: str | None = None
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
@@ -89,6 +91,7 @@ class SchoolUpdate(BaseModel):
     """All fields optional — PATCH semantics."""
 
     name: str | None = None
+    nickname: str | None = None
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
@@ -128,6 +131,7 @@ class SchoolPublic(BaseModel):
     id: uuid.UUID
     name: str
     slug: str | None = None
+    nickname: str | None = None
     city: str | None = None
     state: str | None = None
     logo_url: str | None = None

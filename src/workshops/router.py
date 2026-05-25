@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import cast, String, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
@@ -623,6 +623,43 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
     past.sort(key=lambda x: x.start_datetime or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
     return SchoolWorkshopsResponse(upcoming=upcoming, past=past)
+
+
+@router.get("/public/school/{school_id}/webinar/by-prefix/{prefix}", response_model=WorkshopPortalItem)
+def get_school_webinar_by_prefix(school_id: uuid.UUID, prefix: str, db: DbDep) -> WorkshopPortalItem:
+    """Return a single webinar's portal details looked up by the first 8 hex chars of its UUID."""
+    if len(prefix) != 8 or not all(c in "0123456789abcdef" for c in prefix):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="prefix must be 8 lowercase hex characters")
+
+    mapping = (
+        db.execute(
+            select(PortalMapping)
+            .where(
+                PortalMapping.school_id == school_id,
+                cast(PortalMapping.webinar_id, String).like(f"{prefix}%"),
+            )
+            .options(
+                selectinload(PortalMapping.webinar).options(
+                    selectinload(Webinar.workshop).options(
+                        selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type),
+                        selectinload(Workshop.objectives).selectinload(Objective.content_assets).selectinload(ContentAsset.asset_type),
+                    ),
+                    selectinload(Webinar.cycle),
+                )
+            )
+        )
+        .scalar_one_or_none()
+    )
+    if mapping is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workshop not found")
+
+    webinar = mapping.webinar
+    now = datetime.now(tz=timezone.utc)
+    is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
+    if is_upcoming:
+        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, db)
+        return _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
+    return _to_item(mapping)
 
 
 @router.get("/public/school/{school_id}/webinar/{webinar_id}", response_model=WorkshopPortalItem)

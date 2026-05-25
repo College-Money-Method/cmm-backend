@@ -36,6 +36,7 @@ class School(Base):
     )
     cmm_website_password: Mapped[str | None] = mapped_column(Text)
     slug: Mapped[str | None] = mapped_column(Text, unique=True)
+    nickname: Mapped[str | None] = mapped_column(Text)
 
     @property
     def has_password(self) -> bool:
