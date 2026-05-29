@@ -8,6 +8,16 @@ from datetime import datetime
 from pydantic import BaseModel, field_validator
 
 
+# ── Tags ─────────────────────────────────────────────────────────────────────
+
+class TagOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+
+    model_config = {"from_attributes": True}
+
+
 # ── Asset Types ───────────────────────────────────────────────────────────────
 
 class AssetTypeOut(BaseModel):
@@ -17,6 +27,7 @@ class AssetTypeOut(BaseModel):
     color: str | None
     icon: str | None
     icon_url: str | None
+    default_thumbnail_url: str | None = None
     is_upload: bool
     is_public: bool = True
     is_tool: bool = False
@@ -31,6 +42,7 @@ class AssetTypeCreate(BaseModel):
     color: str | None = None
     icon: str | None = None
     icon_url: str | None = None
+    default_thumbnail_url: str | None = None
     is_upload: bool = False
     is_public: bool = True
     is_tool: bool = False
@@ -42,6 +54,7 @@ class AssetTypeUpdate(BaseModel):
     color: str | None = None
     icon: str | None = None
     icon_url: str | None = None
+    default_thumbnail_url: str | None = None
     is_upload: bool | None = None
     is_public: bool | None = None
     is_tool: bool | None = None
@@ -114,6 +127,8 @@ class TopicSummary(BaseModel):
     image_url: str | None
     status: str
     sort_order: int
+    read_time_minutes: int | None = None
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -138,6 +153,7 @@ class TopicDetail(BaseModel):
     slug: str
     description: str | None
     summary: str | None
+    summary_items: list[str] = []
     content: str | None
     action_items: list[str]
     video_embed_code: str | None
@@ -159,6 +175,7 @@ class TopicCreate(BaseModel):
     slug: str | None = None  # auto-generated from title if omitted
     description: str | None = None
     summary: str | None = None
+    summary_items: list[str] | None = None
     content: str | None = None
     action_items: list[str] | None = None
     video_embed_code: str | None = None
@@ -180,6 +197,7 @@ class TopicUpdate(BaseModel):
     slug: str | None = None
     description: str | None = None
     summary: str | None = None
+    summary_items: list[str] | None = None
     content: str | None = None
     action_items: list[str] | None = None
     video_embed_code: str | None = None
@@ -298,6 +316,10 @@ class ContentAssetDetail(BaseModel):
     video_duration_seconds: int | None = None
     popularity_score: int | None = None
     click_count: int = 0
+    why_important: str | None = None
+    how_to_use: str | None = None
+    suggested_grades: str | None = None
+    time_estimate_minutes: int | None = None
     asset_type: AssetTypeOut | None
     objectives: list[ObjectiveOut]
     topics: list[TopicListItem]
@@ -305,6 +327,7 @@ class ContentAssetDetail(BaseModel):
     cohorts: list[CohortRef]
     faqs: list[FaqOut]
     resources: list[ContentAssetListItem]
+    tags: list[TagOut] = []
 
     model_config = {"from_attributes": True}
 
@@ -334,6 +357,9 @@ class ContentAssetCreate(BaseModel):
     is_featured: bool = False
     status: str = "draft"
     wp_post_id: str | None = None
+    why_important: str | None = None
+    how_to_use: str | None = None
+    time_estimate_minutes: int | None = None
 
     @field_validator("status")
     @classmethod
@@ -358,6 +384,9 @@ class ContentAssetUpdate(BaseModel):
     wp_post_id: str | None = None
     video_duration_seconds: int | None = None
     popularity_score: int | None = None
+    why_important: str | None = None
+    how_to_use: str | None = None
+    time_estimate_minutes: int | None = None
 
     @field_validator("status")
     @classmethod
@@ -472,6 +501,8 @@ class GradeConfigOut(BaseModel):
     sort_order: int
     goals: list[GoalWithTopics]
     created_at: datetime
+    total_read_time_minutes: int | None = None
+    topics_last_updated: datetime | None = None
 
     model_config = {"from_attributes": True}
 

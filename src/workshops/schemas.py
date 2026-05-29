@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 from src.content.schemas import ContentAssetSummary
 from src.db.enums import RegistrationStatus
@@ -18,6 +18,7 @@ class WorkshopCreate(BaseModel):
     name: str
     description: str | None = None
     key_actions: str | None = None
+    key_action_items: list[str] | None = None
     body: str | None = None
     sequence_number: int | None = None
     suggested_grades: str | None = None
@@ -30,6 +31,7 @@ class WorkshopUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     key_actions: str | None = None
+    key_action_items: list[str] | None = None
     body: str | None = None
     sequence_number: int | None = None
     suggested_grades: str | None = None
@@ -50,6 +52,16 @@ class WebinarSummary(BaseModel):
     registration_url: str | None
     zoom_link: str | None
     registration_count: int
+
+
+class WebinarListItem(WebinarSummary):
+    """WebinarSummary enriched with workshop/cohort/cycle names for the global admin list."""
+
+    workshop_id: uuid.UUID
+    workshop_name: str
+    cohort_name: str | None
+    cycle_id: uuid.UUID | None
+    cycle_name: str | None
 
 
 class WorkshopSummary(BaseModel):
@@ -113,6 +125,7 @@ class WorkshopOut(BaseModel):
     webinar_count: int
     objectives: list[WorkshopObjectiveWithResources] = []
     action_items: list[str] = []
+    key_action_items: list[str] = []
     resources: list[ContentAssetSummary] = []
 
 
@@ -270,6 +283,7 @@ class WorkshopPortalItem(BaseModel):
     workshop_art_url: str | None
     sequence_number: int | None
     action_items: list[str] = []
+    key_action_items: list[str] = []
     objectives: list[WorkshopObjectiveWithResources] = []
     resources: list[ContentAssetSummary] = []
 
@@ -306,3 +320,29 @@ class AirtableSyncLogOut(BaseModel):
     matched: int
     updated: int
     skipped: int
+
+
+# ── Notification subscriber schemas ──────────────────────────────────
+
+
+class NotificationSubscribeRequest(BaseModel):
+    email: EmailStr
+    first_name: str | None = None
+    last_name: str | None = None
+    school_id: uuid.UUID | None = None
+    cycle_name: str | None = None
+    notification_types: list[str] = ["registration_open"]
+
+
+class NotificationSubscriberOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    email: str
+    first_name: str | None
+    last_name: str | None
+    school_id: uuid.UUID | None
+    school_name: str | None = None
+    cycle_name: str | None
+    subscribed_at: datetime
+    notification_types: list[str]

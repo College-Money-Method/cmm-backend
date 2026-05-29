@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import cast, String, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
@@ -19,10 +19,12 @@ from src.content.models import ContentAsset, WorkshopResource, Objective
 from src.cycles.models import Cycle
 from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
-from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopRegistration
+from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopNotificationSubscriber, WorkshopRegistration
 from src.workshops.schemas import (
     AirtableSyncLogOut,
     AirtableSyncResult,
+    NotificationSubscribeRequest,
+    NotificationSubscriberOut,
     ObjectiveIdsBody,
     ObjectiveSummary,
     PortalMappingCreate,
@@ -33,6 +35,7 @@ from src.workshops.schemas import (
     RegistrationUpdate,
     SchoolWorkshopsResponse,
     WebinarCreate,
+    WebinarListItem,
     WebinarOut,
     WebinarSummary,
     WebinarUpdate,
@@ -148,6 +151,19 @@ def _registration_out(reg: WorkshopRegistration) -> RegistrationOut:
     )
 
 
+def _subscriber_out(sub: "WorkshopNotificationSubscriber") -> NotificationSubscriberOut:
+    return NotificationSubscriberOut(
+        id=sub.id,
+        email=sub.email,
+        first_name=sub.first_name,
+        last_name=sub.last_name,
+        school_id=sub.school_id,
+        school_name=sub.school.name if sub.school else None,
+        cycle_name=sub.cycle_name,
+        subscribed_at=sub.subscribed_at,
+        notification_types=list(sub.notification_types or []),
+    )
+
 
 
 def _to_item(
@@ -184,6 +200,7 @@ def _to_item(
         workshop_art_url=workshop.workshop_art_url,
         sequence_number=workshop.sequence_number,
         action_items=list(workshop.action_items or []),
+        key_action_items=list(workshop.key_action_items or []),
         objectives=[_objective_with_resources(o, published_only=True) for o in workshop.objectives],
         resources=[ContentAssetSummary.model_validate(a) for a in workshop.content_assets if a.status == "published"],
         cycle_name=webinar.cycle.name if webinar.cycle else None,
@@ -193,6 +210,76 @@ def _to_item(
 
 
 # ── Admin: Webinars (literal prefix — registered before /{workshop_id}) ─────
+
+
+@router.get("/webinars", response_model=list[WebinarListItem])
+def list_all_webinars(
+    _admin: AdminDep,
+    db: DbDep,
+    search: str | None = None,
+    status: str | None = None,  # "upcoming", "past", or None for all
+    sort: str = "date_asc",  # "date_asc" or "date_desc"
+    school_id: uuid.UUID | None = None,
+    workshop_id: uuid.UUID | None = None,
+    cycle_id: uuid.UUID | None = None,
+):
+    """Admin: global webinar list filterable by cycle, school, workshop, status, and search."""
+    now = datetime.now(tz=timezone.utc)
+    stmt = select(Webinar).options(
+        selectinload(Webinar.workshop),
+        selectinload(Webinar.cohort),
+        selectinload(Webinar.cycle),
+        selectinload(Webinar.registrations),
+    )
+
+    if cycle_id:
+        stmt = stmt.where(Webinar.cycle_id == cycle_id)
+
+    if workshop_id:
+        stmt = stmt.where(Webinar.workshop_id == workshop_id)
+
+    if school_id:
+        # Filter to webinars mapped to this school via portal_mapping
+        stmt = stmt.where(
+            select(PortalMapping)
+            .where(PortalMapping.webinar_id == Webinar.id, PortalMapping.school_id == school_id)
+            .exists()
+        )
+
+    if search:
+        stmt = stmt.where(Webinar.webinar_name.ilike(f"%{search}%"))
+
+    if status == "upcoming":
+        stmt = stmt.where((Webinar.start_datetime >= now) | (Webinar.start_datetime.is_(None)))
+    elif status == "past":
+        stmt = stmt.where(Webinar.start_datetime < now)
+
+    stmt = stmt.order_by(
+        Webinar.start_datetime.asc().nulls_last()
+        if sort == "date_asc"
+        else Webinar.start_datetime.desc().nulls_last()
+    )
+
+    webinars = db.execute(stmt).scalars().all()
+    return [
+        WebinarListItem(
+            id=w.id,
+            webinar_name=w.webinar_name,
+            cohort_id=w.cohort_id,
+            start_datetime=w.start_datetime,
+            end_datetime=w.end_datetime,
+            zoom_webinar_id=w.zoom_webinar_id,
+            registration_url=w.registration_url,
+            zoom_link=w.zoom_link,
+            registration_count=len(w.registrations),
+            workshop_id=w.workshop_id,
+            workshop_name=w.workshop.name,
+            cohort_name=w.cohort.name if w.cohort else None,
+            cycle_id=w.cycle_id,
+            cycle_name=w.cycle.name if w.cycle else None,
+        )
+        for w in webinars
+    ]
 
 
 @router.get("/webinars/{webinar_id}", response_model=WebinarOut)
@@ -398,6 +485,31 @@ def delete_registration(registration_id: uuid.UUID, _admin: AdminDep, db: DbDep)
     db.commit()
 
 
+# ── Admin: Notification subscribers (literal prefix) ────────────────────────
+
+
+@router.get("/notifications", response_model=list[NotificationSubscriberOut])
+def list_notification_subscribers(
+    _admin: AdminDep,
+    db: DbDep,
+    school_id: uuid.UUID | None = None,
+    cycle_name: str | None = None,
+) -> list[NotificationSubscriberOut]:
+    """Admin: list notification subscribers, filterable by school and cycle."""
+    stmt = (
+        select(WorkshopNotificationSubscriber)
+        .options(selectinload(WorkshopNotificationSubscriber.school))
+        .order_by(WorkshopNotificationSubscriber.subscribed_at.desc())
+    )
+    if school_id:
+        stmt = stmt.where(WorkshopNotificationSubscriber.school_id == school_id)
+    if cycle_name:
+        stmt = stmt.where(WorkshopNotificationSubscriber.cycle_name == cycle_name)
+
+    rows = db.execute(stmt).scalars().all()
+    return [_subscriber_out(r) for r in rows]
+
+
 # ── Public endpoints (literal prefix) ───────────────────────────────────────
 
 
@@ -418,6 +530,49 @@ def _get_prev_cycle_recording(workshop_id: uuid.UUID, db: DbDep) -> tuple[str | 
     if row is None:
         return None, None
     return row.video_embed_code, (row.cycle.name if row.cycle else None)
+
+
+@router.post(
+    "/public/notifications/subscribe",
+    response_model=NotificationSubscriberOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def subscribe_notifications(
+    body: NotificationSubscribeRequest,
+    db: DbDep,
+) -> NotificationSubscriberOut:
+    """Public: subscribe to registration-open notifications. Idempotent on duplicate."""
+    existing = db.execute(
+        select(WorkshopNotificationSubscriber)
+        .where(
+            WorkshopNotificationSubscriber.email == body.email,
+            WorkshopNotificationSubscriber.school_id == body.school_id,
+            WorkshopNotificationSubscriber.cycle_name == body.cycle_name,
+        )
+        .options(selectinload(WorkshopNotificationSubscriber.school))
+    ).scalar_one_or_none()
+
+    if existing:
+        return _subscriber_out(existing)
+
+    obj = WorkshopNotificationSubscriber(
+        email=body.email,
+        first_name=body.first_name,
+        last_name=body.last_name,
+        school_id=body.school_id,
+        cycle_name=body.cycle_name,
+        notification_types=body.notification_types,
+    )
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+
+    obj = db.execute(
+        select(WorkshopNotificationSubscriber)
+        .where(WorkshopNotificationSubscriber.id == obj.id)
+        .options(selectinload(WorkshopNotificationSubscriber.school))
+    ).scalar_one()
+    return _subscriber_out(obj)
 
 
 @router.get("/public/school/{school_id}", response_model=SchoolWorkshopsResponse)
@@ -468,6 +623,43 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
     past.sort(key=lambda x: x.start_datetime or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
     return SchoolWorkshopsResponse(upcoming=upcoming, past=past)
+
+
+@router.get("/public/school/{school_id}/webinar/by-prefix/{prefix}", response_model=WorkshopPortalItem)
+def get_school_webinar_by_prefix(school_id: uuid.UUID, prefix: str, db: DbDep) -> WorkshopPortalItem:
+    """Return a single webinar's portal details looked up by the first 8 hex chars of its UUID."""
+    if len(prefix) != 8 or not all(c in "0123456789abcdef" for c in prefix):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="prefix must be 8 lowercase hex characters")
+
+    mapping = (
+        db.execute(
+            select(PortalMapping)
+            .where(
+                PortalMapping.school_id == school_id,
+                cast(PortalMapping.webinar_id, String).like(f"{prefix}%"),
+            )
+            .options(
+                selectinload(PortalMapping.webinar).options(
+                    selectinload(Webinar.workshop).options(
+                        selectinload(Workshop.content_assets).selectinload(ContentAsset.asset_type),
+                        selectinload(Workshop.objectives).selectinload(Objective.content_assets).selectinload(ContentAsset.asset_type),
+                    ),
+                    selectinload(Webinar.cycle),
+                )
+            )
+        )
+        .scalar_one_or_none()
+    )
+    if mapping is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workshop not found")
+
+    webinar = mapping.webinar
+    now = datetime.now(tz=timezone.utc)
+    is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
+    if is_upcoming:
+        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, db)
+        return _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
+    return _to_item(mapping)
 
 
 @router.get("/public/school/{school_id}/webinar/{webinar_id}", response_model=WorkshopPortalItem)
@@ -680,6 +872,7 @@ def get_workshop(workshop_id: uuid.UUID, _admin: AdminDep, db: DbDep):
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
         action_items=list(obj.action_items or []),
+        key_action_items=list(obj.key_action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
@@ -721,6 +914,7 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
         action_items=list(obj.action_items or []),
+        key_action_items=list(obj.key_action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
@@ -849,6 +1043,7 @@ def update_workshop_objectives(
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
         action_items=list(obj.action_items or []),
+        key_action_items=list(obj.key_action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 
@@ -908,6 +1103,7 @@ def update_workshop_resources(
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
         action_items=list(obj.action_items or []),
+        key_action_items=list(obj.key_action_items or []),
         resources=[ContentAssetSummary.model_validate(a) for a in obj.content_assets],
     )
 

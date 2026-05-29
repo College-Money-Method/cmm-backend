@@ -19,6 +19,7 @@ env:
   AWS_ACCOUNT_ID: "283209027441"
   ECR_REPOSITORY: cmm/backend
   ECS_APP_NAME: cmm-backend
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   id-token: write
@@ -34,10 +35,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/github
           aws-region: ${{ env.AWS_REGION }}

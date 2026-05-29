@@ -34,9 +34,9 @@ from src.workshops.models import Workshop
 
 
 def build_topic_search_text(obj: Topic) -> str:
+    # Title and description are weighted separately by the DB trigger (A/B).
+    # search_text carries body-only content so it lands at weight D.
     return " ".join(filter(None, [
-        obj.title or "",
-        obj.description or "",
         extract_text(obj.summary),
         extract_text(obj.content),
     ]))
@@ -44,8 +44,6 @@ def build_topic_search_text(obj: Topic) -> str:
 
 def build_workshop_search_text(obj: Workshop) -> str:
     return " ".join(filter(None, [
-        obj.name or "",
-        obj.description or "",
         extract_text(obj.body),
         extract_text(obj.key_actions),
     ]))
@@ -53,8 +51,6 @@ def build_workshop_search_text(obj: Workshop) -> str:
 
 def build_asset_search_text(obj: ContentAsset) -> str:
     return " ".join(filter(None, [
-        obj.name or "",
-        obj.description or "",
         extract_text(obj.summary),
         extract_text(obj.content),
     ]))

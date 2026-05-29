@@ -37,6 +37,7 @@ class Workshop(Base):
     resource_center_slug: Mapped[str | None] = mapped_column(Text, unique=True)
     workshop_art_url: Mapped[str | None] = mapped_column(Text)
     action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    key_action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
@@ -176,4 +177,29 @@ class PortalMapping(Base):
         UniqueConstraint("school_id", "webinar_id", name="uq_portal_mapping_school_webinar"),
         Index("idx_portal_mapping_school_id", "school_id"),
         Index("idx_portal_mapping_webinar_id", "webinar_id"),
+    )
+
+
+class WorkshopNotificationSubscriber(Base):
+    __tablename__ = "workshop_notification_subscribers"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    first_name: Mapped[str | None] = mapped_column(Text)
+    last_name: Mapped[str | None] = mapped_column(Text)
+    school_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("schools.id"), nullable=True)
+    cycle_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subscribed_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    notification_types: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default='["registration_open"]'
+    )
+
+    school: Mapped[School | None] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("email", "school_id", "cycle_name", name="uq_workshop_notif_email_school_cycle"),
+        Index("idx_workshop_notif_email", "email"),
+        Index("idx_workshop_notif_school_id", "school_id"),
+        Index("idx_workshop_notif_cycle_name", "cycle_name"),
+        Index("idx_workshop_notif_subscribed_at", "subscribed_at"),
     )
