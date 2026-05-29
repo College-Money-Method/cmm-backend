@@ -13,6 +13,7 @@ from sqlalchemy import func, select, or_
 from src.content.models import ContentAsset, Topic
 from src.db.deps import DbDep
 from src.schools.models import School
+from src.search.models import SearchLog
 from src.workshops.models import PortalMapping, Webinar, Workshop
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
@@ -254,5 +255,18 @@ def global_search(
             )
             for r in rows
         ]
+
+    results_count = len(topic_results) + len(workshop_results) + len(asset_results)
+
+    try:
+        db.add(SearchLog(
+            school_slug=school_slug,
+            search_type="global_search",
+            query=q,
+            results_count=results_count,
+        ))
+        db.flush()
+    except Exception:
+        pass
 
     return GlobalSearchResponse(topics=topic_results, workshops=workshop_results, content_assets=asset_results)

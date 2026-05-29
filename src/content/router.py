@@ -37,6 +37,7 @@ from src.content.models import (
     TopicResource,
 )
 from src.schools.models import School
+from src.search.models import SearchLog
 from src.workshops.models import Workshop
 from src.content.schemas import (
     AssetTypeCreate,
@@ -970,6 +971,23 @@ def list_assets_public(
             stmt = stmt.order_by(sort_col.asc())
 
     items = db.scalars(stmt.offset(skip).limit(limit)).all()
+
+    # Log resource library searches when school context is known and filters are active
+    if school_id and (search or cat_ids or grade_ints or buckets):
+        try:
+            db.add(SearchLog(
+                school_id=school_id,
+                search_type="resource_library",
+                query=search or None,
+                grade=grade_ints[0] if grade_ints else None,
+                category_ids=cat_ids if cat_ids else None,
+                asset_buckets=buckets if buckets else None,
+                results_count=total,
+            ))
+            db.flush()
+        except Exception:
+            pass
+
     return {"items": items, "total": total, "skip": skip, "limit": limit}
 
 
