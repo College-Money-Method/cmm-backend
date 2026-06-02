@@ -294,6 +294,8 @@ def import_content_assets(
         link = fields.get("Link") or None
         embed_code = fields.get("Embed Code") or None
         is_featured = str(fields.get("Feature", "")).lower() in ("true", "1", "checked", "yes")
+        for_counselor = str(fields.get("Counselor", "true")).lower() in ("true", "1", "checked", "yes")
+        for_family = str(fields.get("Family", "true")).lower() in ("true", "1", "checked", "yes")
 
         # Resolve asset_type FK from airtable rec ID
         asset_type_airtable_id = fields.get("Asset Type")
@@ -327,22 +329,26 @@ def import_content_assets(
                     """
                     INSERT INTO content_assets (
                         id, airtable_id, asset_type_id, name, description,
-                        content, link, embed_code, image_url, file_url, is_featured
+                        content, link, embed_code, image_url, file_url, is_featured,
+                        for_counselor, for_family
                     )
                     VALUES (
                         :id, :airtable_id, :asset_type_id, :name, :description,
-                        :content, :link, :embed_code, :image_url, :file_url, :is_featured
+                        :content, :link, :embed_code, :image_url, :file_url, :is_featured,
+                        :for_counselor, :for_family
                     )
                     ON CONFLICT (airtable_id) DO UPDATE
-                        SET asset_type_id = EXCLUDED.asset_type_id,
-                            name          = EXCLUDED.name,
-                            description   = EXCLUDED.description,
-                            content       = EXCLUDED.content,
-                            link          = EXCLUDED.link,
-                            embed_code    = EXCLUDED.embed_code,
-                            image_url     = COALESCE(EXCLUDED.image_url, content_assets.image_url),
-                            file_url      = COALESCE(EXCLUDED.file_url, content_assets.file_url),
-                            is_featured   = EXCLUDED.is_featured
+                        SET asset_type_id  = EXCLUDED.asset_type_id,
+                            name           = EXCLUDED.name,
+                            description    = EXCLUDED.description,
+                            content        = EXCLUDED.content,
+                            link           = EXCLUDED.link,
+                            embed_code     = EXCLUDED.embed_code,
+                            image_url      = COALESCE(EXCLUDED.image_url, content_assets.image_url),
+                            file_url       = COALESCE(EXCLUDED.file_url, content_assets.file_url),
+                            is_featured    = EXCLUDED.is_featured,
+                            for_counselor  = EXCLUDED.for_counselor,
+                            for_family     = EXCLUDED.for_family
                     """
                 ),
                 {
@@ -357,6 +363,8 @@ def import_content_assets(
                     "image_url": image_url,
                     "file_url": file_url,
                     "is_featured": is_featured,
+                    "for_counselor": for_counselor,
+                    "for_family": for_family,
                 },
             )
 

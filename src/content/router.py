@@ -760,6 +760,7 @@ def list_assets_public(
     cohort_id: Annotated[uuid.UUID | None, Query()] = None,
     school_id: Annotated[uuid.UUID | None, Query()] = None,
     is_featured: Annotated[bool | None, Query()] = None,
+    audience: Annotated[str | None, Query()] = None,  # "counselor" | "family"
     sort_by: Annotated[str, Query()] = "created_at",
     sort_dir: Annotated[str, Query()] = "desc",
     skip: Annotated[int, Query(ge=0)] = 0,
@@ -818,6 +819,11 @@ def list_assets_public(
 
     if is_featured is not None:
         stmt = stmt.where(ContentAsset.is_featured == is_featured)
+
+    if audience == "counselor":
+        stmt = stmt.where(ContentAsset.for_counselor.is_(True))
+    elif audience == "family":
+        stmt = stmt.where(ContentAsset.for_family.is_(True))
 
     # Objective filtering (single or multi)
     obj_ids = _parse_csv_uuids(objective_ids)
