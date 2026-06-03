@@ -53,6 +53,7 @@ class School(Base):
         Uuid, ForeignKey("grade_sets.id", ondelete="SET NULL"), nullable=True
     )
     bubble_rec_id: Mapped[str | None] = mapped_column(Text)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     cohort: Mapped[Cohort | None] = relationship(back_populates="schools")

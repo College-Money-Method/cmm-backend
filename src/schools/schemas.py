@@ -158,3 +158,11 @@ class CounselorPublicOut(BaseModel):
     last_name: str | None = None
     title: str | None = None
     email: str | None = None
+
+
+class SchoolSyncResult(BaseModel):
+    schools_created: int
+    contacts_created: int
+    counselors_created: int
+    skipped: int
+    synced_at: datetime

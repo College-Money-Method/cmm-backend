@@ -9,7 +9,7 @@ from sqlalchemy.orm import joinedload
 
 from src.auth.deps import AdminDep, CurrentUserDep
 from src.cycles.models import Cohort, Cycle
-from src.cycles.schemas import CohortCreate, CohortOut, CohortUpdate, CohortWithSchools, CohortWithSchoolsResponse, CycleOut
+from src.cycles.schemas import CohortCreate, CohortOut, CohortSyncResult, CohortUpdate, CohortWithSchools, CohortWithSchoolsResponse, CycleCreate, CycleOut, CycleUpdate
 from src.db.deps import DbDep
 from src.schools.models import School
 from src.schools.router import _build_order_by
@@ -22,6 +22,59 @@ router = APIRouter(prefix="/api/v1/cohorts", tags=["cohorts"])
 def list_cycles(db: DbDep, _user: CurrentUserDep) -> list[CycleOut]:
     """List all cycles."""
     return db.query(Cycle).order_by(Cycle.name).all()
+
+
+@router.post("/cycles", response_model=CycleOut, status_code=status.HTTP_201_CREATED)
+def create_cycle(body: CycleCreate, _admin: AdminDep, db: DbDep) -> CycleOut:
+    """Create a cycle (admin only). If is_current=True, unsets all other cycles first."""
+    if db.query(Cycle).filter(Cycle.name == body.name).first():
+        raise HTTPException(status_code=409, detail="A cycle with this name already exists")
+    if body.is_current:
+        db.query(Cycle).filter(Cycle.is_current == True).update(  # noqa: E712
+            {Cycle.is_current: False}, synchronize_session=False
+        )
+    cycle = Cycle(**body.model_dump())
+    db.add(cycle)
+    db.commit()
+    db.refresh(cycle)
+    return CycleOut.model_validate(cycle)
+
+
+@router.patch("/cycles/{cycle_id}", response_model=CycleOut)
+def update_cycle(cycle_id: uuid.UUID, body: CycleUpdate, _admin: AdminDep, db: DbDep) -> CycleOut:
+    """Update a cycle (admin only). If is_current=True, unsets all other cycles first."""
+    cycle = db.query(Cycle).filter(Cycle.id == cycle_id).first()
+    if not cycle:
+        raise HTTPException(status_code=404, detail="Cycle not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+
+    if "name" in update_data:
+        dup = db.query(Cycle).filter(Cycle.name == update_data["name"], Cycle.id != cycle_id).first()
+        if dup:
+            raise HTTPException(status_code=409, detail="A cycle with this name already exists")
+
+    if update_data.get("is_current"):
+        db.query(Cycle).filter(Cycle.is_current == True, Cycle.id != cycle_id).update(  # noqa: E712
+            {Cycle.is_current: False}, synchronize_session=False
+        )
+
+    for field, value in update_data.items():
+        setattr(cycle, field, value)
+
+    db.commit()
+    db.refresh(cycle)
+    return CycleOut.model_validate(cycle)
+
+
+@router.delete("/cycles/{cycle_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_cycle(cycle_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> None:
+    """Delete a cycle (admin only)."""
+    cycle = db.query(Cycle).filter(Cycle.id == cycle_id).first()
+    if not cycle:
+        raise HTTPException(status_code=404, detail="Cycle not found")
+    db.delete(cycle)
+    db.commit()
 
 
 @router.get("/schools", response_model=CohortWithSchoolsResponse)
@@ -116,6 +169,13 @@ def list_cohorts_with_schools(
         )
 
     return CohortWithSchoolsResponse(items=items, total=total, skip=skip, limit=limit)
+
+
+@router.post("/sync-airtable", response_model=CohortSyncResult)
+def sync_cohorts_airtable(_admin: AdminDep, db: DbDep) -> CohortSyncResult:
+    """Admin: create new cohorts from Airtable Cohorts table."""
+    from src.cycles.sync import sync_cohorts_from_airtable
+    return sync_cohorts_from_airtable(db)
 
 
 @router.get("", response_model=list[CohortOut])

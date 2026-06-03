@@ -24,6 +24,7 @@ from src.schools.schemas import (
     SchoolPasswordVerify,
     SchoolPublic,
     SchoolPublicListResponse,
+    SchoolSyncResult,
     SchoolUpdate,
     CounselorPublicOut,
 )
@@ -78,6 +79,13 @@ def _check_school_access(school_id: uuid.UUID, user: CurrentUserDep) -> None:
 
 
 # ── Literal routes MUST come before /{school_id} ──────────────────────────────
+
+
+@router.post("/sync-airtable", response_model=SchoolSyncResult)
+def sync_schools_airtable(_admin: AdminDep, db: DbDep, supabase=Depends(get_supabase)) -> SchoolSyncResult:
+    """Admin: create new schools, contacts, and counselor auth accounts from Airtable."""
+    from src.schools.sync import sync_schools_contacts_from_airtable
+    return sync_schools_contacts_from_airtable(db, supabase)
 
 
 @router.get("/states", response_model=list[str])
