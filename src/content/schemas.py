@@ -271,6 +271,7 @@ class ContentAssetListItem(BaseModel):
     description: str | None
     status: str
     is_featured: bool
+    is_public: bool = False
     image_url: str | None
     link: str | None
     asset_type: AssetTypeOut | None
@@ -307,6 +308,7 @@ class ContentAssetDetail(BaseModel):
     image_url: str | None
     file_url: str | None
     is_featured: bool
+    is_public: bool = False
     status: str
     wp_post_id: str | None
     wp_synced_at: datetime | None
@@ -355,6 +357,7 @@ class ContentAssetCreate(BaseModel):
     embed_code: str | None = None
     image_url: str | None = None
     is_featured: bool = False
+    is_public: bool = False
     status: str = "draft"
     wp_post_id: str | None = None
     why_important: str | None = None
@@ -380,6 +383,7 @@ class ContentAssetUpdate(BaseModel):
     embed_code: str | None = None
     image_url: str | None = None
     is_featured: bool | None = None
+    is_public: bool | None = None
     status: str | None = None
     wp_post_id: str | None = None
     video_duration_seconds: int | None = None

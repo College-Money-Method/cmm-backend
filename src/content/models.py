@@ -131,6 +131,7 @@ class ContentAsset(Base):
     image_url: Mapped[str | None] = mapped_column(Text)
     file_url: Mapped[str | None] = mapped_column(Text)
     is_featured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     for_counselor: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     for_family: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     status: Mapped[str] = mapped_column(Text, nullable=False, default="draft", server_default="draft")

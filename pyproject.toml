@@ -20,6 +20,8 @@ dependencies = [
 [project.optional-dependencies]
 scripts = [
     "pandas>=2.2.0",
+    "firecrawl-py>=1.0.0",
+    "markdown>=3.7",
 ]
 
 [build-system]

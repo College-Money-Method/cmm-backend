@@ -760,6 +760,7 @@ def list_assets_public(
     cohort_id: Annotated[uuid.UUID | None, Query()] = None,
     school_id: Annotated[uuid.UUID | None, Query()] = None,
     is_featured: Annotated[bool | None, Query()] = None,
+    is_public: Annotated[bool | None, Query()] = None,
     audience: Annotated[str | None, Query()] = None,  # "counselor" | "family"
     sort_by: Annotated[str, Query()] = "created_at",
     sort_dir: Annotated[str, Query()] = "desc",
@@ -819,6 +820,9 @@ def list_assets_public(
 
     if is_featured is not None:
         stmt = stmt.where(ContentAsset.is_featured == is_featured)
+
+    if is_public is not None:
+        stmt = stmt.where(ContentAsset.is_public == is_public)
 
     if audience == "counselor":
         stmt = stmt.where(ContentAsset.for_counselor.is_(True))

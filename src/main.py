@@ -22,6 +22,7 @@ import src.settings.models  # noqa: F401
 import src.workshops.models  # noqa: F401
 import src.guest_contacts.models  # noqa: F401
 import src.storage.models  # noqa: F401
+import src.pages.models  # noqa: F401
 
 from src.auth.router import router as auth_router
 from src.config import settings
@@ -33,6 +34,7 @@ from src.schools.router import router as schools_router
 from src.workshops.router import router as workshops_router
 from src.guest_contacts.router import router as guest_contacts_router
 from src.storage.router import router as storage_router
+from src.pages.router import router as pages_router
 
 
 @asynccontextmanager
@@ -66,6 +68,7 @@ app.include_router(workshops_router)
 app.include_router(guest_contacts_router)
 app.include_router(storage_router)
 app.include_router(search_router)
+app.include_router(pages_router)
 
 
 @app.get("/health")
