@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
-from src.auth.deps import AdminDep, CurrentUserDep
+from src.auth.deps import AdminDep, CounselorDep, CurrentUserDep
 from src.db.deps import DbDep
 from src.integrations import zoom as zoom_client
 from src.utils.tiptap import extract_text
@@ -441,7 +441,7 @@ def remove_webinar_school(webinar_id: uuid.UUID, school_id: uuid.UUID, _admin: A
 def update_portal_mapping_override(
     portal_mapping_id: uuid.UUID,
     body: PortalMappingOverrideUpdate,
-    user: CurrentUserDep,
+    user: CounselorDep,
     db: DbDep,
 ) -> dict:
     """Counselor: shallow-merge override fields into portal_mapping.school_override.
@@ -520,8 +520,8 @@ def list_notification_subscribers(
 
 
 @router.get("/email-templates", response_model=list[EmailTemplateOut])
-def list_email_templates(_admin: AdminDep, db: DbDep) -> list[EmailTemplateOut]:
-    """Admin: list all workshop email templates ordered by type then name."""
+def list_email_templates(_user: CounselorDep, db: DbDep) -> list[EmailTemplateOut]:
+    """Counselor: list all workshop email templates ordered by type then name."""
     templates = db.execute(
         select(WorkshopEmailTemplate).order_by(WorkshopEmailTemplate.type, WorkshopEmailTemplate.name)
     ).scalars().all()

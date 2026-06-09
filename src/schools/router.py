@@ -297,6 +297,7 @@ def update_school(
     # Counselors may only update a safe subset of fields
     if user.role == "counselor":
         counselor_allowed = {
+            "name", "logo_url", "nickname",
             "city", "state", "zip_code", "street_address",
             "appointlet_link", "calendar_link",
         }
