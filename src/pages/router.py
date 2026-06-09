@@ -16,7 +16,7 @@ from src.pages.schemas import PageCreate, PageListItem, PageListResponse, PageOu
 router = APIRouter(prefix="/api/v1/pages", tags=["pages"])
 
 
-@router.get("/", response_model=PageListResponse)
+@router.get("", response_model=PageListResponse)
 def list_pages(_admin: AdminDep, db: DbDep):
     """Admin: list all pages."""
     items = db.scalars(select(Page).order_by(Page.title)).all()
@@ -42,7 +42,7 @@ def get_page(_admin: AdminDep, page_id: uuid.UUID, db: DbDep):
     return page
 
 
-@router.post("/", response_model=PageOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=PageOut, status_code=status.HTTP_201_CREATED)
 def create_page(body: PageCreate, _admin: AdminDep, db: DbDep):
     """Admin: create a new page."""
     existing = db.scalar(select(Page).where(Page.slug == body.slug))
