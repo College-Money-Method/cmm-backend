@@ -40,6 +40,7 @@ from src.schools.models import School
 from src.search.models import SearchLog
 from src.workshops.models import Workshop
 from src.content.schemas import (
+    AdminReviewAction,
     AssetTypeCreate,
     AssetTypeOut,
     AssetTypeUpdate,
@@ -77,6 +78,7 @@ from src.content.schemas import (
     ResourceCategoryOut,
     ResourceCategoryUpdate,
     ResourcesUpdate,
+    SubmissionOut,
     TopicCreate,
     TopicDetail,
     TopicListItem,
@@ -1599,6 +1601,80 @@ def update_grade_config_goals(
 
     gc = db.query(GradeConfig).options(selectinload(GradeConfig.goals)).filter(GradeConfig.id == gc.id).one()
     return _gc_summary(gc)
+
+
+# ── Admin submission review ───────────────────────────────────────────────────
+
+@router.get("/submissions/admin", response_model=ContentAssetListResponse)
+def list_submissions_admin(
+    db: DbDep,
+    _admin: AdminDep,
+    review_status: Annotated[str | None, Query()] = None,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+):
+    """Admin: list all counselor-submitted resources, optionally filtered by review_status."""
+    stmt = (
+        select(ContentAsset)
+        .options(selectinload(ContentAsset.asset_type))
+        .where(ContentAsset.source == "counselor")
+    )
+    if review_status:
+        stmt = stmt.where(ContentAsset.review_status == review_status)
+
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = db.scalar(count_stmt)
+
+    items = db.scalars(
+        stmt.order_by(ContentAsset.created_at.desc()).offset(skip).limit(limit)
+    ).all()
+    return {"items": items, "total": total, "skip": skip, "limit": limit}
+
+
+@router.patch("/submissions/{submission_id}/approve", response_model=SubmissionOut)
+def approve_submission(
+    submission_id: uuid.UUID, body: AdminReviewAction, _admin: AdminDep, db: DbDep
+):
+    """Admin: approve a counselor submission and publish it."""
+    obj = db.get(ContentAsset, submission_id)
+    if not obj or obj.source != "counselor":
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    obj.review_status = "approved"
+    obj.status = "published"
+    obj.for_family = body.for_family
+    obj.for_counselor = body.for_counselor
+    if body.review_notes is not None:
+        obj.review_notes = body.review_notes
+    db.commit()
+
+    stmt = (
+        select(ContentAsset)
+        .where(ContentAsset.id == submission_id)
+        .options(selectinload(ContentAsset.asset_type))
+    )
+    return db.scalar(stmt)
+
+
+@router.patch("/submissions/{submission_id}/reject", response_model=SubmissionOut)
+def reject_submission(
+    submission_id: uuid.UUID, body: AdminReviewAction, _admin: AdminDep, db: DbDep
+):
+    """Admin: reject a counselor submission with optional notes."""
+    obj = db.get(ContentAsset, submission_id)
+    if not obj or obj.source != "counselor":
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    obj.review_status = "rejected"
+    obj.review_notes = body.review_notes
+    db.commit()
+
+    stmt = (
+        select(ContentAsset)
+        .where(ContentAsset.id == submission_id)
+        .options(selectinload(ContentAsset.asset_type))
+    )
+    return db.scalar(stmt)
 
 
 # ── Click tracking ───────────────────────────────────────────────────────────

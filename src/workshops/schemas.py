@@ -52,6 +52,7 @@ class WebinarSummary(BaseModel):
     registration_url: str | None
     zoom_link: str | None
     registration_count: int
+    slug: str | None = None
 
 
 class WebinarListItem(WebinarSummary):
@@ -187,6 +188,7 @@ class WebinarOut(BaseModel):
     workshop_name: str
     cohort_name: str | None
     registration_count: int
+    slug: str | None = None
 
 
 # ── Admin: Registration schemas ──────────────────────────────────────────────
@@ -251,6 +253,35 @@ class PortalMappingCreate(BaseModel):
     show_zoom: bool = True
 
 
+# ── Admin: Email template schemas ───────────────────────────────────────────
+
+
+class EmailTemplateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    type: str
+    name: str
+    subject: str
+    body: str
+    created_at: datetime
+    updated_at: datetime | None
+
+
+class EmailTemplateCreate(BaseModel):
+    type: str  # "announcement" | "followup"
+    name: str
+    subject: str
+    body: str
+
+
+class EmailTemplateUpdate(BaseModel):
+    type: str | None = None
+    name: str | None = None
+    subject: str | None = None
+    body: str | None = None
+
+
 # ── Public: Portal schemas ───────────────────────────────────────────────────
 
 
@@ -272,6 +303,7 @@ class WorkshopPortalItem(BaseModel):
     video_embed_code: str | None
     join_url: str | None
     show_zoom: bool
+    slug: str | None = None
 
     # Workshop fields
     workshop_id: uuid.UUID

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -149,6 +149,20 @@ class ContentAsset(Base):
     how_to_use: Mapped[str | None] = mapped_column(Text)
     suggested_grades: Mapped[str | None] = mapped_column(Text)
     time_estimate_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # ── Counselor submission fields ───────────────────────────────────────────
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="cmm", server_default="cmm")
+    # "cmm" | "counselor"
+    submitted_by_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    # UUID from Supabase auth — no FK constraint (references auth schema)
+    review_status: Mapped[str] = mapped_column(Text, nullable=False, default="draft", server_default="draft")
+    # "draft" | "submitted" | "ai_reviewing" | "pending_admin" | "approved" | "rejected"
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Admin comment when rejecting
+    ai_review_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 0.0–1.0 quality score from OpenAI
+    ai_review_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # AI feedback text
 
     asset_type: Mapped[AssetType | None] = relationship(back_populates="content_assets")
     objectives: Mapped[list[Objective]] = relationship(

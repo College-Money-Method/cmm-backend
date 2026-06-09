@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 # ── Tags ─────────────────────────────────────────────────────────────────────
@@ -281,6 +281,8 @@ class ContentAssetListItem(BaseModel):
     video_duration_seconds: int | None = None
     popularity_score: int | None = None
     click_count: int = 0
+    source: str | None = None
+    review_status: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -330,6 +332,12 @@ class ContentAssetDetail(BaseModel):
     faqs: list[FaqOut]
     resources: list[ContentAssetListItem]
     tags: list[TagOut] = []
+    source: str | None = None
+    review_status: str | None = None
+    review_notes: str | None = None
+    ai_review_score: float | None = None
+    ai_review_summary: str | None = None
+    submitted_by_id: uuid.UUID | None = None
 
     model_config = {"from_attributes": True}
 
@@ -642,5 +650,50 @@ class ResourceCategoryUpdate(BaseModel):
         if v is not None and v not in ("draft", "published"):
             raise ValueError("status must be draft or published")
         return v
+
+
+# ── Counselor Submissions ─────────────────────────────────────────────────────
+
+class SubmissionCreate(BaseModel):
+    name: str
+    description: str | None = None
+    link: str | None = None
+    asset_type_id: str | None = None
+    suggested_grades: str | None = None
+
+
+class SubmissionUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    link: str | None = None
+    asset_type_id: str | None = None
+    suggested_grades: str | None = None
+
+
+class SubmissionOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    link: str | None
+    image_url: str | None
+    asset_type: AssetTypeOut | None
+    suggested_grades: str | None
+    status: str
+    source: str
+    review_status: str
+    review_notes: str | None
+    ai_review_score: float | None
+    ai_review_summary: str | None
+    submitted_by_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminReviewAction(BaseModel):
+    review_notes: str | None = None
+    for_family: bool = True
+    for_counselor: bool = True
 
 

@@ -75,6 +75,7 @@ class Webinar(Base):
             "END"
         ),
     )
+    slug: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     join_url: Mapped[str | None] = mapped_column(Text)
     start_url: Mapped[str | None] = mapped_column(Text)
@@ -177,6 +178,22 @@ class PortalMapping(Base):
         UniqueConstraint("school_id", "webinar_id", name="uq_portal_mapping_school_webinar"),
         Index("idx_portal_mapping_school_id", "school_id"),
         Index("idx_portal_mapping_webinar_id", "webinar_id"),
+    )
+
+
+class WorkshopEmailTemplate(Base):
+    __tablename__ = "workshop_email_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    type: Mapped[str] = mapped_column(Text, nullable=False)      # "announcement" | "followup"
+    name: Mapped[str] = mapped_column(Text, nullable=False)       # display label
+    subject: Mapped[str] = mapped_column(Text, nullable=False)    # merge-tag aware subject
+    body: Mapped[str] = mapped_column(Text, nullable=False)       # merge-tag aware body
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True, onupdate=func.now())
+
+    __table_args__ = (
+        Index("idx_workshop_email_templates_type", "type"),
     )
 
 

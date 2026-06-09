@@ -19,10 +19,13 @@ from src.content.models import ContentAsset, WorkshopResource, Objective
 from src.cycles.models import Cycle
 from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
-from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopNotificationSubscriber, WorkshopRegistration
+from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopEmailTemplate, WorkshopNotificationSubscriber, WorkshopRegistration
 from src.workshops.schemas import (
     AirtableSyncLogOut,
     AirtableSyncResult,
+    EmailTemplateCreate,
+    EmailTemplateOut,
+    EmailTemplateUpdate,
     NotificationSubscribeRequest,
     NotificationSubscriberOut,
     ObjectiveIdsBody,
@@ -76,6 +79,7 @@ def _webinar_out(webinar: Webinar) -> WebinarOut:
         workshop_name=webinar.workshop.name,
         cohort_name=webinar.cohort.name if webinar.cohort else None,
         registration_count=len(webinar.registrations),
+        slug=webinar.slug,
     )
 
 
@@ -206,6 +210,7 @@ def _to_item(
         cycle_name=webinar.cycle.name if webinar.cycle else None,
         prev_cycle_video_embed_code=prev_cycle_video_embed_code,
         prev_cycle_name=prev_cycle_name,
+        slug=webinar.slug,
     )
 
 
@@ -277,6 +282,7 @@ def list_all_webinars(
             cohort_name=w.cohort.name if w.cohort else None,
             cycle_id=w.cycle_id,
             cycle_name=w.cycle.name if w.cycle else None,
+            slug=w.slug,
         )
         for w in webinars
     ]
@@ -508,6 +514,51 @@ def list_notification_subscribers(
 
     rows = db.execute(stmt).scalars().all()
     return [_subscriber_out(r) for r in rows]
+
+
+# ── Admin: Email templates (literal prefix) ──────────────────────────────────
+
+
+@router.get("/email-templates", response_model=list[EmailTemplateOut])
+def list_email_templates(_admin: AdminDep, db: DbDep) -> list[EmailTemplateOut]:
+    """Admin: list all workshop email templates ordered by type then name."""
+    templates = db.execute(
+        select(WorkshopEmailTemplate).order_by(WorkshopEmailTemplate.type, WorkshopEmailTemplate.name)
+    ).scalars().all()
+    return [EmailTemplateOut.model_validate(t) for t in templates]
+
+
+@router.post("/email-templates", response_model=EmailTemplateOut, status_code=status.HTTP_201_CREATED)
+def create_email_template(body: EmailTemplateCreate, _admin: AdminDep, db: DbDep) -> EmailTemplateOut:
+    """Admin: create a new workshop email template."""
+    obj = WorkshopEmailTemplate(**body.model_dump())
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return EmailTemplateOut.model_validate(obj)
+
+
+@router.patch("/email-templates/{template_id}", response_model=EmailTemplateOut)
+def update_email_template(template_id: uuid.UUID, body: EmailTemplateUpdate, _admin: AdminDep, db: DbDep) -> EmailTemplateOut:
+    """Admin: partial-update a workshop email template."""
+    obj = db.get(WorkshopEmailTemplate, template_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Email template not found")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(obj, k, v)
+    db.commit()
+    db.refresh(obj)
+    return EmailTemplateOut.model_validate(obj)
+
+
+@router.delete("/email-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_email_template(template_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> None:
+    """Admin: delete a workshop email template."""
+    obj = db.get(WorkshopEmailTemplate, template_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Email template not found")
+    db.delete(obj)
+    db.commit()
 
 
 # ── Public endpoints (literal prefix) ───────────────────────────────────────
@@ -964,6 +1015,7 @@ def list_workshop_webinars(
             registration_url=w.registration_url,
             zoom_link=w.zoom_link,
             registration_count=len(w.registrations),
+            slug=w.slug,
         )
         for w in webinars
     ]

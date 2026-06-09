@@ -27,6 +27,7 @@ import src.pages.models  # noqa: F401
 from src.auth.router import router as auth_router
 from src.config import settings
 from src.content.router import router as content_router
+from src.content.submissions_router import router as submissions_router
 from src.search.router import router as search_router
 from src.cycles.router import router as cohorts_router
 from src.db import get_supabase
@@ -64,6 +65,7 @@ app.include_router(auth_router)
 app.include_router(schools_router)
 app.include_router(cohorts_router)
 app.include_router(content_router)
+app.include_router(submissions_router)
 app.include_router(workshops_router)
 app.include_router(guest_contacts_router)
 app.include_router(storage_router)
