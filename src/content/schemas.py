@@ -660,6 +660,11 @@ class SubmissionCreate(BaseModel):
     link: str | None = None
     asset_type_id: str | None = None
     suggested_grades: str | None = None
+    why_important: str | None = None
+    how_to_use: str | None = None
+    time_estimate_minutes: int | None = None
+    embed_code: str | None = None
+    content: str | None = None
 
 
 class SubmissionUpdate(BaseModel):
@@ -668,6 +673,11 @@ class SubmissionUpdate(BaseModel):
     link: str | None = None
     asset_type_id: str | None = None
     suggested_grades: str | None = None
+    why_important: str | None = None
+    how_to_use: str | None = None
+    time_estimate_minutes: int | None = None
+    embed_code: str | None = None
+    content: str | None = None
 
 
 class SubmissionOut(BaseModel):
@@ -678,6 +688,11 @@ class SubmissionOut(BaseModel):
     image_url: str | None
     asset_type: AssetTypeOut | None
     suggested_grades: str | None
+    why_important: str | None
+    how_to_use: str | None
+    time_estimate_minutes: int | None
+    embed_code: str | None
+    content: str | None
     status: str
     source: str
     review_status: str
