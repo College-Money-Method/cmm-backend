@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     zoom_client_id: str = ""
     zoom_client_secret: str = ""
 
+    # PostHog (analytics queries — server-side only)
+    posthog_api_key: str = ""
+    posthog_project_id: str = ""
+
     # App
     log_level: str = "DEBUG"
     debug: bool = False

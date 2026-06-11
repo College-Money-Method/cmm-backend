@@ -36,6 +36,7 @@ from src.workshops.router import router as workshops_router
 from src.guest_contacts.router import router as guest_contacts_router
 from src.storage.router import router as storage_router
 from src.pages.router import router as pages_router
+from src.analytics.router import router as analytics_router
 
 
 @asynccontextmanager
@@ -71,6 +72,7 @@ app.include_router(guest_contacts_router)
 app.include_router(storage_router)
 app.include_router(search_router)
 app.include_router(pages_router)
+app.include_router(analytics_router)
 
 
 @app.get("/health")
