@@ -111,6 +111,7 @@ class ContentAssetSummary(BaseModel):
     name: str
     description: str | None
     image_url: str | None
+    link: str | None = None
     asset_type: AssetTypeOut | None
 
     model_config = {"from_attributes": True}
