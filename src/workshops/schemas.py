@@ -341,6 +341,7 @@ class AirtableSyncResult(BaseModel):
     matched: int
     updated: int
     skipped: int
+    created: int = 0
     synced_at: datetime
 
 

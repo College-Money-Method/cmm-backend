@@ -5,10 +5,17 @@ from pyairtable import Api
 
 from src.config import settings
 
+WORKSHOPS_TABLE = "Workshops"
 WEBINARS_TABLE = "Junction Table School Workshop"
 SCHOOLS_TABLE = "Schools"
 CONTACTS_TABLE = "Contacts"
 COHORTS_TABLE = "Cohort"
+
+
+def get_workshops_records() -> list[dict]:
+    """Fetch all records from the Airtable Workshops table (auto-paginates)."""
+    api = Api(settings.airtable_api_key)
+    return api.table(settings.airtable_base_id, WORKSHOPS_TABLE).all()
 
 
 def get_webinar_records() -> list[dict]:

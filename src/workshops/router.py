@@ -882,9 +882,9 @@ def create_workshop(body: WorkshopCreate, _admin: AdminDep, db: DbDep):
 
 @router.post("/sync-airtable", response_model=AirtableSyncResult)
 def sync_webinars_airtable(_admin: AdminDep, db: DbDep):
-    """Admin: pull video embed codes and URLs from Airtable into all matched webinars."""
-    from src.workshops.sync import sync_webinars_from_airtable
-    return sync_webinars_from_airtable(db)
+    """Admin: sync workshop names from Airtable, then pull webinar URLs/embed codes."""
+    from src.workshops.sync import sync_all_from_airtable
+    return sync_all_from_airtable(db)
 
 
 @router.get("/sync-airtable/last", response_model=AirtableSyncLogOut | None)

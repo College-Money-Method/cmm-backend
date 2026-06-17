@@ -19,6 +19,7 @@ Usage (from project root):
 from __future__ import annotations
 
 import argparse
+import json as _json
 import mimetypes
 import re
 import sys
@@ -146,40 +147,10 @@ def _transform_wp_buttons(content: Tag) -> None:
 
 def _transform_getwid_tabs(content: Tag) -> None:
     """
-    Convert Getwid tab blocks into a static two-column panel that retains the
-    original tab-button look: left column = styled label buttons, right column
-    = all tab bodies stacked with dividers.
-
-    Using only inline styles so the block renders correctly as a Tiptap rawHtml
-    node without any external CSS dependency.
+    Convert Getwid tab blocks into data-attribute-driven tab groups.
+    All styling comes from _TAB_CSS (injected as iframe deps by _wrap_as_tiptap_rawhtml).
+    No inline styles needed — CSS attribute selectors handle everything.
     """
-    _NAV_CELL = (
-        "padding:12px 16px;"
-        "font-family:Inter,sans-serif;font-size:0.78rem;font-weight:700;"
-        "text-transform:uppercase;letter-spacing:0.8px;"
-        "border-bottom:1px solid #dde4e9;"
-        "white-space:nowrap;"
-    )
-    _NAV_ACTIVE = _NAV_CELL + "color:#4F788D;"
-    _NAV_INACTIVE = _NAV_CELL + "color:#2C3847;"
-    _NAV_LAST = _NAV_INACTIVE.replace("border-bottom:1px solid #dde4e9;", "border-bottom:none;")
-
-    _BODY_CELL = (
-        "flex:1;padding:14px 18px;font-size:0.95rem;color:#2C3847;"
-        "border-bottom:1px solid #f0f4f6;"
-    )
-    _BODY_LAST = _BODY_CELL.replace("border-bottom:1px solid #f0f4f6;", "border-bottom:none;")
-
-    _WRAPPER = (
-        "display:flex;border:1px solid #dde4e9;border-radius:6px;"
-        "overflow:hidden;margin:20px 0;"
-    )
-    _NAV_COL = (
-        "min-width:130px;width:130px;border-right:1px solid #dde4e9;"
-        "display:flex;flex-direction:column;"
-    )
-    _BODY_COL = "flex:1;display:flex;flex-direction:column;"
-
     for tabs_block in content.select(".wp-block-getwid-tabs"):
         titles = [
             el.get_text(strip=True)
@@ -190,23 +161,81 @@ def _transform_getwid_tabs(content: Tag) -> None:
             for el in tabs_block.select(".wp-block-getwid-tabs__tab-content")
         ]
 
-        nav_items = ""
-        body_items = ""
-        last = len(titles) - 1
-        for i, (title, body) in enumerate(zip(titles, bodies)):
-            label_style = _NAV_ACTIVE if i == 0 else (_NAV_LAST if i == last else _NAV_INACTIVE)
-            body_style = _BODY_LAST if i == last else _BODY_CELL
-            nav_items += f'<div style="{label_style}">{title}</div>'
-            body_items += f'<div style="{body_style}">{body}</div>'
-
-        wrapper_html = (
-            f'<div style="{_WRAPPER}">'
-            f'<div style="{_NAV_COL}">{nav_items}</div>'
-            f'<div style="{_BODY_COL}">{body_items}</div>'
-            f"</div>"
+        # Use <div role="button"> — DOMPurify forbids <button> in sanitizeHtml.
+        nav_items = "".join(
+            f'<div role="button" tabindex="0" data-tab-btn{" data-active" if i == 0 else ""}>'
+            f'{title}</div>'
+            for i, title in enumerate(titles)
         )
-        wrapper = BeautifulSoup(wrapper_html, "lxml").find("div")
-        tabs_block.replace_with(wrapper)
+        panel_items = "".join(
+            f'<div data-tab-panel{" data-active" if i == 0 else ""}>{body}</div>'
+            for i, body in enumerate(bodies)
+        )
+        group_html = (
+            f'<div data-tab-group>'
+            f'<div data-tab-nav>{nav_items}</div>'
+            f'<div data-tab-panels>{panel_items}</div>'
+            f'</div>'
+        )
+        new_group = BeautifulSoup(group_html, "lxml").find("div")
+        tabs_block.replace_with(new_group)
+
+
+# ── TipTap rawHtml wrapper for tab-heavy pages ────────────────────────────────
+
+_TAB_CSS = """
+*{box-sizing:border-box}
+html,body{background:transparent!important}
+body{font-family:Inter,-apple-system,sans-serif;color:#2c3847;line-height:1.6;padding:0;margin:0}
+h2,h3,h4{font-family:Lora,Georgia,serif;color:#4f788d;margin:1.5rem 0 0.5rem}
+p{margin:0.75rem 0}
+a{color:#4f788d}
+[data-tab-group]{display:flex;border:1px solid #b0c8c0;border-radius:10px;overflow:hidden;margin:1.25rem 0}
+[data-tab-nav]{display:flex;flex-direction:column;border-right:1px solid #b0c8c0;width:130px;min-width:130px;flex-shrink:0}
+[data-tab-btn]{display:block;width:100%;text-align:left;padding:12px 16px;font-size:0.78rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;background:transparent;border:none;border-bottom:1px solid #dde4e9;cursor:pointer;color:#6b7a8a}
+[data-tab-btn]:last-child{border-bottom:none}
+[data-tab-btn][data-active]{color:#4f788d;background:rgba(176,200,192,0.12);box-shadow:inset 2px 0 0 #4f788d}
+[data-tab-panels]{flex:1;min-width:0}
+[data-tab-panel]{display:none;padding:1.25rem 1.5rem;font-size:0.95rem;line-height:1.75;color:#2c3847}
+[data-tab-panel][data-active]{display:block}
+strong{color:#2c3847}
+"""
+
+_TAB_JS = """
+document.querySelectorAll('[data-tab-group]').forEach(function(group){
+  var btns=Array.from(group.querySelectorAll('[data-tab-btn]'));
+  var panels=Array.from(group.querySelectorAll('[data-tab-panel]'));
+  btns.forEach(function(btn,i){
+    btn.addEventListener('click',function(){
+      btns.forEach(function(b){b.removeAttribute('data-active')});
+      panels.forEach(function(p){p.removeAttribute('data-active')});
+      btn.setAttribute('data-active','');
+      if(panels[i])panels[i].setAttribute('data-active','');
+    });
+  });
+});
+"""
+
+
+def _wrap_as_tiptap_rawhtml(html: str) -> str:
+    """
+    Store HTML as a TipTap JSON doc with a single rawHtml node.
+
+    The rawHtml node renders in a sandboxed iframe via ContentRenderer, so the
+    tab CSS (via deps → iframe <head>) and JS (appended to html body) work
+    without going through DOMPurify sanitization.
+    """
+    iframe_body = f"{html}<script>{_TAB_JS}</script>"
+    doc = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "rawHtml",
+                "attrs": {"html": iframe_body, "deps": f"<style>{_TAB_CSS}</style>"},
+            }
+        ],
+    }
+    return _json.dumps(doc)
 
 
 def _transform_image_boxes(content: Tag) -> None:
@@ -217,6 +246,27 @@ def _transform_image_boxes(content: Tag) -> None:
             box.replace_with(inner)
         else:
             box.decompose()
+
+
+def _strip_empty_wp_sections(content: Tag) -> None:
+    """
+    Remove WP Getwid section blocks that contain no text (purely decorative
+    background-image sections). For sections that DO have text, strip the
+    min-height inline style so they don't create blank white gaps in the iframe.
+    """
+    for section in content.select(".wp-block-getwid-section"):
+        if not section.get_text(strip=True):
+            section.decompose()
+        else:
+            wrapper = section.select_one(".wp-block-getwid-section__wrapper")
+            if wrapper and wrapper.get("style"):
+                new_style = re.sub(
+                    r"min-height\s*:\s*[^;]+;?\s*", "", wrapper.get("style", "")
+                ).strip().rstrip(";")
+                if new_style:
+                    wrapper["style"] = new_style
+                else:
+                    del wrapper["style"]
 
 
 # ── S3 asset migration ────────────────────────────────────────────────────────
@@ -366,6 +416,7 @@ def _fetch_page_html(
     _transform_wp_buttons(content)
     _transform_getwid_tabs(content)
     _transform_image_boxes(content)
+    _strip_empty_wp_sections(content)
 
     # Strip unwanted elements
     for sel in _STRIP_SELECTORS:
@@ -399,13 +450,28 @@ def _fetch_page_html(
 
 # ── Seeder ────────────────────────────────────────────────────────────────────
 
-def seed(dry_run: bool, env: str, force: bool = False, upload_to_s3: bool = True) -> None:
+def seed(dry_run: bool, env: str, env_file: str | None = None, force: bool = False, upload_to_s3: bool = True) -> None:
+    import os
+
+    # Load env vars FIRST — src.config.Settings() is a module-level singleton,
+    # so override=True + loading before any src.* import is required.
+    if env_file:
+        load_dotenv(env_file, override=True)
+    elif env != "default":
+        load_dotenv(f".env.{env}", override=True)
+    else:
+        load_dotenv(".env", override=True)
+
+    # Read DATABASE_URL directly — bypasses cached Settings() singleton entirely
+    db_url = os.environ.get("DATABASE_URL", "")
+    if not db_url:
+        print("ERROR: DATABASE_URL not set in env file")
+        sys.exit(1)
+    print(f"  Connecting to: {db_url[:60]}...")
+
     from src.pages.models import Page
-    from src.config import settings  # noqa: F401 — triggers dotenv + validation
 
-    load_dotenv(f".env.{env}" if env != "default" else ".env")
-
-    engine = create_engine(settings.database_url)
+    engine = create_engine(db_url)
 
     # Build a filename→s3_url map from files already migrated by migrate_wordpress_media.py
     # so we reuse those S3 URLs instead of re-uploading to a different key.
@@ -432,6 +498,8 @@ def seed(dry_run: bool, env: str, force: bool = False, upload_to_s3: bool = True
                         dry_run=dry_run,
                         existing_assets=existing_assets,
                     )
+                    # Note: tab interactivity is handled via data-tab-* attributes
+                    # and global CSS in app/app.css — no iframe wrapping needed.
                     print(f"  fetch  {slug!r} — {len(content)} chars from {url}")
                 except Exception as exc:
                     print(f"  WARN   {slug!r} — fetch failed ({exc}), starting blank")
@@ -462,13 +530,14 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     parser.add_argument("--force", action="store_true", help="Overwrite existing pages")
     parser.add_argument("--env", default="default", help="Env file suffix (dev, prod)")
+    parser.add_argument("--env-file", default=None, dest="env_file", help="Explicit .env file path (overrides --env)")
     parser.add_argument(
         "--no-s3",
         action="store_true",
         help="Skip S3 asset migration (WordPress image links will be stripped instead)",
     )
     args = parser.parse_args()
-    seed(dry_run=args.dry_run, env=args.env, force=args.force, upload_to_s3=not args.no_s3)
+    seed(dry_run=args.dry_run, env=args.env, env_file=args.env_file, force=args.force, upload_to_s3=not args.no_s3)
 
 
 if __name__ == "__main__":

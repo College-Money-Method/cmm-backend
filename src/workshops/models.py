@@ -35,6 +35,7 @@ class Workshop(Base):
     sequence_number: Mapped[int | None] = mapped_column(Integer, unique=True)
     suggested_grades: Mapped[str | None] = mapped_column(Text)
     resource_center_slug: Mapped[str | None] = mapped_column(Text, unique=True)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     workshop_art_url: Mapped[str | None] = mapped_column(Text)
     action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     key_action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
