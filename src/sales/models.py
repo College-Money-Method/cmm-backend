@@ -19,6 +19,7 @@ class Sale(Base):
     __tablename__ = "sales"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     school_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("schools.id"), nullable=False)
     cycle_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("cycles.id"), nullable=False)
     contract_signatory_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("contacts.id"))

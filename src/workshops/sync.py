@@ -6,14 +6,23 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.cycles.models import Cohort, Cycle
 from src.integrations.airtable import get_webinar_records, get_workshops_records
-from src.workshops.models import AirtableSyncLog, Webinar, Workshop
+from src.schools.models import School
+from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop
 
 _WEBINAR_FIELD_MAP = [
     ("Video Embed Code", "video_embed_code"),
     ("StartURL", "start_url"),
     ("JoinURL", "join_url"),
     ("RegistrationURL", "registration_url"),
+    ("Zoom Link", "zoom_link"),
+    ("Webinar Name", "webinar_name"),
+]
+
+_WEBINAR_DT_FIELD_MAP = [
+    ("Start Date and Time", "start_datetime"),
+    ("End Date and Time", "end_datetime"),
 ]
 
 
@@ -65,6 +74,13 @@ def sync_workshops_from_airtable(db: Session) -> dict:
     return {"matched": matched, "updated": updated, "skipped": skipped}
 
 
+def _attachment_url(val) -> str | None:
+    """Extract the URL from an Airtable attachment field (returns a list of dicts)."""
+    if isinstance(val, list) and val:
+        return val[0].get("url") or None
+    return None
+
+
 def _parse_dt(val: str | None) -> datetime | None:
     """Parse an Airtable ISO-8601 datetime string to an aware datetime."""
     if not val:
@@ -73,6 +89,23 @@ def _parse_dt(val: str | None) -> datetime | None:
         return datetime.fromisoformat(val.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _sync_portal_mappings(db: Session, webinar_id, school_airtable_ids: list[str], school_by_airtable_id: dict) -> None:
+    """Create missing portal_mapping rows for a webinar's school list."""
+    for at_id in school_airtable_ids:
+        school = school_by_airtable_id.get(at_id)
+        if not school:
+            continue
+        # unique constraint on (school_id, webinar_id) prevents duplicates
+        exists = db.execute(
+            select(PortalMapping).where(
+                PortalMapping.school_id == school.id,
+                PortalMapping.webinar_id == webinar_id,
+            )
+        ).scalar_one_or_none()
+        if not exists:
+            db.add(PortalMapping(school_id=school.id, webinar_id=webinar_id))
 
 
 def sync_webinars_from_airtable(db: Session) -> dict:
@@ -96,12 +129,31 @@ def sync_webinars_from_airtable(db: Session) -> dict:
     all_workshops: list[Workshop] = db.execute(select(Workshop)).scalars().all()
     workshop_by_airtable_id: dict[str, Workshop] = {w.airtable_id: w for w in all_workshops if w.airtable_id}
 
+    # Cycle matched by name ("2024-2025", "2026-2027") from Airtable lookup field
+    all_cycles: list[Cycle] = db.execute(select(Cycle)).scalars().all()
+    cycle_by_name: dict[str, Cycle] = {c.name: c for c in all_cycles}
+
+    # Cohort matched by airtable_id from Airtable linked field
+    all_cohorts: list[Cohort] = db.execute(select(Cohort)).scalars().all()
+    cohort_by_airtable_id: dict[str, Cohort] = {c.airtable_id: c for c in all_cohorts if c.airtable_id}
+
+    # School matched by airtable_id for portal_mapping creation
+    school_by_airtable_id: dict[str, School] = {s.airtable_id: s for s in db.execute(select(School)).scalars().all() if s.airtable_id}
+
     matched = updated = skipped = created = 0
 
     for rec in records:
         fields = rec["fields"]
         airtable_rec_id: str = rec["id"]
         zoom_id: str | None = str(fields["Webinar ID"]) if fields.get("Webinar ID") is not None else None
+
+        # Resolve cycle — "Name (from Cycle)" is a lookup field, returns a list in pyairtable
+        cycle_names: list[str] = fields.get("Name (from Cycle)") or []
+        cycle = cycle_by_name.get(cycle_names[0]) if cycle_names else None
+
+        # Resolve cohort — "Cohort" is a linked field, returns a list of record IDs
+        cohort_ids: list[str] = fields.get("Cohort") or []
+        cohort = cohort_by_airtable_id.get(cohort_ids[0]) if cohort_ids else None
 
         webinar = by_airtable_id.get(airtable_rec_id) or (by_zoom_id.get(zoom_id) if zoom_id else None)
 
@@ -126,8 +178,14 @@ def sync_webinars_from_airtable(db: Session) -> dict:
                 registration_url=fields.get("RegistrationURL") or None,
                 video_embed_code=fields.get("Video Embed Code") or None,
                 zoom_link=fields.get("Zoom Link") or None,
+                audio_transcript=_attachment_url(fields.get("Audio Transcript")),
+                cycle_id=cycle.id if cycle else None,
+                cohort_id=cohort.id if cohort else None,
             )
             db.add(webinar)
+            db.flush()  # populate webinar.id
+            schools_linked: list[str] = fields.get("Schools") or []
+            _sync_portal_mappings(db, webinar.id, schools_linked, school_by_airtable_id)
             created += 1
             continue
 
@@ -138,14 +196,43 @@ def sync_webinars_from_airtable(db: Session) -> dict:
             webinar.airtable_id = airtable_rec_id
             changed = True
 
+        # Backfill cycle/cohort on existing webinars that are missing them
+        if cycle and webinar.cycle_id is None:
+            webinar.cycle_id = cycle.id
+            changed = True
+        if cohort and webinar.cohort_id is None:
+            webinar.cohort_id = cohort.id
+            changed = True
+
         for at_field, db_col in _WEBINAR_FIELD_MAP:
             val: str | None = fields.get(at_field) or None
             if val and getattr(webinar, db_col) != val:
                 setattr(webinar, db_col, val)
                 changed = True
 
+        for at_field, db_col in _WEBINAR_DT_FIELD_MAP:
+            val = _parse_dt(fields.get(at_field))
+            if val and getattr(webinar, db_col) != val:
+                setattr(webinar, db_col, val)
+                changed = True
+
+        transcript_url = _attachment_url(fields.get("Audio Transcript"))
+        if transcript_url and webinar.audio_transcript != transcript_url:
+            webinar.audio_transcript = transcript_url
+            changed = True
+
+        track = fields.get("Track Registrations")
+        if track is not None:
+            track_bool = bool(track) if isinstance(track, bool) else str(track).lower() == "true"
+            if webinar.track_registrations != track_bool:
+                webinar.track_registrations = track_bool
+                changed = True
+
         if changed:
             updated += 1
+
+        schools_linked: list[str] = fields.get("Schools") or []
+        _sync_portal_mappings(db, webinar.id, schools_linked, school_by_airtable_id)
 
     db.flush()
     return {"matched": matched, "updated": updated, "skipped": skipped, "created": created}

@@ -105,6 +105,7 @@ class WorkshopRegistration(Base):
     __tablename__ = "workshop_registrations"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     webinar_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("webinars.id", ondelete="CASCADE"), nullable=False)
     school_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("schools.id"))
     first_name: Mapped[str | None] = mapped_column(Text)
@@ -164,6 +165,7 @@ class PortalMapping(Base):
     __tablename__ = "portal_mapping"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     school_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
     webinar_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("webinars.id", ondelete="CASCADE"), nullable=False)
     pre_webinar_reminder_sent_on: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))

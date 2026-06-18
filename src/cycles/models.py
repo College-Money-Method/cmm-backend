@@ -17,6 +17,7 @@ class Cycle(Base):
     __tablename__ = "cycles"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     name: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     beginning_date: Mapped[datetime | None] = mapped_column(Date)
     end_date: Mapped[datetime | None] = mapped_column(Date)

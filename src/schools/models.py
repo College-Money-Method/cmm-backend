@@ -81,6 +81,7 @@ class Contact(Base):
     __tablename__ = "contacts"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     school_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
     first_name: Mapped[str | None] = mapped_column(Text)
     last_name: Mapped[str | None] = mapped_column(Text)
@@ -107,6 +108,7 @@ class SchoolDateSelector(Base):
     __tablename__ = "school_date_selector"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     school_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
     workshop_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("workshops.id"))
     date: Mapped[date] = mapped_column(Date, nullable=False)
