@@ -184,6 +184,7 @@ def _to_item(
         if "suggested_grades" in override
         else workshop.suggested_grades
     )
+    school_regs = [r for r in (webinar.registrations or []) if r.school_id == mapping.school_id]
     return WorkshopPortalItem(
         portal_mapping_id=mapping.id,
         school_override=override or None,
@@ -211,6 +212,8 @@ def _to_item(
         prev_cycle_video_embed_code=prev_cycle_video_embed_code,
         prev_cycle_name=prev_cycle_name,
         slug=webinar.slug,
+        registration_count=len(school_regs),
+        attendee_count=sum(1 for r in school_regs if r.attended),
     )
 
 
@@ -640,6 +643,7 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
                         selectinload(Workshop.objectives).selectinload(Objective.content_assets).selectinload(ContentAsset.asset_type),
                     ),
                     selectinload(Webinar.cycle),
+                    selectinload(Webinar.registrations),
                 )
             )
             .order_by(PortalMapping.created_at)
@@ -696,6 +700,7 @@ def get_school_webinar_by_prefix(school_id: uuid.UUID, prefix: str, db: DbDep) -
                         selectinload(Workshop.objectives).selectinload(Objective.content_assets).selectinload(ContentAsset.asset_type),
                     ),
                     selectinload(Webinar.cycle),
+                    selectinload(Webinar.registrations),
                 )
             )
         )
@@ -730,6 +735,7 @@ def get_school_webinar(school_id: uuid.UUID, webinar_id: uuid.UUID, db: DbDep) -
                         selectinload(Workshop.objectives).selectinload(Objective.content_assets).selectinload(ContentAsset.asset_type),
                     ),
                     selectinload(Webinar.cycle),
+                    selectinload(Webinar.registrations),
                 )
             )
         )

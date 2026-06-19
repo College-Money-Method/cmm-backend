@@ -324,6 +324,10 @@ class WorkshopPortalItem(BaseModel):
     prev_cycle_video_embed_code: str | None = None
     prev_cycle_name: str | None = None
 
+    # Registration stats (school-scoped)
+    registration_count: int = 0
+    attendee_count: int = 0
+
 
 class PortalMappingOverrideUpdate(BaseModel):
     """Counselor: shallow-merge patch into portal_mapping.school_override.
