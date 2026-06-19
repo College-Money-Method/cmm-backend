@@ -11,6 +11,7 @@ from src.auth.models import UserRole
 from src.auth.schemas import CurrentUser
 from src.db.client import get_supabase
 from src.db.deps import get_db
+from src.db.enums import HubPermission
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -50,6 +51,7 @@ async def get_current_user(
         user_id=user_id,
         role=role_record.role,
         school_id=role_record.school_id,
+        hub_permission=role_record.hub_permission,
     )
 
 
@@ -85,7 +87,17 @@ def require_counselor(
     return user
 
 
+def require_hub_admin(user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
+    """Allow super_admin always; other roles only if hub_permission is ADMIN."""
+    if user.role == "super_admin":
+        return user
+    if user.hub_permission != HubPermission.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hub admin access required")
+    return user
+
+
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 AdminDep = Annotated[CurrentUser, Depends(require_admin)]
 AdminOrViewerDep = Annotated[CurrentUser, Depends(require_admin_or_viewer)]
 CounselorDep = Annotated[CurrentUser, Depends(require_counselor)]
+HubAdminDep = Annotated[CurrentUser, Depends(require_hub_admin)]

@@ -36,6 +36,12 @@ class UserRole(Base):
     )
     # Optional job title (e.g. "Principal", "Vice Principal"); defaults to "<School> Counselor"
     title: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Hub-level permission: admin can add users and edit content; user is view-only
+    hub_permission: Mapped[str] = mapped_column(
+        SAEnum("admin", "user", name="hub_permission_enum"),
+        nullable=False,
+        default="admin",
+    )
     created_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), nullable=False
     )

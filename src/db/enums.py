@@ -34,3 +34,8 @@ class AppRole(str, enum.Enum):
     SUPER_ADMIN = "super_admin"
     COUNSELOR = "counselor"
     VIEWER = "viewer"
+
+
+class HubPermission(str, enum.Enum):
+    ADMIN = "admin"
+    USER = "user"

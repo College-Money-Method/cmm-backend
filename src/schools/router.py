@@ -4,15 +4,18 @@ import uuid
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload, selectinload
 
-from src.auth.deps import AdminDep, CurrentUserDep
+from src.auth.deps import AdminDep, CounselorDep, CurrentUserDep
 from src.auth.models import UserRole
+from src.config import settings
 from src.db.client import get_supabase
 from src.db.deps import DbDep
+from src.db.enums import HubPermission
 from src.schools.models import Contact, School
+from src.storage.s3_client import S3ClientDep
 from src.content.models import GradeSet
 from src.schools.schemas import (
     SchoolCreate,
@@ -262,6 +265,43 @@ def create_school(body: SchoolCreate, _admin: AdminDep, db: DbDep) -> SchoolDeta
 # ── Single-resource endpoints ──────────────────────────────────────────────────
 
 
+@router.post("/{school_id}/logo")
+async def upload_school_logo(
+    school_id: uuid.UUID,
+    file: UploadFile,
+    user: CounselorDep,
+    db: DbDep,
+    s3: S3ClientDep,
+) -> dict:
+    """Upload/replace a school's logo. Accessible by hub admin users and super_admin."""
+    _check_school_access(school_id, user)
+    if user.role != "super_admin" and user.hub_permission != HubPermission.ADMIN:
+        raise HTTPException(status_code=403, detail="Hub admin access required to upload logo")
+
+    allowed = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"}
+    if not file.content_type or file.content_type not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid file type. Allowed: jpeg, png, gif, webp, svg")
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "png"
+    key = f"uploads/school-logos/{school_id}/{uuid.uuid4()}.{ext}"
+
+    content = await file.read()
+    s3.put_object(
+        Bucket=settings.s3_bucket_name,
+        Key=key,
+        Body=content,
+        ContentType=file.content_type,
+    )
+    url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{key}"
+
+    school = db.get(School, school_id)
+    if school:
+        school.logo_url = url
+        db.commit()
+
+    return {"url": url}
+
+
 @router.get("/{school_id}", response_model=SchoolDetail)
 def get_school(school_id: uuid.UUID, db: DbDep, user: CurrentUserDep) -> SchoolDetail:
     _check_school_access(school_id, user)
@@ -284,9 +324,9 @@ def update_school(
     user: CurrentUserDep,
 ) -> SchoolDetail:
     _check_school_access(school_id, user)
-    # Viewers cannot write
-    if user.role == "viewer":
-        raise HTTPException(status_code=403, detail="Read-only access")
+    # Require hub admin permission to update
+    if user.role != "super_admin" and user.hub_permission != HubPermission.ADMIN:
+        raise HTTPException(status_code=403, detail="Hub admin access required to update school")
 
     school = db.query(School).filter(School.id == school_id).first()
     if not school:

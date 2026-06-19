@@ -32,6 +32,7 @@ def get_me(user: CurrentUserDep) -> UserRoleOut:
         user_id=user.user_id,
         role=user.role,
         school_id=user.school_id,
+        hub_permission=user.hub_permission,
     )
 
 
@@ -55,6 +56,7 @@ def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut
         school_id=role_record.school_id,
         school_name=school_name,
         title=role_record.title or None,
+        hub_permission=role_record.hub_permission,
     )
 
 

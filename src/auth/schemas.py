@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr
 
+from src.db.enums import HubPermission
+
 
 class UserRoleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -12,12 +14,14 @@ class UserRoleOut(BaseModel):
     user_id: uuid.UUID
     role: Literal["super_admin", "counselor", "viewer"]
     school_id: uuid.UUID | None = None
+    hub_permission: HubPermission = HubPermission.ADMIN
 
 
 class CurrentUser(BaseModel):
     user_id: uuid.UUID
     role: Literal["super_admin", "counselor", "viewer"]
     school_id: uuid.UUID | None = None
+    hub_permission: HubPermission = HubPermission.ADMIN
 
 
 class CounselorCreate(BaseModel):
@@ -37,6 +41,7 @@ class CounselorUpdate(BaseModel):
     school_id: uuid.UUID | None = None
     role: Literal["counselor", "viewer"] | None = None
     title: str | None = None
+    hub_permission: str | None = None
 
 
 class CounselorOut(BaseModel):
@@ -49,6 +54,7 @@ class CounselorOut(BaseModel):
     school_id: uuid.UUID | None
     school_name: str | None
     title: str | None = None
+    hub_permission: str = "admin"
 
 
 class CounselorListResponse(BaseModel):
