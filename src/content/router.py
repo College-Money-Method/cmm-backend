@@ -1631,6 +1631,23 @@ def list_submissions_admin(
     return {"items": items, "total": total, "skip": skip, "limit": limit}
 
 
+@router.get("/submissions/admin/{submission_id}", response_model=SubmissionOut)
+def get_submission_admin(
+    submission_id: uuid.UUID,
+    db: DbDep,
+    _admin: AdminDep,
+):
+    """Admin: get a single counselor-submitted resource by ID."""
+    asset = db.scalar(
+        select(ContentAsset)
+        .options(selectinload(ContentAsset.asset_type))
+        .where(ContentAsset.id == submission_id, ContentAsset.source == "counselor")
+    )
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    return asset
+
+
 @router.patch("/submissions/{submission_id}/approve", response_model=SubmissionOut)
 def approve_submission(
     submission_id: uuid.UUID, body: AdminReviewAction, _admin: AdminDep, db: DbDep
