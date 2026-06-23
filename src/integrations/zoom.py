@@ -18,6 +18,63 @@ _ZOOM_API_BASE = "https://api.zoom.us/v2"
 # In-process token cache — refreshed when within 60s of expiry
 _token_cache: dict[str, object] = {"access_token": None, "expires_at": 0.0}
 
+# Per-webinar question cache.
+# {webinar_id: {"grade": {"title": ..., "answers": [...]}, "school": {...}, "questions": {...}}}
+# Cleared only on process restart — question config rarely changes.
+_question_cache: dict[str, dict[str, dict | None]] = {}
+
+
+def _resolve_questions(zoom_webinar_id: str, token: str) -> dict[str, dict | None]:
+    """Fetch and cache Zoom custom question config (title + allowed answers) for a webinar."""
+    if zoom_webinar_id in _question_cache:
+        return _question_cache[zoom_webinar_id]
+
+    result: dict[str, dict | None] = {"grade": None, "school": None, "questions": None}
+    try:
+        resp = httpx.get(
+            f"{_ZOOM_API_BASE}/webinars/{zoom_webinar_id}/registrants/questions",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        for q in resp.json().get("custom_questions", []):
+            title: str = q.get("title", "")
+            answers: list[str] = q.get("answers") or []
+            lower = title.lower()
+            entry = {"title": title, "answers": answers}
+            if "grade" in lower and result["grade"] is None:
+                result["grade"] = entry
+            elif "school" in lower and result["school"] is None:
+                result["school"] = entry
+            elif "question" in lower and result["questions"] is None:
+                result["questions"] = entry
+        logger.debug("Zoom questions resolved — webinar=%s result=%s", zoom_webinar_id, result)
+    except Exception as exc:
+        logger.warning("Zoom question fetch failed — webinar=%s error=%s", zoom_webinar_id, exc)
+
+    _question_cache[zoom_webinar_id] = result
+    return result
+
+
+def _match_answer(value: str, answers: list[str]) -> str | None:
+    """Match value against Zoom's predefined answer list.
+
+    Returns the exact Zoom answer string, or None if no match found.
+    For free-text questions (empty answers list), returns the value as-is.
+    """
+    if not answers:
+        return value
+    # Exact match first
+    for a in answers:
+        if a.lower() == value.lower():
+            return a
+    # Contains match — e.g. our school name "Lincoln High" inside "Lincoln High School"
+    for a in answers:
+        if value.lower() in a.lower() or a.lower() in value.lower():
+            return a
+    logger.warning("Zoom answer match failed — value=%r not in answers=%s", value, answers)
+    return None
+
 
 def _get_access_token() -> str:
     """Return a valid Bearer token, fetching a new one if needed."""
@@ -55,6 +112,8 @@ def register_webinar(
     email: str,
     first_name: str | None,
     last_name: str | None,
+    grade: str | None = None,
+    school: str | None = None,
     questions: str | None = None,
 ) -> str | None:
     """
@@ -77,10 +136,25 @@ def register_webinar(
             "first_name": first_name or "",
             "last_name": last_name or "",
         }
-        if questions:
-            payload["custom_questions"] = [
-                {"title": "Questions for the presenter", "value": questions}
-            ]
+        q_config = _resolve_questions(zoom_webinar_id, token)
+        custom_questions = []
+        if grade and q_config["grade"]:
+            # Grade may be comma-separated (multi-select); match each part individually
+            parts = [g.strip() for g in grade.split(",") if g.strip()]
+            matched_parts = [_match_answer(p, q_config["grade"]["answers"]) for p in parts]
+            matched_grade = ",".join(m for m in matched_parts if m)
+            if matched_grade:
+                custom_questions.append({"title": q_config["grade"]["title"], "value": matched_grade})
+        if school and q_config["school"]:
+            matched = _match_answer(school, q_config["school"]["answers"])
+            if matched:
+                custom_questions.append({"title": q_config["school"]["title"], "value": matched})
+        if questions and q_config["questions"]:
+            matched = _match_answer(questions, q_config["questions"]["answers"])
+            if matched:
+                custom_questions.append({"title": q_config["questions"]["title"], "value": matched})
+        if custom_questions:
+            payload["custom_questions"] = custom_questions
 
         resp = httpx.post(
             f"{_ZOOM_API_BASE}/webinars/{zoom_webinar_id}/registrants",
@@ -100,6 +174,14 @@ def register_webinar(
         )
         return registrant_id
 
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Zoom webinar registration failed — webinar=%s status=%s body=%s",
+            zoom_webinar_id,
+            exc.response.status_code,
+            exc.response.text,
+        )
+        return None
     except Exception as exc:
         logger.warning(
             "Zoom webinar registration failed — webinar=%s error=%s",
@@ -131,6 +213,14 @@ def get_webinar(zoom_webinar_id: str) -> dict | None:
         resp.raise_for_status()
         logger.info("Zoom webinar fetched — webinar=%s", zoom_webinar_id)
         return resp.json()
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Zoom get_webinar failed — webinar=%s status=%s body=%s",
+            zoom_webinar_id,
+            exc.response.status_code,
+            exc.response.text,
+        )
+        return None
     except Exception as exc:
         logger.warning(
             "Zoom get_webinar failed — webinar=%s error=%s",

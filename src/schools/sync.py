@@ -40,13 +40,13 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
     Pull Airtable Schools + Contacts + Cohorts and sync into DB.
 
     Rules:
-    - Create-only for schools (never updates existing records)
-    - Match schools by bubble_rec_id first, then airtable_id
-    - For each new school, create Contact rows from linked Airtable contacts
+    - Upsert schools: create new, update is_current_customer + cohort_id + airtable_id on existing
+    - For ALL schools (new and existing), sync contacts from Airtable
+    - Dedup contacts by airtable_id first, then email+school_id
     - For contacts with email → create Supabase auth user + UserRole(counselor)
     - Handle per-record errors without aborting entire sync
 
-    Returns {"schools_created", "contacts_created", "counselors_created", "skipped", "synced_at"}
+    Returns {"schools_created", "schools_updated", "contacts_created", "counselors_created", "skipped", "synced_at"}
     """
     # ── 1. Fetch all Airtable records ────────────────────────────────────────
     at_schools = get_schools_records()
@@ -93,9 +93,19 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
         for sid in linked_schools:
             contacts_by_school_id.setdefault(sid, []).append(crec)
 
-    schools_created = contacts_created = counselors_created = skipped = 0
+    # ── 5. Build existing contact dedup maps ──────────────────────────────────
+    all_contacts: list[Contact] = db.execute(select(Contact)).scalars().all()
+    # Primary dedup: airtable_id (sparse — most are null currently)
+    contact_by_airtable_id: dict[str, Contact] = {c.airtable_id: c for c in all_contacts if c.airtable_id}
+    # Fallback dedup: (school_id, normalized email)
+    contact_by_school_email: dict[tuple, Contact] = {
+        (c.school_id, (c.email or "").strip().lower()): c
+        for c in all_contacts if c.email
+    }
 
-    # ── 5. Process each Airtable school ──────────────────────────────────────
+    schools_created = schools_updated = contacts_created = counselors_created = skipped = 0
+
+    # ── 6. Process each Airtable school ──────────────────────────────────────
     for srec in at_schools:
         fields = srec.get("fields", {})
         airtable_rec_id: str = srec["id"]
@@ -108,6 +118,11 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
             skipped += 1
             continue
 
+        # Resolve cohort from "Cohort 2" linked field (use first entry)
+        cohort_links: list[str] = fields.get("Cohort 2") or []
+        cohort = _resolve_cohort(cohort_links)
+        is_customer = _parse_bool(fields.get("Current Customer"))
+
         # Check if school already exists (airtable_id → slug → name)
         existing = (
             school_by_airtable_id.get(airtable_rec_id)
@@ -115,82 +130,104 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
             or school_by_name.get(name.strip().lower())
         )
         if existing:
-            # Backfill airtable_id so future syncs take the fast path
+            # Upsert: update mutable fields that may drift from Airtable
             if not existing.airtable_id:
                 existing.airtable_id = airtable_rec_id
-            skipped += 1
-            continue
+                school_by_airtable_id[airtable_rec_id] = existing
+            if existing.is_current_customer != is_customer:
+                existing.is_current_customer = is_customer
+            new_cohort_id = cohort.id if cohort else None
+            if existing.cohort_id != new_cohort_id:
+                existing.cohort_id = new_cohort_id
+            school = existing
+            schools_updated += 1
+        else:
+            try:
+                school = School(
+                    name=name,
+                    airtable_id=airtable_rec_id,
+                    street_address=fields.get("Street Address") or None,
+                    city=fields.get("City") or None,
+                    state=fields.get("State") or None,
+                    zip_code=str(fields.get("Zip Code")).strip() if fields.get("Zip Code") else None,
+                    enrollment_9_12=_parse_int(fields.get("Enrollment (9-12)")),
+                    cmm_website_password=fields.get("CMM Website Password") or None,
+                    school_resource_center_url=fields.get("School Resource Center URL") or None,
+                    appointlet_link=fields.get("Appointlet Link") or None,
+                    calendar_link=fields.get("Calendar Link") or None,
+                    slug=at_slug,
+                    is_current_customer=is_customer,
+                    cohort_id=cohort.id if cohort else None,
+                )
+                db.add(school)
+                db.flush()  # get school.id before creating contacts
+                school_by_airtable_id[airtable_rec_id] = school
+                school_by_name[name.strip().lower()] = school
+                if at_slug:
+                    school_by_slug[at_slug] = school
+                schools_created += 1
+                logger.info("Created school: name=%s airtable_id=%s", name, airtable_rec_id)
+            except Exception as exc:
+                logger.error("Failed to create school %s (%s): %s", name, airtable_rec_id, exc)
+                db.rollback()
+                skipped += 1
+                continue
 
-        # Resolve cohort from "Cohort 2" linked field (use first entry)
-        cohort_links: list[str] = fields.get("Cohort 2") or []
-        cohort = _resolve_cohort(cohort_links)
-
-        try:
-            school = School(
-                name=name,
-                airtable_id=airtable_rec_id,
-                street_address=fields.get("Street Address") or None,
-                city=fields.get("City") or None,
-                state=fields.get("State") or None,
-                zip_code=str(fields.get("Zip Code")).strip() if fields.get("Zip Code") else None,
-                enrollment_9_12=_parse_int(fields.get("Enrollment (9-12)")),
-                cmm_website_password=fields.get("CMM Website Password") or None,
-                school_resource_center_url=fields.get("School Resource Center URL") or None,
-                appointlet_link=fields.get("Appointlet Link") or None,
-                calendar_link=fields.get("Calendar Link") or None,
-                slug=at_slug,
-                is_current_customer=_parse_bool(fields.get("Current Customer")),
-                cohort_id=cohort.id if cohort else None,
-            )
-            db.add(school)
-            db.flush()  # get school.id before creating contacts
-            school_by_airtable_id[airtable_rec_id] = school
-            school_by_name[name.strip().lower()] = school
-            if at_slug:
-                school_by_slug[at_slug] = school
-            schools_created += 1
-            logger.info("Created school: name=%s airtable_id=%s", name, airtable_rec_id)
-        except Exception as exc:
-            logger.error("Failed to create school %s (%s): %s", name, airtable_rec_id, exc)
-            db.rollback()
-            skipped += 1
-            continue
-
-        # ── 6. Create contacts for this new school ────────────────────────────
+        # ── 7. Sync contacts for this school (new and existing schools) ───────
         linked_contacts = contacts_by_school_id.get(airtable_rec_id, [])
         for crec in linked_contacts:
             cfields = crec.get("fields", {})
+            contact_airtable_id: str = crec["id"]
             email: str | None = (cfields.get("Email") or "").strip() or None
+            email_key = (school.id, email.lower()) if email else None
 
-            try:
-                contact = Contact(
-                    school_id=school.id,
-                    first_name=cfields.get("First Name") or None,
-                    last_name=cfields.get("Last Name") or None,
-                    email=email,
-                    role=cfields.get("Role") or None,
-                    receive_comms=_parse_bool(cfields.get("Receive Comms")),
-                    auto_emails=_parse_bool(cfields.get("Auto Emails")),
-                    softr_access=_parse_bool(cfields.get("Softr Access")),
-                )
-                db.add(contact)
-                db.flush()
-                contacts_created += 1
-                logger.info(
-                    "Created contact: email=%s school=%s", email or "(no email)", name
-                )
-            except Exception as exc:
-                logger.error(
-                    "Failed to create contact %s for school %s: %s",
-                    email or crec["id"],
-                    name,
-                    exc,
-                )
-                db.rollback()
-                continue
+            # Dedup: airtable_id → (school_id, email)
+            existing_contact = contact_by_airtable_id.get(contact_airtable_id)
+            if not existing_contact and email_key:
+                existing_contact = contact_by_school_email.get(email_key)
+            contact_is_new = False
+            if existing_contact:
+                # Backfill airtable_id on existing contacts so future syncs use fast path
+                if not existing_contact.airtable_id:
+                    existing_contact.airtable_id = contact_airtable_id
+                    contact_by_airtable_id[contact_airtable_id] = existing_contact
+                contact = existing_contact
+            else:
+                contact_is_new = True
+                try:
+                    contact = Contact(
+                        airtable_id=contact_airtable_id,
+                        school_id=school.id,
+                        first_name=cfields.get("First Name") or None,
+                        last_name=cfields.get("Last Name") or None,
+                        email=email,
+                        role=cfields.get("Role") or None,
+                        receive_comms=_parse_bool(cfields.get("Receive Comms")),
+                        auto_emails=_parse_bool(cfields.get("Auto Emails")),
+                        softr_access=_parse_bool(cfields.get("Softr Access")),
+                    )
+                    db.add(contact)
+                    db.flush()
+                    contact_by_airtable_id[contact_airtable_id] = contact
+                    if email_key:
+                        contact_by_school_email[email_key] = contact
+                    contacts_created += 1
+                    logger.info(
+                        "Created contact: email=%s school=%s", email or "(no email)", name
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Failed to create contact %s for school %s: %s",
+                        email or contact_airtable_id,
+                        name,
+                        exc,
+                    )
+                    db.rollback()
+                    continue
 
-            # ── 7. Create Supabase auth user + counselor role for contacts with email ──
-            if not email:
+            # ── 8. Create Supabase auth user + counselor role for NEW contacts with email ──
+            # Skip existing contacts — they already have Supabase users provisioned
+            if not email or not contact_is_new:
                 continue
 
             first_name: str = cfields.get("First Name") or ""
@@ -256,14 +293,16 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
     db.commit()
     synced_at = datetime.now(timezone.utc)
     logger.info(
-        "Schools sync complete: schools_created=%d contacts_created=%d counselors_created=%d skipped=%d",
+        "Schools sync complete: schools_created=%d schools_updated=%d contacts_created=%d counselors_created=%d skipped=%d",
         schools_created,
+        schools_updated,
         contacts_created,
         counselors_created,
         skipped,
     )
     return {
         "schools_created": schools_created,
+        "schools_updated": schools_updated,
         "contacts_created": contacts_created,
         "counselors_created": counselors_created,
         "skipped": skipped,

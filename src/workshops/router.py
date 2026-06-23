@@ -791,11 +791,17 @@ def register_public(webinar_id: uuid.UUID, body: RegistrationCreate, db: DbDep) 
 
     # Register on Zoom if this webinar has a Zoom ID (non-fatal if it fails)
     if webinar.zoom_webinar_id:
+        school_name: str | None = None
+        if body.school_id:
+            school_obj = db.get(School, body.school_id)
+            school_name = school_obj.name if school_obj else None
         zoom_registrant_id = zoom_client.register_webinar(
             zoom_webinar_id=webinar.zoom_webinar_id,
             email=body.email,
             first_name=body.first_name,
             last_name=body.last_name,
+            grade=body.grade,
+            school=school_name,
             questions=body.questions,
         )
         if zoom_registrant_id:
