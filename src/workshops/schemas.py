@@ -260,6 +260,7 @@ class EmailTemplateOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    workshop_id: uuid.UUID | None
     type: str
     name: str
     subject: str
@@ -269,6 +270,7 @@ class EmailTemplateOut(BaseModel):
 
 
 class EmailTemplateCreate(BaseModel):
+    workshop_id: uuid.UUID | None = None  # None = global/legacy; set for workshop-specific
     type: str  # "announcement" | "followup"
     name: str
     subject: str

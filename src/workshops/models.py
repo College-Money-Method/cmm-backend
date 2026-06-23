@@ -188,6 +188,10 @@ class WorkshopEmailTemplate(Base):
     __tablename__ = "workshop_email_templates"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    # Nullable: NULL = legacy global template; non-null = workshop-specific
+    workshop_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("workshops.id", ondelete="CASCADE"), nullable=True
+    )
     type: Mapped[str] = mapped_column(Text, nullable=False)      # "announcement" | "followup"
     name: Mapped[str] = mapped_column(Text, nullable=False)       # display label
     subject: Mapped[str] = mapped_column(Text, nullable=False)    # merge-tag aware subject
@@ -197,6 +201,7 @@ class WorkshopEmailTemplate(Base):
 
     __table_args__ = (
         Index("idx_workshop_email_templates_type", "type"),
+        Index("idx_workshop_email_templates_workshop", "workshop_id"),
     )
 
 

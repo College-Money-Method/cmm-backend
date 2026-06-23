@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import cast, String, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -523,11 +524,16 @@ def list_notification_subscribers(
 
 
 @router.get("/email-templates", response_model=list[EmailTemplateOut])
-def list_email_templates(_user: CounselorDep, db: DbDep) -> list[EmailTemplateOut]:
-    """Counselor: list all workshop email templates ordered by type then name."""
-    templates = db.execute(
-        select(WorkshopEmailTemplate).order_by(WorkshopEmailTemplate.type, WorkshopEmailTemplate.name)
-    ).scalars().all()
+def list_email_templates(
+    _user: CounselorDep,
+    db: DbDep,
+    workshop_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> list[EmailTemplateOut]:
+    """Counselor: list email templates. Optionally filtered to a specific workshop."""
+    stmt = select(WorkshopEmailTemplate).order_by(WorkshopEmailTemplate.type, WorkshopEmailTemplate.name)
+    if workshop_id is not None:
+        stmt = stmt.where(WorkshopEmailTemplate.workshop_id == workshop_id)
+    templates = db.execute(stmt).scalars().all()
     return [EmailTemplateOut.model_validate(t) for t in templates]
 
 
