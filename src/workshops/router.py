@@ -573,11 +573,14 @@ def delete_email_template(template_id: uuid.UUID, _admin: AdminDep, db: DbDep) -
 # ── Public endpoints (literal prefix) ───────────────────────────────────────
 
 
-def _get_prev_cycle_recording(workshop_id: uuid.UUID, db: DbDep) -> tuple[str | None, str | None]:
+def _get_prev_cycle_recording(workshop_id: uuid.UUID, school_id: uuid.UUID, db: DbDep) -> tuple[str | None, str | None]:
     """Return (video_embed_code, cycle_name) for the most recent past webinar
-    of the given workshop that has a recording. Returns (None, None) if none found."""
+    of the given workshop that has a recording and is mapped to the given school.
+    Returns (None, None) if none found."""
     row = db.execute(
         select(Webinar)
+        .join(PortalMapping,
+              (PortalMapping.webinar_id == Webinar.id) & (PortalMapping.school_id == school_id))
         .where(
             Webinar.workshop_id == workshop_id,
             Webinar.video_embed_code.isnot(None),
@@ -672,7 +675,7 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
             continue
 
         if is_upcoming:
-            prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, db)
+            prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, school_id, db)
             item = _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
             upcoming.append(item)
         else:
@@ -719,7 +722,7 @@ def get_school_webinar_by_prefix(school_id: uuid.UUID, prefix: str, db: DbDep) -
     now = datetime.now(tz=timezone.utc)
     is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
     if is_upcoming:
-        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, db)
+        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, school_id, db)
         return _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
     return _to_item(mapping)
 
@@ -754,7 +757,7 @@ def get_school_webinar(school_id: uuid.UUID, webinar_id: uuid.UUID, db: DbDep) -
     now = datetime.now(tz=timezone.utc)
     is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
     if is_upcoming:
-        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, db)
+        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, school_id, db)
         return _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
     return _to_item(mapping)
 
