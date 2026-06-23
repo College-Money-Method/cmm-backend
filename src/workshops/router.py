@@ -148,7 +148,7 @@ def _registration_out(reg: WorkshopRegistration) -> RegistrationOut:
         attended=reg.attended,
         join_time=reg.join_time,
         leave_time=reg.leave_time,
-        zoom_registrant_id=reg.zoom_registrant_id,
+        zoom_registrant_id=str(reg.zoom_registrant_id) if reg.zoom_registrant_id is not None else None,
         questions=reg.questions,
         registration_time=reg.registration_time,
         created_at=reg.created_at,
