@@ -5,7 +5,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from src.auth.deps import AdminDep, CounselorDep, CurrentUserDep
@@ -15,6 +15,7 @@ from src.db.client import get_supabase
 from src.db.deps import DbDep
 from src.db.enums import HubPermission
 from src.schools.models import Contact, School
+from src.schools.slug_utils import unique_slug_db
 from src.storage.s3_client import S3ClientDep
 from src.content.models import GradeSet
 from src.schools.schemas import (
@@ -42,7 +43,7 @@ def get_school_counselors_public(
     supabase=Depends(get_supabase),
 ) -> list[CounselorPublicOut]:
     """Return counselors assigned to a school (public, no auth required)."""
-    school = db.query(School).filter(School.slug == slug).first()
+    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
 
@@ -148,7 +149,7 @@ def list_schools_public(
 @router.get("/slug/{slug}", response_model=SchoolPublic)
 def get_school_by_slug(slug: str, db: DbDep) -> SchoolPublic:
     """Get a school by slug (no auth required). Returns safe public fields only."""
-    school = db.query(School).filter(School.slug == slug).first()
+    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
     return SchoolPublic.model_validate(school)
@@ -157,7 +158,7 @@ def get_school_by_slug(slug: str, db: DbDep) -> SchoolPublic:
 @router.post("/slug/{slug}/verify-password", status_code=status.HTTP_200_OK)
 def verify_school_password(slug: str, body: SchoolPasswordVerify, db: DbDep) -> dict:
     """Verify the school portal password. Returns 200 + school data if correct, 401 if wrong."""
-    school = db.query(School).filter(School.slug == slug).first()
+    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
     if school.cmm_website_password != body.password:
@@ -249,7 +250,9 @@ def list_schools(
 @router.post("", response_model=SchoolDetail, status_code=status.HTTP_201_CREATED)
 def create_school(body: SchoolCreate, _admin: AdminDep, db: DbDep) -> SchoolDetail:
     """Create a new school (admin only)."""
-    school = School(**body.model_dump(exclude_none=True))
+    data = body.model_dump(exclude_none=True)
+    data.setdefault("slug", unique_slug_db(body.name, db))
+    school = School(**data)
     db.add(school)
     db.commit()
     db.refresh(school)
@@ -334,10 +337,11 @@ def update_school(
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # Counselors may only update a safe subset of fields
+    # Counselors may only update a safe subset of fields; name is excluded
+    # because slug is derived from name and must stay stable
     if user.role == "counselor":
         counselor_allowed = {
-            "name", "logo_url", "nickname",
+            "logo_url", "nickname",
             "city", "state", "zip_code", "street_address",
             "appointlet_link", "calendar_link",
         }

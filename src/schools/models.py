@@ -36,6 +36,8 @@ class School(Base):
     )
     cmm_website_password: Mapped[str | None] = mapped_column(Text)
     slug: Mapped[str | None] = mapped_column(Text, unique=True)
+    # Raw slug value sourced from Airtable; slug field is owned by the application
+    airtable_slug: Mapped[str | None] = mapped_column(Text)
     nickname: Mapped[str | None] = mapped_column(Text)
 
     @property

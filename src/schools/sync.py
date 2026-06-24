@@ -12,6 +12,7 @@ from src.auth.models import UserRole
 from src.cycles.models import Cohort
 from src.integrations.airtable import get_cohorts_records, get_contacts_records, get_schools_records
 from src.schools.models import Contact, School
+from src.schools.slug_utils import unique_slug
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,8 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
     # Slug is unique in DB — most reliable dedup key after airtable_id
     school_by_slug: dict[str, School] = {s.slug: s for s in all_schools if s.slug}
     school_by_name: dict[str, School] = {s.name.strip().lower(): s for s in all_schools if s.name}
+    # Track all slugs in memory for dedup during this sync run
+    all_slugs: set[str] = {s.slug for s in all_schools if s.slug}
 
     # ── 4. Build contact index: Airtable school rec ID → list of contact recs ─
     contacts_by_school_id: dict[str, list[dict]] = {}
@@ -139,10 +142,14 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
             new_cohort_id = cohort.id if cohort else None
             if existing.cohort_id != new_cohort_id:
                 existing.cohort_id = new_cohort_id
+            # Keep airtable_slug in sync with Airtable's latest value
+            if existing.airtable_slug != at_slug:
+                existing.airtable_slug = at_slug
             school = existing
             schools_updated += 1
         else:
             try:
+                new_slug = at_slug if at_slug else unique_slug(name, all_slugs)
                 school = School(
                     name=name,
                     airtable_id=airtable_rec_id,
@@ -155,7 +162,8 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
                     school_resource_center_url=fields.get("School Resource Center URL") or None,
                     appointlet_link=fields.get("Appointlet Link") or None,
                     calendar_link=fields.get("Calendar Link") or None,
-                    slug=at_slug,
+                    slug=new_slug,
+                    airtable_slug=at_slug,
                     is_current_customer=is_customer,
                     cohort_id=cohort.id if cohort else None,
                 )
@@ -163,10 +171,10 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
                 db.flush()  # get school.id before creating contacts
                 school_by_airtable_id[airtable_rec_id] = school
                 school_by_name[name.strip().lower()] = school
-                if at_slug:
-                    school_by_slug[at_slug] = school
+                school_by_slug[new_slug] = school
+                all_slugs.add(new_slug)
                 schools_created += 1
-                logger.info("Created school: name=%s airtable_id=%s", name, airtable_rec_id)
+                logger.info("Created school: name=%s airtable_id=%s slug=%s", name, airtable_rec_id, new_slug)
             except Exception as exc:
                 logger.error("Failed to create school %s (%s): %s", name, airtable_rec_id, exc)
                 db.rollback()
