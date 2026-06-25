@@ -57,3 +57,10 @@ class CounselorListResponse(BaseModel):
     total: int
     skip: int
     limit: int
+
+
+class CounselorSyncResult(BaseModel):
+    counselors_created: int
+    school_roles_updated: int
+    skipped: int
+    synced_at: str

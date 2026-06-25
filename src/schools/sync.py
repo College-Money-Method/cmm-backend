@@ -285,10 +285,12 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
             user_uuid = uuid.UUID(new_user.id)
             existing_role = db.query(UserRole).filter(UserRole.user_id == user_uuid).first()
             if existing_role:
-                # Backfill school_role if it was not previously set
-                if not existing_role.school_role and airtable_school_role:
+                # Airtable is source of truth: sync school_role and role (preserve super_admin)
+                if existing_role.school_role != airtable_school_role:
                     existing_role.school_role = airtable_school_role
-                logger.info("UserRole already exists for user %s — skipping", email)
+                if existing_role.role != "super_admin" and existing_role.role != system_role:
+                    logger.info("Updated role for user %s: %s → %s", email, existing_role.role, system_role)
+                    existing_role.role = system_role
                 continue
 
             try:
@@ -323,4 +325,152 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
         "counselors_created": counselors_created,
         "skipped": skipped,
         "synced_at": synced_at,
+    }
+
+
+def sync_counselors_from_airtable(db: Session, supabase: object) -> dict:
+    """
+    Sync counselor accounts from Airtable contacts (Airtable is source of truth).
+
+    - Creates Supabase users + UserRoles for contacts that have no account
+    - Updates school_role and role on existing records to match Airtable
+    - Never modifies super_admin role
+
+    Returns {"counselors_created", "school_roles_updated", "skipped", "synced_at"}
+    """
+    at_contacts = get_contacts_records()
+
+    # Build school lookup by Airtable rec ID
+    all_schools: list[School] = db.execute(select(School)).scalars().all()
+    school_by_airtable_id: dict[str, School] = {s.airtable_id: s for s in all_schools if s.airtable_id}
+
+    # Build existing UserRole map by Supabase user_id string
+    all_roles: list[UserRole] = db.execute(select(UserRole)).scalars().all()
+    role_by_user_id: dict[str, UserRole] = {str(r.user_id): r for r in all_roles}
+
+    # Batch-fetch all Supabase users for email → user lookup
+    supabase_users_by_email: dict[str, object] = {}
+    try:
+        page = 1
+        while True:
+            users = supabase.auth.admin.list_users(page=page, per_page=1000)
+            users = users if isinstance(users, list) else []
+            for u in users:
+                if u.email:
+                    supabase_users_by_email[u.email.lower()] = u
+            if len(users) < 1000:
+                break
+            page += 1
+    except Exception as exc:
+        logger.error("Failed to fetch Supabase users: %s", exc)
+        raise
+
+    counselors_created = 0
+    school_roles_updated = 0
+    skipped = 0
+
+    for crec in at_contacts:
+        cfields = crec.get("fields", {})
+        email: str | None = (cfields.get("Email") or "").strip() or None
+        if not email:
+            skipped += 1
+            continue
+
+        # Find first linked school present in our DB
+        linked_schools: list[str] = cfields.get("Sch") or []
+        school: School | None = None
+        for sid in linked_schools:
+            school = school_by_airtable_id.get(sid)
+            if school:
+                break
+        if not school:
+            skipped += 1
+            continue
+
+        airtable_school_role = cfields.get("Role") or "Counselor"
+        system_role = "hub_admin" if airtable_school_role == "Director" else "hub_user"
+        email_lower = email.lower()
+
+        existing_user = supabase_users_by_email.get(email_lower)
+
+        if existing_user:
+            existing_role = role_by_user_id.get(existing_user.id)
+            if existing_role:
+                # Airtable is source of truth: sync school_role and role (preserve super_admin)
+                changed = False
+                if existing_role.school_role != airtable_school_role:
+                    existing_role.school_role = airtable_school_role
+                    changed = True
+                if existing_role.role != "super_admin" and existing_role.role != system_role:
+                    logger.info("Updated role for user %s: %s → %s", email, existing_role.role, system_role)
+                    existing_role.role = system_role
+                    changed = True
+                if changed:
+                    school_roles_updated += 1
+                continue
+            # Has Supabase user but no UserRole — provision one
+            try:
+                user_role = UserRole(
+                    user_id=uuid.UUID(existing_user.id),
+                    role=system_role,
+                    school_id=school.id,
+                    school_role=airtable_school_role,
+                )
+                db.add(user_role)
+                db.flush()
+                role_by_user_id[existing_user.id] = user_role
+                counselors_created += 1
+                logger.info("Created UserRole for existing user: email=%s", email)
+            except Exception as exc:
+                logger.error("Failed to create UserRole for %s: %s", email, exc)
+                db.rollback()
+            continue
+
+        # No Supabase user — create one and provision role
+        first_name = cfields.get("First Name") or ""
+        last_name = cfields.get("Last Name") or ""
+        try:
+            resp = supabase.auth.admin.create_user({
+                "email": email,
+                "user_metadata": {"first_name": first_name, "last_name": last_name},
+                "email_confirm": True,
+            })
+            if not resp or not resp.user:
+                logger.error("create_user returned no user for %s", email)
+                skipped += 1
+                continue
+            new_user = resp.user
+        except Exception as exc:
+            logger.error("create_user failed for %s: %s", email, exc)
+            skipped += 1
+            continue
+
+        try:
+            user_role = UserRole(
+                user_id=uuid.UUID(new_user.id),
+                role=system_role,
+                school_id=school.id,
+                school_role=airtable_school_role,
+            )
+            db.add(user_role)
+            db.flush()
+            counselors_created += 1
+            logger.info("Created counselor: email=%s school=%s", email, school.name)
+        except Exception as exc:
+            logger.error("Failed to create UserRole for %s: %s", email, exc)
+            db.rollback()
+
+    db.commit()
+    synced_at = datetime.now(timezone.utc)
+    logger.info(
+        "Counselors sync complete: counselors_created=%d school_roles_updated=%d skipped=%d",
+        counselors_created,
+        school_roles_updated,
+        skipped,
+    )
+    return {
+        "counselors_created": counselors_created,
+        "school_roles_updated": school_roles_updated,
+        "skipped": skipped,
+        "synced_at": synced_at.isoformat(),
     }

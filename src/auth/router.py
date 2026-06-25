@@ -15,6 +15,7 @@ from src.auth.schemas import (
     CounselorCreate,
     CounselorListResponse,
     CounselorOut,
+    CounselorSyncResult,
     CounselorUpdate,
     UserRoleOut,
 )
@@ -57,6 +58,14 @@ def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut
         title=role_record.title or None,
         school_role=role_record.school_role or None,
     )
+
+
+@router.post("/api/v1/counselors/sync-airtable", response_model=CounselorSyncResult)
+def sync_counselors_airtable(_admin: AdminDep, db: DbDep, supabase=Depends(get_supabase)) -> CounselorSyncResult:
+    """Provision missing counselor accounts from Airtable contacts."""
+    from src.schools.sync import sync_counselors_from_airtable
+    result = sync_counselors_from_airtable(db, supabase)
+    return CounselorSyncResult(**result)
 
 
 @router.get("/api/v1/counselors", response_model=CounselorListResponse)
