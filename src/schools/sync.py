@@ -376,16 +376,13 @@ def sync_counselors_from_airtable(db: Session, supabase: object) -> dict:
             skipped += 1
             continue
 
-        # Find first linked school present in our DB
+        # Find first linked school present in our DB (may be None for unlinked contacts)
         linked_schools: list[str] = cfields.get("Sch") or []
         school: School | None = None
         for sid in linked_schools:
             school = school_by_airtable_id.get(sid)
             if school:
                 break
-        if not school:
-            skipped += 1
-            continue
 
         airtable_school_role = cfields.get("Role") or "Counselor"
         system_role = "hub_admin" if airtable_school_role == "Director" else "hub_user"
@@ -413,14 +410,14 @@ def sync_counselors_from_airtable(db: Session, supabase: object) -> dict:
                 user_role = UserRole(
                     user_id=uuid.UUID(existing_user.id),
                     role=system_role,
-                    school_id=school.id,
+                    school_id=school.id if school else None,
                     school_role=airtable_school_role,
                 )
                 db.add(user_role)
                 db.flush()
                 role_by_user_id[existing_user.id] = user_role
                 counselors_created += 1
-                logger.info("Created UserRole for existing user: email=%s", email)
+                logger.info("Created UserRole for existing user: email=%s school=%s", email, school.name if school else "none")
             except Exception as exc:
                 logger.error("Failed to create UserRole for %s: %s", email, exc)
                 db.rollback()
@@ -449,13 +446,13 @@ def sync_counselors_from_airtable(db: Session, supabase: object) -> dict:
             user_role = UserRole(
                 user_id=uuid.UUID(new_user.id),
                 role=system_role,
-                school_id=school.id,
+                school_id=school.id if school else None,
                 school_role=airtable_school_role,
             )
             db.add(user_role)
             db.flush()
             counselors_created += 1
-            logger.info("Created counselor: email=%s school=%s", email, school.name)
+            logger.info("Created counselor: email=%s school=%s", email, school.name if school else "none")
         except Exception as exc:
             logger.error("Failed to create UserRole for %s: %s", email, exc)
             db.rollback()

@@ -75,6 +75,7 @@ def list_counselors(
     supabase=Depends(get_supabase),
     search: str | None = Query(default=None),
     school_id: uuid.UUID | None = Query(default=None),
+    no_school: bool = Query(default=False),
     role: Literal["hub_admin", "hub_user", "viewer"] | None = Query(default=None),
     school_role: str | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
@@ -97,7 +98,9 @@ def list_counselors(
         .filter(UserRole.role.in_(["hub_admin", "hub_user", "viewer"]))
     )
 
-    if school_id:
+    if no_school and user.role == "super_admin":
+        q = q.filter(UserRole.school_id.is_(None))
+    elif school_id:
         q = q.filter(UserRole.school_id == school_id)
     if role:
         q = q.filter(UserRole.role == role)
