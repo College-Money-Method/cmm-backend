@@ -32,10 +32,6 @@ class CycleStatus(str, enum.Enum):
 
 class AppRole(str, enum.Enum):
     SUPER_ADMIN = "super_admin"
-    COUNSELOR = "counselor"
+    HUB_ADMIN = "hub_admin"
+    HUB_USER = "hub_user"
     VIEWER = "viewer"
-
-
-class HubPermission(str, enum.Enum):
-    ADMIN = "admin"
-    USER = "user"

@@ -351,6 +351,42 @@ def list_registrations(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
     return [_registration_out(r) for r in regs]
 
 
+@router.get("/webinars/{webinar_id}/my-registrations", response_model=list[RegistrationOut])
+def list_my_registrations(webinar_id: uuid.UUID, user: CounselorDep, db: DbDep):
+    """Counselor-facing registrations list, scoped to the caller's own school.
+
+    super_admin sees every registration (same as the admin endpoint). Counselors /
+    viewers only see registrations tagged with their school, and only for webinars
+    that are mapped to their school's portal.
+    """
+    webinar = db.get(Webinar, webinar_id)
+    if not webinar:
+        raise HTTPException(status_code=404, detail="Webinar not found")
+
+    stmt = (
+        select(WorkshopRegistration)
+        .where(WorkshopRegistration.webinar_id == webinar_id)
+        .options(selectinload(WorkshopRegistration.school))
+        .order_by(WorkshopRegistration.created_at)
+    )
+
+    if user.role != "super_admin":
+        if not user.school_id:
+            raise HTTPException(status_code=403, detail="No school associated with your account")
+        mapping = db.execute(
+            select(PortalMapping).where(
+                PortalMapping.webinar_id == webinar_id,
+                PortalMapping.school_id == user.school_id,
+            )
+        ).scalar_one_or_none()
+        if not mapping:
+            raise HTTPException(status_code=403, detail="Webinar not in your school's portal")
+        stmt = stmt.where(WorkshopRegistration.school_id == user.school_id)
+
+    regs = db.execute(stmt).scalars().all()
+    return [_registration_out(r) for r in regs]
+
+
 @router.post("/webinars/{webinar_id}/registrations", response_model=RegistrationOut, status_code=status.HTTP_201_CREATED)
 def create_registration(webinar_id: uuid.UUID, body: RegistrationCreate, _admin: AdminDep, db: DbDep):
     webinar = db.get(Webinar, webinar_id)

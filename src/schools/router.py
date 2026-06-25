@@ -13,7 +13,6 @@ from src.auth.models import UserRole
 from src.config import settings
 from src.db.client import get_supabase
 from src.db.deps import DbDep
-from src.db.enums import HubPermission
 from src.schools.models import Contact, School
 from src.schools.slug_utils import unique_slug_db
 from src.storage.s3_client import S3ClientDep
@@ -49,7 +48,7 @@ def get_school_counselors_public(
 
     roles = (
         db.query(UserRole)
-        .filter(UserRole.school_id == school.id, UserRole.role == "counselor")
+        .filter(UserRole.school_id == school.id, UserRole.role.in_(["hub_admin", "hub_user"]))
         .all()
     )
 
@@ -74,8 +73,8 @@ def get_school_counselors_public(
 
 
 def _check_school_access(school_id: uuid.UUID, user: CurrentUserDep) -> None:
-    """Enforce counselor scope: counselors may only access their own school."""
-    if user.role == "counselor" and user.school_id != school_id:
+    """Enforce hub user scope: hub users may only access their own school."""
+    if user.role in ("hub_admin", "hub_user") and user.school_id != school_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access restricted to your own school",
@@ -206,9 +205,9 @@ def list_schools(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=1000),
 ) -> SchoolListResponse:
-    """List schools with optional filters. Counselors are redirected to their own school."""
-    # Counselors: return only their school
-    if user.role == "counselor":
+    """List schools with optional filters. Hub users are redirected to their own school."""
+    # Hub users: return only their school
+    if user.role in ("hub_admin", "hub_user"):
         if user.school_id is None:
             return SchoolListResponse(items=[], total=0, skip=0, limit=limit)
         school = (
@@ -278,7 +277,7 @@ async def upload_school_logo(
 ) -> dict:
     """Upload/replace a school's logo. Accessible by hub admin users and super_admin."""
     _check_school_access(school_id, user)
-    if user.role != "super_admin" and user.hub_permission != HubPermission.ADMIN:
+    if user.role not in ("super_admin", "hub_admin"):
         raise HTTPException(status_code=403, detail="Hub admin access required to upload logo")
 
     allowed = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"}
@@ -328,7 +327,7 @@ def update_school(
 ) -> SchoolDetail:
     _check_school_access(school_id, user)
     # Require hub admin permission to update
-    if user.role != "super_admin" and user.hub_permission != HubPermission.ADMIN:
+    if user.role not in ("super_admin", "hub_admin"):
         raise HTTPException(status_code=403, detail="Hub admin access required to update school")
 
     school = db.query(School).filter(School.id == school_id).first()
@@ -337,9 +336,9 @@ def update_school(
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # Counselors may only update a safe subset of fields; name is excluded
+    # Hub admins may only update a safe subset of fields; name is excluded
     # because slug is derived from name and must stay stable
-    if user.role == "counselor":
+    if user.role == "hub_admin":
         counselor_allowed = {
             "logo_url", "nickname",
             "city", "state", "zip_code", "street_address",

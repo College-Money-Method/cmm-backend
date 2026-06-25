@@ -32,7 +32,6 @@ def get_me(user: CurrentUserDep) -> UserRoleOut:
         user_id=user.user_id,
         role=user.role,
         school_id=user.school_id,
-        hub_permission=user.hub_permission,
     )
 
 
@@ -56,7 +55,7 @@ def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut
         school_id=role_record.school_id,
         school_name=school_name,
         title=role_record.title or None,
-        hub_permission=role_record.hub_permission,
+        school_role=role_record.school_role or None,
     )
 
 
@@ -67,7 +66,8 @@ def list_counselors(
     supabase=Depends(get_supabase),
     search: str | None = Query(default=None),
     school_id: uuid.UUID | None = Query(default=None),
-    role: Literal["counselor", "viewer"] | None = Query(default=None),
+    role: Literal["hub_admin", "hub_user", "viewer"] | None = Query(default=None),
+    school_role: str | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> CounselorListResponse:
@@ -85,13 +85,15 @@ def list_counselors(
     q = (
         db.query(UserRole)
         .options(joinedload(UserRole.school))
-        .filter(UserRole.role.in_(["counselor", "viewer"]))
+        .filter(UserRole.role.in_(["hub_admin", "hub_user", "viewer"]))
     )
 
     if school_id:
         q = q.filter(UserRole.school_id == school_id)
     if role:
         q = q.filter(UserRole.role == role)
+    if school_role:
+        q = q.filter(UserRole.school_role == school_role)
 
     role_records = q.order_by(UserRole.created_at).all()
 

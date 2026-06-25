@@ -3,13 +3,12 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Enum as SAEnum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.db.base import Base
-from src.db.enums import AppRole
 
 
 class UserRole(Base):
@@ -23,11 +22,11 @@ class UserRole(Base):
         UUID(as_uuid=True), nullable=False, unique=True, index=True
     )
     role: Mapped[str] = mapped_column(
-        SAEnum("super_admin", "counselor", "viewer", name="app_role_enum"),
+        SAEnum("super_admin", "hub_admin", "hub_user", "viewer", name="app_role_enum"),
         nullable=False,
-        default="counselor",
+        default="hub_user",
     )
-    # Only set for counselor role — links them to their school
+    # Only set for hub roles — links them to their school
     school_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("schools.id", ondelete="SET NULL"),
@@ -36,12 +35,8 @@ class UserRole(Base):
     )
     # Optional job title (e.g. "Principal", "Vice Principal"); defaults to "<School> Counselor"
     title: Mapped[str | None] = mapped_column(String, nullable=True)
-    # Hub-level permission: admin can add users and edit content; user is view-only
-    hub_permission: Mapped[str] = mapped_column(
-        SAEnum("admin", "user", name="hub_permission_enum"),
-        nullable=False,
-        default="admin",
-    )
+    # Airtable job role (Director/Counselor) — display only, drives no access logic
+    school_role: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), nullable=False
     )

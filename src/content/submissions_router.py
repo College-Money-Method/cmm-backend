@@ -22,7 +22,7 @@ from src.storage.models import StorageFile
 
 router = APIRouter(prefix="/api/v1/content/submissions", tags=["submissions"])
 
-_ALLOWED_ROLES = {"counselor", "super_admin"}
+_ALLOWED_ROLES = {"hub_admin", "hub_user", "super_admin"}
 # Approved submissions can be re-opened for editing; saving resets status to draft.
 _EDITABLE_STATUSES = {"draft", "rejected", "approved"}
 

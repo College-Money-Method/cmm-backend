@@ -277,18 +277,26 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
                     logger.error("create_user failed for %s: %s", email, exc)
                     continue
 
+            # Determine Airtable school role and system role before checking existing record
+            airtable_school_role = cfields.get("Role") or "Counselor"
+            system_role = "hub_admin" if airtable_school_role == "Director" else "hub_user"
+
             # Check if UserRole already exists for this user
             user_uuid = uuid.UUID(new_user.id)
             existing_role = db.query(UserRole).filter(UserRole.user_id == user_uuid).first()
             if existing_role:
+                # Backfill school_role if it was not previously set
+                if not existing_role.school_role and airtable_school_role:
+                    existing_role.school_role = airtable_school_role
                 logger.info("UserRole already exists for user %s — skipping", email)
                 continue
 
             try:
                 user_role = UserRole(
                     user_id=user_uuid,
-                    role="counselor",
+                    role=system_role,
                     school_id=school.id,
+                    school_role=airtable_school_role,
                 )
                 db.add(user_role)
                 db.flush()
