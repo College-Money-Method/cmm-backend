@@ -587,13 +587,27 @@ def update_objective_assets(objective_id: uuid.UUID, body: ObjectiveAssetsUpdate
     if not obj:
         raise HTTPException(status_code=404, detail="Objective not found")
 
-    new_assets = db.execute(
-        select(ContentAsset).where(ContentAsset.id.in_(body.ids))
-    ).scalars().all() if body.ids else []
+    # Validate which requested ids correspond to existing assets, then rewrite
+    # the association rows preserving the order given in body.ids via sort_order.
+    existing_ids = set(db.execute(
+        select(ContentAsset.id).where(ContentAsset.id.in_(body.ids))
+    ).scalars().all()) if body.ids else set()
 
-    obj.content_assets = list(new_assets)
+    db.execute(
+        ContentAssetObjective.__table__.delete().where(
+            ContentAssetObjective.objective_id == objective_id
+        )
+    )
+    for sort_order, asset_id in enumerate(body.ids):
+        if asset_id in existing_ids:
+            db.execute(
+                ContentAssetObjective.__table__.insert().values(
+                    content_asset_id=asset_id,
+                    objective_id=objective_id,
+                    sort_order=sort_order,
+                )
+            )
     db.commit()
-    db.refresh(obj)
     # Reload with asset_type
     obj = db.execute(
         select(Objective)

@@ -111,7 +111,9 @@ class Objective(Base):
 
     workshops = relationship("Workshop", secondary="objective_workshops", back_populates="objectives")
     content_assets: Mapped[list[ContentAsset]] = relationship(
-        secondary="content_asset_objectives", back_populates="objectives"
+        secondary="content_asset_objectives",
+        back_populates="objectives",
+        order_by="ContentAssetObjective.sort_order",
     )
 
 
@@ -243,6 +245,7 @@ class ContentAssetObjective(Base):
     objective_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("objectives.id", ondelete="CASCADE"), primary_key=True
     )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
 
 class WorkshopResource(Base):
