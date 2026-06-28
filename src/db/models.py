@@ -7,6 +7,7 @@ Import all feature models here so that:
 
 from src.db.enums import CycleStatus, ProposalType, RegistrationStatus, SalesStatus
 
+from src.app_config.models import AppConfig
 from src.assets.models import Asset
 from src.guest_contacts.models import GuestContact
 from src.calendar.models import PaulMartinCalendar
@@ -38,6 +39,7 @@ __all__ = [
     "RegistrationStatus",
     "SalesStatus",
     # Models
+    "AppConfig",
     "Asset",
     "AssetType",
     "Cohort",
