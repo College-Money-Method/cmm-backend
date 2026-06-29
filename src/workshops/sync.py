@@ -81,9 +81,13 @@ def _attachment_url(val) -> str | None:
     return None
 
 
-def _parse_dt(val: str | None) -> datetime | None:
-    """Parse an Airtable ISO-8601 datetime string to an aware datetime."""
-    if not val:
+def _parse_dt(val: object) -> datetime | None:
+    """Parse an Airtable ISO-8601 datetime string to an aware datetime.
+
+    Airtable can return a non-string (e.g. an ``{"error": "#ERROR!"}`` dict from a
+    failing formula/computed field) instead of a date string — ignore those.
+    """
+    if not isinstance(val, str) or not val:
         return None
     try:
         return datetime.fromisoformat(val.replace("Z", "+00:00"))
