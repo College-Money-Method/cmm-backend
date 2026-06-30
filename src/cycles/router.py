@@ -18,6 +18,15 @@ from src.schools.schemas import SchoolListItem
 router = APIRouter(prefix="/api/v1/cohorts", tags=["cohorts"])
 
 
+@router.get("/cycles/current", response_model=CycleOut)
+def get_current_cycle(db: DbDep) -> CycleOut:
+    """Return the active cycle (public, no auth required)."""
+    cycle = db.query(Cycle).filter(Cycle.is_current == True).first()  # noqa: E712
+    if not cycle:
+        raise HTTPException(status_code=404, detail="No current cycle set")
+    return CycleOut.model_validate(cycle)
+
+
 @router.get("/cycles", response_model=list[CycleOut])
 def list_cycles(db: DbDep, _user: CurrentUserDep) -> list[CycleOut]:
     """List all cycles."""
