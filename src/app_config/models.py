@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Text, Uuid
+from sqlalchemy import Boolean, Text, Uuid
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -27,6 +27,9 @@ class AppConfig(Base):
     welcome_video_embed_code: Mapped[str | None] = mapped_column(Text)
     welcome_video_title: Mapped[str | None] = mapped_column(Text)
     welcome_video_caption: Mapped[str | None] = mapped_column(Text)
+
+    # Feature flags
+    survey_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
 
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)

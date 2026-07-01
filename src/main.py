@@ -24,6 +24,7 @@ import src.guest_contacts.models  # noqa: F401
 import src.storage.models  # noqa: F401
 import src.pages.models  # noqa: F401
 import src.app_config.models  # noqa: F401
+import src.surveys.models  # noqa: F401
 import src.communications.models  # noqa: F401
 import src.communications.schedule_model  # noqa: F401
 import src.communications.template_default_date_model  # noqa: F401
@@ -43,6 +44,7 @@ from src.pages.router import router as pages_router
 from src.app_config.router import router as app_config_router
 from src.analytics.router import router as analytics_router
 from src.communications.router import router as communications_router
+from src.surveys.router import router as surveys_router
 
 
 @asynccontextmanager
@@ -81,6 +83,7 @@ app.include_router(pages_router)
 app.include_router(app_config_router)
 app.include_router(analytics_router)
 app.include_router(communications_router)
+app.include_router(surveys_router)
 
 
 @app.get("/health")

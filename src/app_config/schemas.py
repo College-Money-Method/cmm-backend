@@ -14,6 +14,7 @@ class AppConfigUpdate(BaseModel):
     welcome_video_embed_code: str | None = None
     welcome_video_title: str | None = None
     welcome_video_caption: str | None = None
+    survey_enabled: bool | None = None
 
 
 class AppConfigOut(BaseModel):
@@ -21,6 +22,7 @@ class AppConfigOut(BaseModel):
     welcome_video_embed_code: str | None
     welcome_video_title: str | None
     welcome_video_caption: str | None
+    survey_enabled: bool
     updated_at: datetime | None
 
     model_config = {"from_attributes": True}
