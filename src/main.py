@@ -45,6 +45,7 @@ from src.app_config.router import router as app_config_router
 from src.analytics.router import router as analytics_router
 from src.communications.router import router as communications_router
 from src.surveys.router import router as surveys_router
+from src.zoom.webhook_router import router as zoom_webhook_router
 
 
 @asynccontextmanager
@@ -84,6 +85,7 @@ app.include_router(app_config_router)
 app.include_router(analytics_router)
 app.include_router(communications_router)
 app.include_router(surveys_router)
+app.include_router(zoom_webhook_router)
 
 
 @app.get("/health")

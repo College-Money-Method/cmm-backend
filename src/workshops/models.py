@@ -85,6 +85,7 @@ class Webinar(Base):
     video_embed_code: Mapped[str | None] = mapped_column(Text)
     audio_transcript: Mapped[str | None] = mapped_column(Text)
     track_registrations: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    attendance_synced_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     workshop: Mapped[Workshop] = relationship(back_populates="webinars")

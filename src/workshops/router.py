@@ -21,6 +21,7 @@ from src.cycles.models import Cycle
 from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
 from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopEmailTemplate, WorkshopNotificationSubscriber, WorkshopRegistration
+from src.workshops import attendance_sync_service
 from src.workshops.schemas import (
     AirtableSyncLogOut,
     AirtableSyncResult,
@@ -76,6 +77,7 @@ def _webinar_out(webinar: Webinar) -> WebinarOut:
         video_embed_code=webinar.video_embed_code,
         audio_transcript=webinar.audio_transcript,
         track_registrations=webinar.track_registrations,
+        attendance_synced_at=webinar.attendance_synced_at,
         created_at=webinar.created_at,
         workshop_name=webinar.workshop.name,
         cohort_name=webinar.cohort.name if webinar.cohort else None,
@@ -335,6 +337,30 @@ def delete_webinar(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
         raise HTTPException(status_code=404, detail="Webinar not found")
     db.delete(obj)
     db.commit()
+
+
+@router.post("/webinars/{webinar_id}/sync-attendance", response_model=WebinarOut)
+def sync_attendance(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
+    """Manually trigger post-webinar attendance sync from Zoom Reports API."""
+    obj = db.execute(
+        select(Webinar)
+        .where(Webinar.id == webinar_id)
+        .options(selectinload(Webinar.workshop), selectinload(Webinar.cohort), selectinload(Webinar.registrations))
+    ).scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Webinar not found")
+    if not obj.zoom_webinar_id:
+        raise HTTPException(status_code=400, detail="Webinar has no Zoom webinar ID")
+
+    synced = attendance_sync_service.sync_webinar_attendance(obj.zoom_webinar_id, db)
+    if not synced:
+        raise HTTPException(
+            status_code=503,
+            detail="Zoom participant report not yet available — try again in a few minutes",
+        )
+
+    db.refresh(obj)
+    return _webinar_out(obj)
 
 
 @router.get("/webinars/{webinar_id}/registrations", response_model=list[RegistrationOut])

@@ -184,6 +184,7 @@ class WebinarOut(BaseModel):
     video_embed_code: str | None
     audio_transcript: str | None
     track_registrations: bool
+    attendance_synced_at: datetime | None = None
     created_at: datetime
     workshop_name: str
     cohort_name: str | None

@@ -191,6 +191,71 @@ def register_webinar(
         return None
 
 
+def get_webinar_participants(zoom_webinar_id: str) -> list[dict] | None:
+    """
+    Fetch the post-webinar participant report from the Zoom Reports API.
+
+    Returns a flat list of participant dicts (each has ``user_email``,
+    ``registrant_id``, ``join_time``, ``leave_time``, ``duration``),
+    or ``None`` if credentials are not configured or the report is not yet
+    available (Zoom delays report availability 5–30 min after the webinar ends).
+
+    Requires the ``report:read:admin`` scope on the S2S OAuth app.
+    Handles pagination automatically via ``next_page_token``.
+    """
+    if not (settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret):
+        logger.debug("Zoom credentials not configured — skipping participant fetch")
+        return None
+
+    try:
+        token = _get_access_token()
+        participants: list[dict] = []
+        next_page_token = ""
+
+        while True:
+            params: dict[str, str] = {"page_size": "300"}
+            if next_page_token:
+                params["next_page_token"] = next_page_token
+
+            resp = httpx.get(
+                f"{_ZOOM_API_BASE}/report/webinars/{zoom_webinar_id}/participants",
+                headers={"Authorization": f"Bearer {token}"},
+                params=params,
+                timeout=15.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            participants.extend(data.get("participants", []))
+
+            next_page_token = data.get("next_page_token", "")
+            if not next_page_token:
+                break
+
+        logger.info(
+            "Zoom participant report fetched — webinar=%s count=%d",
+            zoom_webinar_id,
+            len(participants),
+        )
+        return participants
+
+    except httpx.HTTPStatusError as exc:
+        # 404 means report not yet generated; caller should retry later
+        logger.warning(
+            "Zoom participant report unavailable — webinar=%s status=%s body=%s",
+            zoom_webinar_id,
+            exc.response.status_code,
+            exc.response.text,
+        )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "Zoom participant report fetch failed — webinar=%s error=%s",
+            zoom_webinar_id,
+            exc,
+        )
+        return None
+
+
 def get_webinar(zoom_webinar_id: str) -> dict | None:
     """
     Fetch webinar details from the Zoom API.
