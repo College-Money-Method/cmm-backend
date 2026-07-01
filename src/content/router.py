@@ -40,6 +40,7 @@ from src.schools.models import School
 from src.search.models import SearchLog
 from src.workshops.models import Workshop
 from src.content.schemas import (
+    AdminReviewAction,
     AssetTypeCreate,
     AssetTypeOut,
     AssetTypeUpdate,
@@ -77,6 +78,7 @@ from src.content.schemas import (
     ResourceCategoryOut,
     ResourceCategoryUpdate,
     ResourcesUpdate,
+    SubmissionOut,
     TopicCreate,
     TopicDetail,
     TopicListItem,
@@ -585,13 +587,27 @@ def update_objective_assets(objective_id: uuid.UUID, body: ObjectiveAssetsUpdate
     if not obj:
         raise HTTPException(status_code=404, detail="Objective not found")
 
-    new_assets = db.execute(
-        select(ContentAsset).where(ContentAsset.id.in_(body.ids))
-    ).scalars().all() if body.ids else []
+    # Validate which requested ids correspond to existing assets, then rewrite
+    # the association rows preserving the order given in body.ids via sort_order.
+    existing_ids = set(db.execute(
+        select(ContentAsset.id).where(ContentAsset.id.in_(body.ids))
+    ).scalars().all()) if body.ids else set()
 
-    obj.content_assets = list(new_assets)
+    db.execute(
+        ContentAssetObjective.__table__.delete().where(
+            ContentAssetObjective.objective_id == objective_id
+        )
+    )
+    for sort_order, asset_id in enumerate(body.ids):
+        if asset_id in existing_ids:
+            db.execute(
+                ContentAssetObjective.__table__.insert().values(
+                    content_asset_id=asset_id,
+                    objective_id=objective_id,
+                    sort_order=sort_order,
+                )
+            )
     db.commit()
-    db.refresh(obj)
     # Reload with asset_type
     obj = db.execute(
         select(Objective)
@@ -760,6 +776,8 @@ def list_assets_public(
     cohort_id: Annotated[uuid.UUID | None, Query()] = None,
     school_id: Annotated[uuid.UUID | None, Query()] = None,
     is_featured: Annotated[bool | None, Query()] = None,
+    is_public: Annotated[bool | None, Query()] = None,
+    audience: Annotated[str | None, Query()] = None,  # "counselor" | "family"
     sort_by: Annotated[str, Query()] = "created_at",
     sort_dir: Annotated[str, Query()] = "desc",
     skip: Annotated[int, Query(ge=0)] = 0,
@@ -818,6 +836,14 @@ def list_assets_public(
 
     if is_featured is not None:
         stmt = stmt.where(ContentAsset.is_featured == is_featured)
+
+    if is_public is not None:
+        stmt = stmt.where(ContentAsset.is_public == is_public)
+
+    if audience == "counselor":
+        stmt = stmt.where(ContentAsset.for_counselor.is_(True))
+    elif audience == "family":
+        stmt = stmt.where(ContentAsset.for_family.is_(True))
 
     # Objective filtering (single or multi)
     obj_ids = _parse_csv_uuids(objective_ids)
@@ -1589,6 +1615,97 @@ def update_grade_config_goals(
 
     gc = db.query(GradeConfig).options(selectinload(GradeConfig.goals)).filter(GradeConfig.id == gc.id).one()
     return _gc_summary(gc)
+
+
+# ── Admin submission review ───────────────────────────────────────────────────
+
+@router.get("/submissions/admin", response_model=ContentAssetListResponse)
+def list_submissions_admin(
+    db: DbDep,
+    _admin: AdminDep,
+    review_status: Annotated[str | None, Query()] = None,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+):
+    """Admin: list all counselor-submitted resources, optionally filtered by review_status."""
+    stmt = (
+        select(ContentAsset)
+        .options(selectinload(ContentAsset.asset_type))
+        .where(ContentAsset.source == "counselor")
+    )
+    if review_status:
+        stmt = stmt.where(ContentAsset.review_status == review_status)
+
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = db.scalar(count_stmt)
+
+    items = db.scalars(
+        stmt.order_by(ContentAsset.created_at.desc()).offset(skip).limit(limit)
+    ).all()
+    return {"items": items, "total": total, "skip": skip, "limit": limit}
+
+
+@router.get("/submissions/admin/{submission_id}", response_model=SubmissionOut)
+def get_submission_admin(
+    submission_id: uuid.UUID,
+    db: DbDep,
+    _admin: AdminDep,
+):
+    """Admin: get a single counselor-submitted resource by ID."""
+    asset = db.scalar(
+        select(ContentAsset)
+        .options(selectinload(ContentAsset.asset_type))
+        .where(ContentAsset.id == submission_id, ContentAsset.source == "counselor")
+    )
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    return asset
+
+
+@router.patch("/submissions/{submission_id}/approve", response_model=SubmissionOut)
+def approve_submission(
+    submission_id: uuid.UUID, body: AdminReviewAction, _admin: AdminDep, db: DbDep
+):
+    """Admin: approve a counselor submission and publish it."""
+    obj = db.get(ContentAsset, submission_id)
+    if not obj or obj.source != "counselor":
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    obj.review_status = "approved"
+    obj.status = "published"
+    obj.for_family = body.for_family
+    obj.for_counselor = body.for_counselor
+    if body.review_notes is not None:
+        obj.review_notes = body.review_notes
+    db.commit()
+
+    stmt = (
+        select(ContentAsset)
+        .where(ContentAsset.id == submission_id)
+        .options(selectinload(ContentAsset.asset_type))
+    )
+    return db.scalar(stmt)
+
+
+@router.patch("/submissions/{submission_id}/reject", response_model=SubmissionOut)
+def reject_submission(
+    submission_id: uuid.UUID, body: AdminReviewAction, _admin: AdminDep, db: DbDep
+):
+    """Admin: reject a counselor submission with optional notes."""
+    obj = db.get(ContentAsset, submission_id)
+    if not obj or obj.source != "counselor":
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    obj.review_status = "rejected"
+    obj.review_notes = body.review_notes
+    db.commit()
+
+    stmt = (
+        select(ContentAsset)
+        .where(ContentAsset.id == submission_id)
+        .options(selectinload(ContentAsset.asset_type))
+    )
+    return db.scalar(stmt)
 
 
 # ── Click tracking ───────────────────────────────────────────────────────────

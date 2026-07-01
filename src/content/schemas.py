@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 # ── Tags ─────────────────────────────────────────────────────────────────────
@@ -111,6 +111,8 @@ class ContentAssetSummary(BaseModel):
     name: str
     description: str | None
     image_url: str | None
+    link: str | None = None
+    status: str = "draft"
     asset_type: AssetTypeOut | None
 
     model_config = {"from_attributes": True}
@@ -271,6 +273,7 @@ class ContentAssetListItem(BaseModel):
     description: str | None
     status: str
     is_featured: bool
+    is_public: bool = False
     image_url: str | None
     link: str | None
     asset_type: AssetTypeOut | None
@@ -280,6 +283,8 @@ class ContentAssetListItem(BaseModel):
     video_duration_seconds: int | None = None
     popularity_score: int | None = None
     click_count: int = 0
+    source: str | None = None
+    review_status: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -307,6 +312,7 @@ class ContentAssetDetail(BaseModel):
     image_url: str | None
     file_url: str | None
     is_featured: bool
+    is_public: bool = False
     status: str
     wp_post_id: str | None
     wp_synced_at: datetime | None
@@ -328,6 +334,12 @@ class ContentAssetDetail(BaseModel):
     faqs: list[FaqOut]
     resources: list[ContentAssetListItem]
     tags: list[TagOut] = []
+    source: str | None = None
+    review_status: str | None = None
+    review_notes: str | None = None
+    ai_review_score: float | None = None
+    ai_review_summary: str | None = None
+    submitted_by_id: uuid.UUID | None = None
 
     model_config = {"from_attributes": True}
 
@@ -355,6 +367,7 @@ class ContentAssetCreate(BaseModel):
     embed_code: str | None = None
     image_url: str | None = None
     is_featured: bool = False
+    is_public: bool = False
     status: str = "draft"
     wp_post_id: str | None = None
     why_important: str | None = None
@@ -380,6 +393,7 @@ class ContentAssetUpdate(BaseModel):
     embed_code: str | None = None
     image_url: str | None = None
     is_featured: bool | None = None
+    is_public: bool | None = None
     status: str | None = None
     wp_post_id: str | None = None
     video_duration_seconds: int | None = None
@@ -638,5 +652,65 @@ class ResourceCategoryUpdate(BaseModel):
         if v is not None and v not in ("draft", "published"):
             raise ValueError("status must be draft or published")
         return v
+
+
+# ── Counselor Submissions ─────────────────────────────────────────────────────
+
+class SubmissionCreate(BaseModel):
+    name: str
+    description: str | None = None
+    link: str | None = None
+    asset_type_id: str | None = None
+    suggested_grades: str | None = None
+    why_important: str | None = None
+    how_to_use: str | None = None
+    time_estimate_minutes: int | None = None
+    embed_code: str | None = None
+    content: str | None = None
+
+
+class SubmissionUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    link: str | None = None
+    asset_type_id: str | None = None
+    suggested_grades: str | None = None
+    why_important: str | None = None
+    how_to_use: str | None = None
+    time_estimate_minutes: int | None = None
+    embed_code: str | None = None
+    content: str | None = None
+
+
+class SubmissionOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    link: str | None
+    image_url: str | None
+    asset_type: AssetTypeOut | None
+    suggested_grades: str | None
+    why_important: str | None
+    how_to_use: str | None
+    time_estimate_minutes: int | None
+    embed_code: str | None
+    content: str | None
+    status: str
+    source: str
+    review_status: str
+    review_notes: str | None
+    ai_review_score: float | None
+    ai_review_summary: str | None
+    submitted_by_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminReviewAction(BaseModel):
+    review_notes: str | None = None
+    for_family: bool = True
+    for_counselor: bool = True
 
 

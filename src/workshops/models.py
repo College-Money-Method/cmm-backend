@@ -35,6 +35,7 @@ class Workshop(Base):
     sequence_number: Mapped[int | None] = mapped_column(Integer, unique=True)
     suggested_grades: Mapped[str | None] = mapped_column(Text)
     resource_center_slug: Mapped[str | None] = mapped_column(Text, unique=True)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     workshop_art_url: Mapped[str | None] = mapped_column(Text)
     action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     key_action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
@@ -75,6 +76,7 @@ class Webinar(Base):
             "END"
         ),
     )
+    slug: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     join_url: Mapped[str | None] = mapped_column(Text)
     start_url: Mapped[str | None] = mapped_column(Text)
@@ -83,6 +85,7 @@ class Webinar(Base):
     video_embed_code: Mapped[str | None] = mapped_column(Text)
     audio_transcript: Mapped[str | None] = mapped_column(Text)
     track_registrations: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    attendance_synced_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     workshop: Mapped[Workshop] = relationship(back_populates="webinars")
@@ -103,6 +106,7 @@ class WorkshopRegistration(Base):
     __tablename__ = "workshop_registrations"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     webinar_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("webinars.id", ondelete="CASCADE"), nullable=False)
     school_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("schools.id"))
     first_name: Mapped[str | None] = mapped_column(Text)
@@ -162,6 +166,7 @@ class PortalMapping(Base):
     __tablename__ = "portal_mapping"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     school_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
     webinar_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("webinars.id", ondelete="CASCADE"), nullable=False)
     pre_webinar_reminder_sent_on: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
@@ -177,6 +182,27 @@ class PortalMapping(Base):
         UniqueConstraint("school_id", "webinar_id", name="uq_portal_mapping_school_webinar"),
         Index("idx_portal_mapping_school_id", "school_id"),
         Index("idx_portal_mapping_webinar_id", "webinar_id"),
+    )
+
+
+class WorkshopEmailTemplate(Base):
+    __tablename__ = "workshop_email_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    # Nullable: NULL = legacy global template; non-null = workshop-specific
+    workshop_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("workshops.id", ondelete="CASCADE"), nullable=True
+    )
+    type: Mapped[str] = mapped_column(Text, nullable=False)      # "announcement" | "followup"
+    name: Mapped[str] = mapped_column(Text, nullable=False)       # display label
+    subject: Mapped[str] = mapped_column(Text, nullable=False)    # merge-tag aware subject
+    body: Mapped[str] = mapped_column(Text, nullable=False)       # merge-tag aware body
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True, onupdate=func.now())
+
+    __table_args__ = (
+        Index("idx_workshop_email_templates_type", "type"),
+        Index("idx_workshop_email_templates_workshop", "workshop_id"),
     )
 
 

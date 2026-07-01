@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CohortSummary(BaseModel):
@@ -46,7 +46,15 @@ class SchoolListItem(BaseModel):
     logo_url: str | None = None
     logo_thumb_url: str | None = None
     slug: str | None = None
+    # Read from ORM but excluded from response — used only to compute effective slug below
+    airtable_slug: str | None = Field(default=None, exclude=True)
     nickname: str | None = None
+
+    @model_validator(mode="after")
+    def _effective_slug(self) -> "SchoolListItem":
+        """Prefer the Airtable-curated slug over the auto-generated one."""
+        self.slug = self.airtable_slug or self.slug
+        return self
     cohort_id: uuid.UUID | None = None
     cohort: CohortSummary | None = None
     grade_set_id: uuid.UUID | None = None
@@ -131,7 +139,14 @@ class SchoolPublic(BaseModel):
     id: uuid.UUID
     name: str
     slug: str | None = None
+    airtable_slug: str | None = Field(default=None, exclude=True)
     nickname: str | None = None
+
+    @model_validator(mode="after")
+    def _effective_slug(self) -> "SchoolPublic":
+        """Prefer the Airtable-curated slug over the auto-generated one."""
+        self.slug = self.airtable_slug or self.slug
+        return self
     city: str | None = None
     state: str | None = None
     logo_url: str | None = None
@@ -158,3 +173,11 @@ class CounselorPublicOut(BaseModel):
     last_name: str | None = None
     title: str | None = None
     email: str | None = None
+
+
+class SchoolSyncResult(BaseModel):
+    schools_created: int
+    contacts_created: int
+    counselors_created: int
+    skipped: int
+    synced_at: datetime

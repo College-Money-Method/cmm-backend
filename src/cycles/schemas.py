@@ -49,3 +49,23 @@ class CycleOut(BaseModel):
     beginning_date: datetime | None = None
     end_date: datetime | None = None
     is_current: bool = False
+
+
+class CycleCreate(BaseModel):
+    name: str
+    beginning_date: datetime | None = None
+    end_date: datetime | None = None
+    is_current: bool = False
+
+
+class CycleUpdate(BaseModel):
+    name: str | None = None
+    beginning_date: datetime | None = None
+    end_date: datetime | None = None
+    is_current: bool | None = None
+
+
+class CohortSyncResult(BaseModel):
+    created: int
+    skipped: int
+    synced_at: datetime

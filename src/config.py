@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     zoom_account_id: str = ""
     zoom_client_id: str = ""
     zoom_client_secret: str = ""
+    # Zoom webhook secret token (from Marketplace app → Event Subscriptions)
+    zoom_webhook_secret_token: str = ""
+
+    # PostHog (analytics queries — server-side only)
+    posthog_api_key: str = ""
+    posthog_project_id: str = ""
 
     # App
     log_level: str = "DEBUG"

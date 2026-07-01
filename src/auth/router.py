@@ -15,6 +15,7 @@ from src.auth.schemas import (
     CounselorCreate,
     CounselorListResponse,
     CounselorOut,
+    CounselorSyncResult,
     CounselorUpdate,
     UserRoleOut,
 )
@@ -55,7 +56,16 @@ def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut
         school_id=role_record.school_id,
         school_name=school_name,
         title=role_record.title or None,
+        school_role=role_record.school_role or None,
     )
+
+
+@router.post("/api/v1/counselors/sync-airtable", response_model=CounselorSyncResult)
+def sync_counselors_airtable(_admin: AdminDep, db: DbDep, supabase=Depends(get_supabase)) -> CounselorSyncResult:
+    """Provision missing counselor accounts from Airtable contacts."""
+    from src.schools.sync import sync_counselors_from_airtable
+    result = sync_counselors_from_airtable(db, supabase)
+    return CounselorSyncResult(**result)
 
 
 @router.get("/api/v1/counselors", response_model=CounselorListResponse)
@@ -65,7 +75,9 @@ def list_counselors(
     supabase=Depends(get_supabase),
     search: str | None = Query(default=None),
     school_id: uuid.UUID | None = Query(default=None),
-    role: Literal["counselor", "viewer"] | None = Query(default=None),
+    no_school: bool = Query(default=False),
+    role: Literal["hub_admin", "hub_user", "viewer"] | None = Query(default=None),
+    school_role: str | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> CounselorListResponse:
@@ -83,13 +95,17 @@ def list_counselors(
     q = (
         db.query(UserRole)
         .options(joinedload(UserRole.school))
-        .filter(UserRole.role.in_(["counselor", "viewer"]))
+        .filter(UserRole.role.in_(["hub_admin", "hub_user", "viewer"]))
     )
 
-    if school_id:
+    if no_school and user.role == "super_admin":
+        q = q.filter(UserRole.school_id.is_(None))
+    elif school_id:
         q = q.filter(UserRole.school_id == school_id)
     if role:
         q = q.filter(UserRole.role == role)
+    if school_role:
+        q = q.filter(UserRole.school_role == school_role)
 
     role_records = q.order_by(UserRole.created_at).all()
 

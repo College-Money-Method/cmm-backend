@@ -17,6 +17,7 @@ class OneOnOneMeeting(Base):
     __tablename__ = "one_on_one_meetings"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     school_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("schools.id"))
     cycle_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("cycles.id"))
     first_name: Mapped[str | None] = mapped_column(Text)

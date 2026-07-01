@@ -4,15 +4,18 @@ import uuid
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
-from src.auth.deps import AdminDep, CurrentUserDep
+from src.auth.deps import AdminDep, CounselorDep, CurrentUserDep
 from src.auth.models import UserRole
+from src.config import settings
 from src.db.client import get_supabase
 from src.db.deps import DbDep
 from src.schools.models import Contact, School
+from src.schools.slug_utils import unique_slug_db
+from src.storage.s3_client import S3ClientDep
 from src.content.models import GradeSet
 from src.schools.schemas import (
     SchoolCreate,
@@ -24,6 +27,7 @@ from src.schools.schemas import (
     SchoolPasswordVerify,
     SchoolPublic,
     SchoolPublicListResponse,
+    SchoolSyncResult,
     SchoolUpdate,
     CounselorPublicOut,
 )
@@ -38,13 +42,13 @@ def get_school_counselors_public(
     supabase=Depends(get_supabase),
 ) -> list[CounselorPublicOut]:
     """Return counselors assigned to a school (public, no auth required)."""
-    school = db.query(School).filter(School.slug == slug).first()
+    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
 
     roles = (
         db.query(UserRole)
-        .filter(UserRole.school_id == school.id, UserRole.role == "counselor")
+        .filter(UserRole.school_id == school.id, UserRole.role.in_(["hub_admin", "hub_user"]))
         .all()
     )
 
@@ -69,8 +73,8 @@ def get_school_counselors_public(
 
 
 def _check_school_access(school_id: uuid.UUID, user: CurrentUserDep) -> None:
-    """Enforce counselor scope: counselors may only access their own school."""
-    if user.role == "counselor" and user.school_id != school_id:
+    """Enforce hub user scope: hub users may only access their own school."""
+    if user.role in ("hub_admin", "hub_user") and user.school_id != school_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access restricted to your own school",
@@ -78,6 +82,13 @@ def _check_school_access(school_id: uuid.UUID, user: CurrentUserDep) -> None:
 
 
 # ── Literal routes MUST come before /{school_id} ──────────────────────────────
+
+
+@router.post("/sync-airtable", response_model=SchoolSyncResult)
+def sync_schools_airtable(_admin: AdminDep, db: DbDep, supabase=Depends(get_supabase)) -> SchoolSyncResult:
+    """Admin: create new schools, contacts, and counselor auth accounts from Airtable."""
+    from src.schools.sync import sync_schools_contacts_from_airtable
+    return sync_schools_contacts_from_airtable(db, supabase)
 
 
 @router.get("/states", response_model=list[str])
@@ -137,7 +148,7 @@ def list_schools_public(
 @router.get("/slug/{slug}", response_model=SchoolPublic)
 def get_school_by_slug(slug: str, db: DbDep) -> SchoolPublic:
     """Get a school by slug (no auth required). Returns safe public fields only."""
-    school = db.query(School).filter(School.slug == slug).first()
+    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
     return SchoolPublic.model_validate(school)
@@ -146,7 +157,7 @@ def get_school_by_slug(slug: str, db: DbDep) -> SchoolPublic:
 @router.post("/slug/{slug}/verify-password", status_code=status.HTTP_200_OK)
 def verify_school_password(slug: str, body: SchoolPasswordVerify, db: DbDep) -> dict:
     """Verify the school portal password. Returns 200 + school data if correct, 401 if wrong."""
-    school = db.query(School).filter(School.slug == slug).first()
+    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
     if school.cmm_website_password != body.password:
@@ -194,9 +205,9 @@ def list_schools(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=1000),
 ) -> SchoolListResponse:
-    """List schools with optional filters. Counselors are redirected to their own school."""
-    # Counselors: return only their school
-    if user.role == "counselor":
+    """List schools with optional filters. Hub users are redirected to their own school."""
+    # Hub users: return only their school
+    if user.role in ("hub_admin", "hub_user"):
         if user.school_id is None:
             return SchoolListResponse(items=[], total=0, skip=0, limit=limit)
         school = (
@@ -238,7 +249,9 @@ def list_schools(
 @router.post("", response_model=SchoolDetail, status_code=status.HTTP_201_CREATED)
 def create_school(body: SchoolCreate, _admin: AdminDep, db: DbDep) -> SchoolDetail:
     """Create a new school (admin only)."""
-    school = School(**body.model_dump(exclude_none=True))
+    data = body.model_dump(exclude_none=True)
+    data.setdefault("slug", unique_slug_db(body.name, db))
+    school = School(**data)
     db.add(school)
     db.commit()
     db.refresh(school)
@@ -252,6 +265,43 @@ def create_school(body: SchoolCreate, _admin: AdminDep, db: DbDep) -> SchoolDeta
 
 
 # ── Single-resource endpoints ──────────────────────────────────────────────────
+
+
+@router.post("/{school_id}/logo")
+async def upload_school_logo(
+    school_id: uuid.UUID,
+    file: UploadFile,
+    user: CounselorDep,
+    db: DbDep,
+    s3: S3ClientDep,
+) -> dict:
+    """Upload/replace a school's logo. Accessible by hub admin users and super_admin."""
+    _check_school_access(school_id, user)
+    if user.role not in ("super_admin", "hub_admin"):
+        raise HTTPException(status_code=403, detail="Hub admin access required to upload logo")
+
+    allowed = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"}
+    if not file.content_type or file.content_type not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid file type. Allowed: jpeg, png, gif, webp, svg")
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "png"
+    key = f"uploads/school-logos/{school_id}/{uuid.uuid4()}.{ext}"
+
+    content = await file.read()
+    s3.put_object(
+        Bucket=settings.s3_bucket_name,
+        Key=key,
+        Body=content,
+        ContentType=file.content_type,
+    )
+    url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{key}"
+
+    school = db.get(School, school_id)
+    if school:
+        school.logo_url = url
+        db.commit()
+
+    return {"url": url}
 
 
 @router.get("/{school_id}", response_model=SchoolDetail)
@@ -276,9 +326,9 @@ def update_school(
     user: CurrentUserDep,
 ) -> SchoolDetail:
     _check_school_access(school_id, user)
-    # Viewers cannot write
-    if user.role == "viewer":
-        raise HTTPException(status_code=403, detail="Read-only access")
+    # Require hub admin permission to update
+    if user.role not in ("super_admin", "hub_admin"):
+        raise HTTPException(status_code=403, detail="Hub admin access required to update school")
 
     school = db.query(School).filter(School.id == school_id).first()
     if not school:
@@ -286,9 +336,11 @@ def update_school(
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # Counselors may only update a safe subset of fields
-    if user.role == "counselor":
+    # Hub admins may only update a safe subset of fields; name is excluded
+    # because slug is derived from name and must stay stable
+    if user.role == "hub_admin":
         counselor_allowed = {
+            "logo_url", "nickname",
             "city", "state", "zip_code", "street_address",
             "appointlet_link", "calendar_link",
         }

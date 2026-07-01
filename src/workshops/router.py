@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import cast, String, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
-from src.auth.deps import AdminDep, CurrentUserDep
+from src.auth.deps import AdminDep, CounselorDep, CurrentUserDep
 from src.db.deps import DbDep
 from src.integrations import zoom as zoom_client
 from src.utils.tiptap import extract_text
@@ -19,10 +20,14 @@ from src.content.models import ContentAsset, WorkshopResource, Objective
 from src.cycles.models import Cycle
 from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
-from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopNotificationSubscriber, WorkshopRegistration
+from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopEmailTemplate, WorkshopNotificationSubscriber, WorkshopRegistration
+from src.workshops import attendance_sync_service
 from src.workshops.schemas import (
     AirtableSyncLogOut,
     AirtableSyncResult,
+    EmailTemplateCreate,
+    EmailTemplateOut,
+    EmailTemplateUpdate,
     NotificationSubscribeRequest,
     NotificationSubscriberOut,
     ObjectiveIdsBody,
@@ -72,10 +77,12 @@ def _webinar_out(webinar: Webinar) -> WebinarOut:
         video_embed_code=webinar.video_embed_code,
         audio_transcript=webinar.audio_transcript,
         track_registrations=webinar.track_registrations,
+        attendance_synced_at=webinar.attendance_synced_at,
         created_at=webinar.created_at,
         workshop_name=webinar.workshop.name,
         cohort_name=webinar.cohort.name if webinar.cohort else None,
         registration_count=len(webinar.registrations),
+        slug=webinar.slug,
     )
 
 
@@ -143,7 +150,7 @@ def _registration_out(reg: WorkshopRegistration) -> RegistrationOut:
         attended=reg.attended,
         join_time=reg.join_time,
         leave_time=reg.leave_time,
-        zoom_registrant_id=reg.zoom_registrant_id,
+        zoom_registrant_id=str(reg.zoom_registrant_id) if reg.zoom_registrant_id is not None else None,
         questions=reg.questions,
         registration_time=reg.registration_time,
         created_at=reg.created_at,
@@ -180,6 +187,7 @@ def _to_item(
         if "suggested_grades" in override
         else workshop.suggested_grades
     )
+    school_regs = [r for r in (webinar.registrations or []) if r.school_id == mapping.school_id]
     return WorkshopPortalItem(
         portal_mapping_id=mapping.id,
         school_override=override or None,
@@ -206,6 +214,9 @@ def _to_item(
         cycle_name=webinar.cycle.name if webinar.cycle else None,
         prev_cycle_video_embed_code=prev_cycle_video_embed_code,
         prev_cycle_name=prev_cycle_name,
+        slug=webinar.slug,
+        registration_count=len(school_regs),
+        attendee_count=sum(1 for r in school_regs if r.attended),
     )
 
 
@@ -277,6 +288,7 @@ def list_all_webinars(
             cohort_name=w.cohort.name if w.cohort else None,
             cycle_id=w.cycle_id,
             cycle_name=w.cycle.name if w.cycle else None,
+            slug=w.slug,
         )
         for w in webinars
     ]
@@ -327,6 +339,30 @@ def delete_webinar(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
     db.commit()
 
 
+@router.post("/webinars/{webinar_id}/sync-attendance", response_model=WebinarOut)
+def sync_attendance(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
+    """Manually trigger post-webinar attendance sync from Zoom Reports API."""
+    obj = db.execute(
+        select(Webinar)
+        .where(Webinar.id == webinar_id)
+        .options(selectinload(Webinar.workshop), selectinload(Webinar.cohort), selectinload(Webinar.registrations))
+    ).scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Webinar not found")
+    if not obj.zoom_webinar_id:
+        raise HTTPException(status_code=400, detail="Webinar has no Zoom webinar ID")
+
+    synced = attendance_sync_service.sync_webinar_attendance(obj.zoom_webinar_id, db)
+    if not synced:
+        raise HTTPException(
+            status_code=503,
+            detail="Zoom participant report not yet available — try again in a few minutes",
+        )
+
+    db.refresh(obj)
+    return _webinar_out(obj)
+
+
 @router.get("/webinars/{webinar_id}/registrations", response_model=list[RegistrationOut])
 def list_registrations(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
     webinar = db.get(Webinar, webinar_id)
@@ -338,6 +374,42 @@ def list_registrations(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
         .options(selectinload(WorkshopRegistration.school))
         .order_by(WorkshopRegistration.created_at)
     ).scalars().all()
+    return [_registration_out(r) for r in regs]
+
+
+@router.get("/webinars/{webinar_id}/my-registrations", response_model=list[RegistrationOut])
+def list_my_registrations(webinar_id: uuid.UUID, user: CounselorDep, db: DbDep):
+    """Counselor-facing registrations list, scoped to the caller's own school.
+
+    super_admin sees every registration (same as the admin endpoint). Counselors /
+    viewers only see registrations tagged with their school, and only for webinars
+    that are mapped to their school's portal.
+    """
+    webinar = db.get(Webinar, webinar_id)
+    if not webinar:
+        raise HTTPException(status_code=404, detail="Webinar not found")
+
+    stmt = (
+        select(WorkshopRegistration)
+        .where(WorkshopRegistration.webinar_id == webinar_id)
+        .options(selectinload(WorkshopRegistration.school))
+        .order_by(WorkshopRegistration.created_at)
+    )
+
+    if user.role != "super_admin":
+        if not user.school_id:
+            raise HTTPException(status_code=403, detail="No school associated with your account")
+        mapping = db.execute(
+            select(PortalMapping).where(
+                PortalMapping.webinar_id == webinar_id,
+                PortalMapping.school_id == user.school_id,
+            )
+        ).scalar_one_or_none()
+        if not mapping:
+            raise HTTPException(status_code=403, detail="Webinar not in your school's portal")
+        stmt = stmt.where(WorkshopRegistration.school_id == user.school_id)
+
+    regs = db.execute(stmt).scalars().all()
     return [_registration_out(r) for r in regs]
 
 
@@ -435,7 +507,7 @@ def remove_webinar_school(webinar_id: uuid.UUID, school_id: uuid.UUID, _admin: A
 def update_portal_mapping_override(
     portal_mapping_id: uuid.UUID,
     body: PortalMappingOverrideUpdate,
-    user: CurrentUserDep,
+    user: CounselorDep,
     db: DbDep,
 ) -> dict:
     """Counselor: shallow-merge override fields into portal_mapping.school_override.
@@ -510,14 +582,67 @@ def list_notification_subscribers(
     return [_subscriber_out(r) for r in rows]
 
 
+# ── Admin: Email templates (literal prefix) ──────────────────────────────────
+
+
+@router.get("/email-templates", response_model=list[EmailTemplateOut])
+def list_email_templates(
+    _user: CounselorDep,
+    db: DbDep,
+    workshop_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> list[EmailTemplateOut]:
+    """Counselor: list email templates. Optionally filtered to a specific workshop."""
+    stmt = select(WorkshopEmailTemplate).order_by(WorkshopEmailTemplate.type, WorkshopEmailTemplate.name)
+    if workshop_id is not None:
+        stmt = stmt.where(WorkshopEmailTemplate.workshop_id == workshop_id)
+    templates = db.execute(stmt).scalars().all()
+    return [EmailTemplateOut.model_validate(t) for t in templates]
+
+
+@router.post("/email-templates", response_model=EmailTemplateOut, status_code=status.HTTP_201_CREATED)
+def create_email_template(body: EmailTemplateCreate, _admin: AdminDep, db: DbDep) -> EmailTemplateOut:
+    """Admin: create a new workshop email template."""
+    obj = WorkshopEmailTemplate(**body.model_dump())
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return EmailTemplateOut.model_validate(obj)
+
+
+@router.patch("/email-templates/{template_id}", response_model=EmailTemplateOut)
+def update_email_template(template_id: uuid.UUID, body: EmailTemplateUpdate, _admin: AdminDep, db: DbDep) -> EmailTemplateOut:
+    """Admin: partial-update a workshop email template."""
+    obj = db.get(WorkshopEmailTemplate, template_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Email template not found")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(obj, k, v)
+    db.commit()
+    db.refresh(obj)
+    return EmailTemplateOut.model_validate(obj)
+
+
+@router.delete("/email-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_email_template(template_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> None:
+    """Admin: delete a workshop email template."""
+    obj = db.get(WorkshopEmailTemplate, template_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Email template not found")
+    db.delete(obj)
+    db.commit()
+
+
 # ── Public endpoints (literal prefix) ───────────────────────────────────────
 
 
-def _get_prev_cycle_recording(workshop_id: uuid.UUID, db: DbDep) -> tuple[str | None, str | None]:
+def _get_prev_cycle_recording(workshop_id: uuid.UUID, school_id: uuid.UUID, db: DbDep) -> tuple[str | None, str | None]:
     """Return (video_embed_code, cycle_name) for the most recent past webinar
-    of the given workshop that has a recording. Returns (None, None) if none found."""
+    of the given workshop that has a recording and is mapped to the given school.
+    Returns (None, None) if none found."""
     row = db.execute(
         select(Webinar)
+        .join(PortalMapping,
+              (PortalMapping.webinar_id == Webinar.id) & (PortalMapping.school_id == school_id))
         .where(
             Webinar.workshop_id == workshop_id,
             Webinar.video_embed_code.isnot(None),
@@ -589,6 +714,7 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
                         selectinload(Workshop.objectives).selectinload(Objective.content_assets).selectinload(ContentAsset.asset_type),
                     ),
                     selectinload(Webinar.cycle),
+                    selectinload(Webinar.registrations),
                 )
             )
             .order_by(PortalMapping.created_at)
@@ -604,14 +730,14 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
     for mapping in mappings:
         webinar = mapping.webinar
         is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
-        # Past: only include webinars from the current cycle (or with no cycle set)
-        if not is_upcoming:
-            cycle = webinar.cycle
-            if cycle is not None and not cycle.is_current:
-                continue
+        # Skip webinars from non-current cycles (upcoming and past alike).
+        # Webinars with no cycle assigned are always included.
+        cycle = webinar.cycle
+        if cycle is not None and not cycle.is_current:
+            continue
 
         if is_upcoming:
-            prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, db)
+            prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, school_id, db)
             item = _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
             upcoming.append(item)
         else:
@@ -645,6 +771,7 @@ def get_school_webinar_by_prefix(school_id: uuid.UUID, prefix: str, db: DbDep) -
                         selectinload(Workshop.objectives).selectinload(Objective.content_assets).selectinload(ContentAsset.asset_type),
                     ),
                     selectinload(Webinar.cycle),
+                    selectinload(Webinar.registrations),
                 )
             )
         )
@@ -657,7 +784,7 @@ def get_school_webinar_by_prefix(school_id: uuid.UUID, prefix: str, db: DbDep) -
     now = datetime.now(tz=timezone.utc)
     is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
     if is_upcoming:
-        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, db)
+        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, school_id, db)
         return _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
     return _to_item(mapping)
 
@@ -679,6 +806,7 @@ def get_school_webinar(school_id: uuid.UUID, webinar_id: uuid.UUID, db: DbDep) -
                         selectinload(Workshop.objectives).selectinload(Objective.content_assets).selectinload(ContentAsset.asset_type),
                     ),
                     selectinload(Webinar.cycle),
+                    selectinload(Webinar.registrations),
                 )
             )
         )
@@ -691,7 +819,7 @@ def get_school_webinar(school_id: uuid.UUID, webinar_id: uuid.UUID, db: DbDep) -
     now = datetime.now(tz=timezone.utc)
     is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
     if is_upcoming:
-        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, db)
+        prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, school_id, db)
         return _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
     return _to_item(mapping)
 
@@ -734,11 +862,17 @@ def register_public(webinar_id: uuid.UUID, body: RegistrationCreate, db: DbDep) 
 
     # Register on Zoom if this webinar has a Zoom ID (non-fatal if it fails)
     if webinar.zoom_webinar_id:
+        school_name: str | None = None
+        if body.school_id:
+            school_obj = db.get(School, body.school_id)
+            school_name = school_obj.name if school_obj else None
         zoom_registrant_id = zoom_client.register_webinar(
             zoom_webinar_id=webinar.zoom_webinar_id,
             email=body.email,
             first_name=body.first_name,
             last_name=body.last_name,
+            grade=body.grade,
+            school=school_name,
             questions=body.questions,
         )
         if zoom_registrant_id:
@@ -831,9 +965,9 @@ def create_workshop(body: WorkshopCreate, _admin: AdminDep, db: DbDep):
 
 @router.post("/sync-airtable", response_model=AirtableSyncResult)
 def sync_webinars_airtable(_admin: AdminDep, db: DbDep):
-    """Admin: pull video embed codes and URLs from Airtable into all matched webinars."""
-    from src.workshops.sync import sync_webinars_from_airtable
-    return sync_webinars_from_airtable(db)
+    """Admin: sync workshop names from Airtable, then pull webinar URLs/embed codes."""
+    from src.workshops.sync import sync_all_from_airtable
+    return sync_all_from_airtable(db)
 
 
 @router.get("/sync-airtable/last", response_model=AirtableSyncLogOut | None)
@@ -964,6 +1098,7 @@ def list_workshop_webinars(
             registration_url=w.registration_url,
             zoom_link=w.zoom_link,
             registration_count=len(w.registrations),
+            slug=w.slug,
         )
         for w in webinars
     ]

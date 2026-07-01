@@ -73,6 +73,27 @@ def require_admin_or_viewer(
     return user
 
 
+def require_counselor(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> CurrentUser:
+    """Allow all hub users: super_admin, hub_admin, hub_user, and viewer roles."""
+    if user.role not in ("super_admin", "hub_admin", "hub_user", "viewer"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Counselor hub access required",
+        )
+    return user
+
+
+def require_hub_admin(user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
+    """Allow super_admin and hub_admin; role itself encodes hub admin permission."""
+    if user.role not in ("super_admin", "hub_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hub admin access required")
+    return user
+
+
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 AdminDep = Annotated[CurrentUser, Depends(require_admin)]
 AdminOrViewerDep = Annotated[CurrentUser, Depends(require_admin_or_viewer)]
+CounselorDep = Annotated[CurrentUser, Depends(require_counselor)]
+HubAdminDep = Annotated[CurrentUser, Depends(require_hub_admin)]

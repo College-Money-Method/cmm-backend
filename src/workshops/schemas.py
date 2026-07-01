@@ -52,6 +52,7 @@ class WebinarSummary(BaseModel):
     registration_url: str | None
     zoom_link: str | None
     registration_count: int
+    slug: str | None = None
 
 
 class WebinarListItem(WebinarSummary):
@@ -183,10 +184,12 @@ class WebinarOut(BaseModel):
     video_embed_code: str | None
     audio_transcript: str | None
     track_registrations: bool
+    attendance_synced_at: datetime | None = None
     created_at: datetime
     workshop_name: str
     cohort_name: str | None
     registration_count: int
+    slug: str | None = None
 
 
 # ── Admin: Registration schemas ──────────────────────────────────────────────
@@ -251,6 +254,37 @@ class PortalMappingCreate(BaseModel):
     show_zoom: bool = True
 
 
+# ── Admin: Email template schemas ───────────────────────────────────────────
+
+
+class EmailTemplateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workshop_id: uuid.UUID | None
+    type: str
+    name: str
+    subject: str
+    body: str
+    created_at: datetime
+    updated_at: datetime | None
+
+
+class EmailTemplateCreate(BaseModel):
+    workshop_id: uuid.UUID | None = None  # None = global/legacy; set for workshop-specific
+    type: str  # "announcement" | "followup"
+    name: str
+    subject: str
+    body: str
+
+
+class EmailTemplateUpdate(BaseModel):
+    type: str | None = None
+    name: str | None = None
+    subject: str | None = None
+    body: str | None = None
+
+
 # ── Public: Portal schemas ───────────────────────────────────────────────────
 
 
@@ -272,6 +306,7 @@ class WorkshopPortalItem(BaseModel):
     video_embed_code: str | None
     join_url: str | None
     show_zoom: bool
+    slug: str | None = None
 
     # Workshop fields
     workshop_id: uuid.UUID
@@ -292,6 +327,10 @@ class WorkshopPortalItem(BaseModel):
     prev_cycle_video_embed_code: str | None = None
     prev_cycle_name: str | None = None
 
+    # Registration stats (school-scoped)
+    registration_count: int = 0
+    attendee_count: int = 0
+
 
 class PortalMappingOverrideUpdate(BaseModel):
     """Counselor: shallow-merge patch into portal_mapping.school_override.
@@ -309,6 +348,7 @@ class AirtableSyncResult(BaseModel):
     matched: int
     updated: int
     skipped: int
+    created: int = 0
     synced_at: datetime
 
 

@@ -36,6 +36,8 @@ class School(Base):
     )
     cmm_website_password: Mapped[str | None] = mapped_column(Text)
     slug: Mapped[str | None] = mapped_column(Text, unique=True)
+    # Raw slug value sourced from Airtable; slug field is owned by the application
+    airtable_slug: Mapped[str | None] = mapped_column(Text)
     nickname: Mapped[str | None] = mapped_column(Text)
 
     @property
@@ -53,6 +55,7 @@ class School(Base):
         Uuid, ForeignKey("grade_sets.id", ondelete="SET NULL"), nullable=True
     )
     bubble_rec_id: Mapped[str | None] = mapped_column(Text)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     cohort: Mapped[Cohort | None] = relationship(back_populates="schools")
@@ -80,6 +83,7 @@ class Contact(Base):
     __tablename__ = "contacts"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     school_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
     first_name: Mapped[str | None] = mapped_column(Text)
     last_name: Mapped[str | None] = mapped_column(Text)
@@ -106,6 +110,7 @@ class SchoolDateSelector(Base):
     __tablename__ = "school_date_selector"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     school_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
     workshop_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("workshops.id"))
     date: Mapped[date] = mapped_column(Date, nullable=False)
