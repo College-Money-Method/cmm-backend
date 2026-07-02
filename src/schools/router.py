@@ -14,6 +14,7 @@ from src.config import settings
 from src.db.client import get_supabase
 from src.db.deps import DbDep
 from src.schools.models import Contact, School
+from src.schools.logo_thumbnail import generate_logo_thumbnail
 from src.schools.slug_utils import unique_slug_db
 from src.storage.s3_client import S3ClientDep
 from src.content.models import GradeSet
@@ -251,6 +252,9 @@ def create_school(body: SchoolCreate, _admin: AdminDep, db: DbDep) -> SchoolDeta
     """Create a new school (admin only)."""
     data = body.model_dump(exclude_none=True)
     data.setdefault("slug", unique_slug_db(body.name, db))
+    # List views render logo_thumb_url; use the full logo until a real thumb exists
+    if data.get("logo_url"):
+        data["logo_thumb_url"] = data["logo_url"]
     school = School(**data)
     db.add(school)
     db.commit()
@@ -296,9 +300,24 @@ async def upload_school_logo(
     )
     url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{key}"
 
+    # Generate a small webp thumbnail for list views; fall back to the
+    # full-size URL when the image can't be rasterized (e.g. SVG)
+    thumb_url = url
+    thumb_bytes = generate_logo_thumbnail(content)
+    if thumb_bytes:
+        thumb_key = f"uploads/school-logos/{school_id}/{uuid.uuid4()}-thumb.webp"
+        s3.put_object(
+            Bucket=settings.s3_bucket_name,
+            Key=thumb_key,
+            Body=thumb_bytes,
+            ContentType="image/webp",
+        )
+        thumb_url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{thumb_key}"
+
     school = db.get(School, school_id)
     if school:
         school.logo_url = url
+        school.logo_thumb_url = thumb_url
         db.commit()
 
     return {"url": url}
@@ -345,6 +364,11 @@ def update_school(
             "appointlet_link", "calendar_link",
         }
         update_data = {k: v for k, v in update_data.items() if k in counselor_allowed}
+
+    # Keep the list-view thumbnail in sync when the logo changes outside the
+    # dedicated upload endpoint (which generates a real thumbnail itself)
+    if "logo_url" in update_data and update_data["logo_url"] != school.logo_url:
+        update_data["logo_thumb_url"] = update_data["logo_url"]
 
     for field, value in update_data.items():
         setattr(school, field, value)
