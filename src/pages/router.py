@@ -11,7 +11,14 @@ from sqlalchemy import func, select
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
 from src.pages.models import Page
-from src.pages.schemas import PageCreate, PageListItem, PageListResponse, PageOut, PageUpdate
+from src.pages.schemas import (
+    PageCreate,
+    PageListItem,
+    PageListResponse,
+    PageOut,
+    PageSlugOut,
+    PageUpdate,
+)
 
 router = APIRouter(prefix="/api/v1/pages", tags=["pages"])
 
@@ -22,6 +29,17 @@ def list_pages(_admin: AdminDep, db: DbDep):
     items = db.scalars(select(Page).order_by(Page.title)).all()
     total = db.scalar(select(func.count()).select_from(Page)) or 0
     return PageListResponse(items=list(items), total=total)
+
+
+@router.get("/public", response_model=list[PageSlugOut])
+def list_published_page_slugs(db: DbDep):
+    """Public: slugs of published pages for sitemap generation — no auth required."""
+    rows = db.execute(
+        select(Page.slug, Page.updated_at)
+        .where(Page.status == "published")
+        .order_by(Page.slug)
+    ).all()
+    return [PageSlugOut(slug=slug, updated_at=updated_at) for slug, updated_at in rows]
 
 
 @router.get("/public/{slug}", response_model=PageOut)

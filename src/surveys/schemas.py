@@ -8,6 +8,74 @@ from datetime import datetime
 from pydantic import BaseModel, field_validator
 
 
+_PAGE_TYPES = {"resource", "topic", "workshop", "hub_resource", "general"}
+_TRIGGER_TYPES = {"engagement", "time", "clicks", "registration"}
+_QUESTION_TYPES = {"thumbs", "stars", "text"}
+
+
+class SurveyConfigCreate(BaseModel):
+    name: str
+    page_type: str
+    question_text: str
+    question_type: str   # immutable after creation
+    comment_prompt: str | None = None
+    trigger_type: str
+    trigger_value: int = 3
+
+    @field_validator("page_type")
+    @classmethod
+    def validate_page_type(cls, v: str) -> str:
+        if v not in _PAGE_TYPES:
+            raise ValueError(f"page_type must be one of {_PAGE_TYPES}")
+        return v
+
+    @field_validator("question_type")
+    @classmethod
+    def validate_config_question_type(cls, v: str) -> str:
+        if v not in _QUESTION_TYPES:
+            raise ValueError(f"question_type must be one of {_QUESTION_TYPES}")
+        return v
+
+    @field_validator("trigger_type")
+    @classmethod
+    def validate_trigger_type(cls, v: str) -> str:
+        if v not in _TRIGGER_TYPES:
+            raise ValueError(f"trigger_type must be one of {_TRIGGER_TYPES}")
+        return v
+
+    @field_validator("trigger_value")
+    @classmethod
+    def validate_trigger_value(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("trigger_value must be at least 1")
+        return v
+
+
+class SurveyConfigUpdate(BaseModel):
+    name: str | None = None
+    question_text: str | None = None
+    comment_prompt: str | None = None
+    trigger_type: str | None = None
+    trigger_value: int | None = None
+    is_active: bool | None = None
+    # question_type intentionally excluded — immutable after creation
+
+
+class SurveyConfigOut(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    name: str
+    page_type: str
+    question_text: str
+    question_type: str
+    comment_prompt: str | None
+    trigger_type: str
+    trigger_value: int
+    is_active: bool
+
+    model_config = {"from_attributes": True}
+
+
 class SurveyResponseCreate(BaseModel):
     """POST body — submitted by the frontend widget."""
 

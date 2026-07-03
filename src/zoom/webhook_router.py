@@ -77,16 +77,11 @@ async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
     - ``webinar.ended``: kicks off an async attendance sync (with retries for report delay).
     """
     raw_body = await request.body()
-    timestamp = request.headers.get("x-zm-request-timestamp", "")
-    signature = request.headers.get("x-zm-signature", "")
-
-    if not _verify_signature(raw_body, timestamp, signature):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature")
-
     payload = json.loads(raw_body)
     event = payload.get("event")
 
-    # Zoom URL validation challenge — must respond before subscription activates
+    # URL validation must be handled first — it is a bootstrapping step that
+    # Zoom sends before the subscription is active, so signature check is skipped.
     if event == "endpoint.url_validation":
         plain_token = payload.get("payload", {}).get("plainToken", "")
         encrypted = hmac.new(
@@ -94,7 +89,14 @@ async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
             plain_token.encode(),
             hashlib.sha256,
         ).hexdigest()
+        logger.info("Zoom URL validation challenge received — responding")
         return {"plainToken": plain_token, "encryptedToken": encrypted}
+
+    # All other events require a valid signature
+    timestamp = request.headers.get("x-zm-request-timestamp", "")
+    signature = request.headers.get("x-zm-signature", "")
+    if not _verify_signature(raw_body, timestamp, signature):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature")
 
     if event == "webinar.ended":
         zoom_webinar_id = str(payload.get("payload", {}).get("object", {}).get("id", ""))

@@ -18,6 +18,26 @@ from sqlalchemy.sql import func
 from src.db.base import Base
 
 
+class SurveyConfig(Base):
+    """Admin-created survey configuration. One active config per page_type at a time."""
+
+    __tablename__ = "survey_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    page_type: Mapped[str] = mapped_column(Text, nullable=False)   # resource | topic | workshop | hub_resource | general
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    question_type: Mapped[str] = mapped_column(Text, nullable=False)   # thumbs | stars | text — immutable after creation
+    comment_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    trigger_type: Mapped[str] = mapped_column(Text, nullable=False)   # engagement | time | clicks | registration
+    trigger_value: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class SurveyResponse(Base):
     __tablename__ = "survey_responses"
 

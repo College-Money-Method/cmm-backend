@@ -53,7 +53,10 @@ def _assert_owns(asset: ContentAsset, user_id: uuid.UUID) -> None:
         raise HTTPException(status_code=404, detail="Submission not found")
 
 
-@router.post("/", response_model=SubmissionOut, status_code=status.HTTP_201_CREATED)
+# Route paths use "" (not "/") so /api/v1/content/submissions matches directly.
+# A "/" path triggers FastAPI's 307 slash-redirect, which downgrades to http://
+# behind the ALB and strips the Authorization header on the retried request.
+@router.post("", response_model=SubmissionOut, status_code=status.HTTP_201_CREATED)
 def create_submission(body: SubmissionCreate, user: CurrentUserDep, db: DbDep):
     """Create a draft submission on behalf of the authenticated counselor."""
     _require_counselor(user)
@@ -89,7 +92,7 @@ def create_submission(body: SubmissionCreate, user: CurrentUserDep, db: DbDep):
     return _load_submission(db, obj.id)
 
 
-@router.get("/", response_model=list[SubmissionOut])
+@router.get("", response_model=list[SubmissionOut])
 def list_submissions(user: CurrentUserDep, db: DbDep):
     """List all submissions belonging to the authenticated counselor."""
     _require_counselor(user)
