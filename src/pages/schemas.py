@@ -54,6 +54,13 @@ class PageOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PageSlugOut(BaseModel):
+    """Minimal public shape for sitemap generation."""
+
+    slug: str
+    updated_at: datetime | None
+
+
 class PageListItem(BaseModel):
     id: uuid.UUID
     slug: str
