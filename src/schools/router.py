@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
+from src.analytics.group_identify import identify_school_group
 from src.auth.deps import AdminDep, CounselorDep, CurrentUserDep
 from src.auth.models import UserRole
 from src.config import settings
@@ -265,6 +266,8 @@ def create_school(body: SchoolCreate, _admin: AdminDep, db: DbDep) -> SchoolDeta
         .filter(School.id == school.id)
         .one()
     )
+    # Keep PostHog "school" group props in sync (fire-and-forget)
+    identify_school_group(school)
     return SchoolDetail.model_validate(school)
 
 
@@ -380,6 +383,8 @@ def update_school(
         .filter(School.id == school_id)
         .one()
     )
+    # Keep PostHog "school" group props in sync (fire-and-forget)
+    identify_school_group(school)
     return SchoolDetail.model_validate(school)
 
 

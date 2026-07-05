@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.analytics.group_identify import identify_school_groups_batch
 from src.auth.models import UserRole
 from src.cycles.models import Cohort
 from src.integrations.airtable import get_cohorts_records, get_contacts_records, get_schools_records
@@ -107,6 +108,8 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
     }
 
     schools_created = schools_updated = contacts_created = counselors_created = skipped = 0
+    # Schools created/updated this run — synced to PostHog group props post-commit
+    touched_schools: list[School] = []
 
     # ── 6. Process each Airtable school ──────────────────────────────────────
     for srec in at_schools:
@@ -147,6 +150,7 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
                 existing.airtable_slug = at_slug
             school = existing
             schools_updated += 1
+            touched_schools.append(school)
         else:
             try:
                 new_slug = at_slug if at_slug else unique_slug(name, all_slugs)
@@ -174,6 +178,7 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
                 school_by_slug[new_slug] = school
                 all_slugs.add(new_slug)
                 schools_created += 1
+                touched_schools.append(school)
                 logger.info("Created school: name=%s airtable_id=%s slug=%s", name, airtable_rec_id, new_slug)
             except Exception as exc:
                 logger.error("Failed to create school %s (%s): %s", name, airtable_rec_id, exc)
@@ -309,6 +314,8 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
                 db.rollback()
 
     db.commit()
+    # Sync PostHog "school" group props for everything touched (single batch call)
+    identify_school_groups_batch(touched_schools)
     synced_at = datetime.now(timezone.utc)
     logger.info(
         "Schools sync complete: schools_created=%d schools_updated=%d contacts_created=%d counselors_created=%d skipped=%d",

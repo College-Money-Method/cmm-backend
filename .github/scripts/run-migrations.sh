@@ -19,14 +19,20 @@ TASK_ARN=$(aws ecs run-task \
 echo "Waiting for migration task $TASK_ARN to complete..."
 aws ecs wait tasks-stopped --cluster "cmm-$ENV-cluster" --tasks "$TASK_ARN"
 
-EXIT_CODE=$(aws ecs describe-tasks \
+TASK_INFO=$(aws ecs describe-tasks \
   --cluster "cmm-$ENV-cluster" \
   --tasks "$TASK_ARN" \
-  --query 'tasks[0].containers[0].exitCode' \
-  --output text)
+  --query 'tasks[0].{exitCode:containers[0].exitCode,stopCode:stopCode,stoppedReason:stoppedReason,containerReason:containers[0].reason}' \
+  --output json)
+
+EXIT_CODE=$(jq -r '.exitCode' <<< "$TASK_INFO")
 
 if [[ "$EXIT_CODE" != "0" ]]; then
-  echo "Migration task failed with exit code $EXIT_CODE"
+  echo "Migration task failed (exit code: $EXIT_CODE)"
+  echo "  stopCode:        $(jq -r '.stopCode' <<< "$TASK_INFO")"
+  echo "  stoppedReason:   $(jq -r '.stoppedReason' <<< "$TASK_INFO")"
+  echo "  containerReason: $(jq -r '.containerReason' <<< "$TASK_INFO")"
+  # exit code null = container never started (image pull / secrets / network init)
   exit 1
 fi
 

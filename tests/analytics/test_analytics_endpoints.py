@@ -1,16 +1,16 @@
 """Integration tests for /api/v1/analytics/* endpoints via FastAPI TestClient."""
 
 import uuid
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from src.main import app
+from src.analytics import posthog as ph
+from src.analytics.schemas import FunnelStep, TopBreakdown, TrendMetric
 from src.auth.deps import require_counselor
 from src.auth.schemas import CurrentUser
-from src.analytics.schemas import TrendMetric, FunnelStep, TopBreakdown
-from src.analytics import posthog as ph
+from src.main import app
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -18,7 +18,7 @@ SCHOOL_A = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 SCHOOL_B = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 
 ADMIN = CurrentUser(user_id=uuid.uuid4(), role="super_admin", school_id=None)
-COUNSELOR_A = CurrentUser(user_id=uuid.uuid4(), role="counselor", school_id=SCHOOL_A)
+COUNSELOR_A = CurrentUser(user_id=uuid.uuid4(), role="hub_user", school_id=SCHOOL_A)
 
 EMPTY_TREND = TrendMetric(total=0, data=[], days=[])
 SAMPLE_TREND = TrendMetric(total=42, data=[5.0, 10.0, 27.0], days=["2026-06-09", "2026-06-10", "2026-06-11"])
