@@ -10,6 +10,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Query
 from src.analytics import posthog as ph
+from src.analytics import posthog_batched as phb
 from src.analytics.schemas import (
     ContentData,
     LibraryCoverageData,
@@ -65,10 +66,14 @@ def get_overview(
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
     opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
-    return OverviewData(
-        dau=ph.get_trend(api_key, project_id, "$pageview", math="dau", prop_type="person", **opts),
-        sign_ins=ph.get_trend(api_key, project_id, "user_signed_in", **opts),
-    )
+    # ONE PostHog round trip for both series (was 2 sequential calls).
+    # Note: school scoping is now the event-property super-prop for DAU too
+    # (was person-property) — first-visit pageviews before registration are excluded.
+    trends = phb.get_batched_trends(api_key, project_id, [
+        {"key": "dau", "event": "$pageview", "math": "dau"},
+        {"key": "sign_ins", "event": "user_signed_in"},
+    ], **opts)
+    return OverviewData(dau=trends["dau"], sign_ins=trends["sign_ins"])
 
 
 @router.get("/workshop", response_model=WorkshopData)
@@ -83,16 +88,25 @@ def get_workshop(
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
     opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
+    # TWO PostHog round trips total (was 6 sequential calls)
+    trends = phb.get_batched_trends(api_key, project_id, [
+        {"key": "watch_recordings", "event": "workshop_watch_recording"},
+        {"key": "registrations_opened", "event": "workshop_register_open"},
+        {"key": "registrations", "event": "workshop_registration_complete"},
+    ], **opts)
+    breakdowns = phb.get_batched_breakdowns(api_key, project_id, [
+        {"key": "top_videos", "event": "video_session_end", "prop": "workshop_name", "limit": 10},
+        {"key": "top_watchtime", "event": "video_session_end", "prop": "workshop_name",
+         "math": "avg", "math_prop": "total_watch_seconds", "limit": 10},
+        {"key": "milestone_dropoff", "event": "recording_progress", "prop": "milestone_pct", "order": "label_num"},
+    ], **opts)
     return WorkshopData(
-        watch_recordings=ph.get_trend(api_key, project_id, "workshop_watch_recording", **opts),
-        registrations_opened=ph.get_trend(api_key, project_id, "workshop_register_open", **opts),
-        registrations=ph.get_trend(api_key, project_id, "workshop_registration_complete", **opts),
-        top_videos=ph.get_top_breakdown(api_key, project_id, "video_session_end", "workshop_name", limit=10, **opts),
-        top_watchtime=ph.get_top_breakdown(
-            api_key, project_id, "video_session_end", "workshop_name",
-            math="avg", math_property="total_watch_seconds", limit=10, **opts,
-        ),
-        milestone_dropoff=ph.get_milestone_dropoff(api_key, project_id, **opts),
+        watch_recordings=trends["watch_recordings"],
+        registrations_opened=trends["registrations_opened"],
+        registrations=trends["registrations"],
+        top_videos=breakdowns["top_videos"],
+        top_watchtime=breakdowns["top_watchtime"],
+        milestone_dropoff=breakdowns["milestone_dropoff"],
     )
 
 
@@ -108,14 +122,26 @@ def get_content(
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
     opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
+    # TWO PostHog round trips total (was 7 sequential calls)
+    trends = phb.get_batched_trends(api_key, project_id, [
+        {"key": "resource_clicks", "event": "resource_card_click"},
+        {"key": "topic_clicks", "event": "topic_card_click"},
+        {"key": "resource_views", "event": "resource_viewed"},
+        {"key": "resource_link_opens", "event": "resource_detail_external_link_click"},
+    ], **opts)
+    breakdowns = phb.get_batched_breakdowns(api_key, project_id, [
+        {"key": "top_resources", "event": "resource_card_click", "prop": "resource_name", "limit": 10},
+        {"key": "top_topics", "event": "topic_card_click", "prop": "topic_title", "limit": 10},
+        {"key": "top_pages", "event": "$pageview", "prop": "$pathname", "limit": 10},
+    ], **opts)
     return ContentData(
-        resource_clicks=ph.get_trend(api_key, project_id, "resource_card_click", **opts),
-        topic_clicks=ph.get_trend(api_key, project_id, "topic_card_click", **opts),
-        top_resources=ph.get_top_breakdown(api_key, project_id, "resource_card_click", "resource_name", limit=10, **opts),
-        top_topics=ph.get_top_breakdown(api_key, project_id, "topic_card_click", "topic_title", limit=10, **opts),
-        resource_views=ph.get_trend(api_key, project_id, "resource_viewed", **opts),
-        resource_link_opens=ph.get_trend(api_key, project_id, "resource_detail_external_link_click", **opts),
-        top_pages=ph.get_top_breakdown(api_key, project_id, "$pageview", "$pathname", limit=10, **opts),
+        resource_clicks=trends["resource_clicks"],
+        topic_clicks=trends["topic_clicks"],
+        top_resources=breakdowns["top_resources"],
+        top_topics=breakdowns["top_topics"],
+        resource_views=trends["resource_views"],
+        resource_link_opens=trends["resource_link_opens"],
+        top_pages=breakdowns["top_pages"],
     )
 
 
@@ -131,13 +157,20 @@ def get_search(
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
     opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
+    # TWO PostHog round trips total (was 4 sequential calls)
+    trends = phb.get_batched_trends(api_key, project_id, [
+        {"key": "searches", "event": "search_query"},
+        {"key": "library_searches", "event": "resource_library_searched"},
+    ], **opts)
+    breakdowns = phb.get_batched_breakdowns(api_key, project_id, [
+        {"key": "top_queries", "event": "search_query", "prop": "query", "limit": 8},
+        {"key": "top_library_queries", "event": "resource_library_searched", "prop": "query", "limit": 8},
+    ], **opts)
     return SearchData(
-        searches=ph.get_trend(api_key, project_id, "search_query", **opts),
-        top_queries=ph.get_top_breakdown(api_key, project_id, "search_query", "query", **opts),
-        library_searches=ph.get_trend(api_key, project_id, "resource_library_searched", **opts),
-        top_library_queries=ph.get_top_breakdown(
-            api_key, project_id, "resource_library_searched", "query", **opts
-        ),
+        searches=trends["searches"],
+        top_queries=breakdowns["top_queries"],
+        library_searches=trends["library_searches"],
+        top_library_queries=breakdowns["top_library_queries"],
     )
 
 

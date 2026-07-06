@@ -215,49 +215,9 @@ def get_hogql_query(
 
 
 # ── Public helpers ────────────────────────────────────────────────────────────
-
-def get_milestone_dropoff(
-    api_key: str,
-    project_id: str,
-    *,
-    school_id: str | None = None,
-    date_from: str = "-30d",
-    date_to: str | None = None,
-    cycle_name: str | None = None,
-    db: Session | None = None,
-) -> list[TopBreakdown]:
-    """recording_progress counts per milestone_pct, in milestone order (10..100).
-
-    Unlike get_top_breakdown (sorted by count), drop-off must keep milestone
-    order so the bar chart reads as a left-to-right retention curve.
-    """
-    cache_key = _key(fn="milestone_dropoff", school_id=school_id, df=date_from, dt=date_to, cyc=cycle_name)
-    if (cached := _db_get(db, cache_key, school_id)) is not None:
-        return [TopBreakdown.model_validate(r) for r in cached]
-
-    date_clause = _hogql_date_clause(date_from, date_to)
-    school_clause = _hogql_school_clause(school_id)
-    cycle_clause = _hogql_cycle_clause(cycle_name)
-    hogql = (
-        "SELECT toInt(properties.milestone_pct) AS pct, count() "
-        "FROM events "
-        f"WHERE event = 'recording_progress' AND {date_clause}{school_clause}{cycle_clause} "
-        "AND isNotNull(properties.milestone_pct) "
-        "GROUP BY pct ORDER BY pct"
-    )
-    try:
-        rows = get_hogql_query(api_key, project_id, hogql)
-    except Exception as exc:
-        logger.warning("PostHog error in get_milestone_dropoff: %s — serving stale", exc)
-        stale = _db_get_stale(db, cache_key)
-        if stale is not None:
-            return [TopBreakdown.model_validate(r) for r in stale]
-        return []
-
-    dropoff = [TopBreakdown(label=f"{int(r[0])}%", count=int(r[1])) for r in rows if r[0] is not None]
-    _db_set(db, cache_key, [b.model_dump() for b in dropoff])
-    return dropoff
-
+# NOTE: the 4 dashboard endpoints now use src.analytics.posthog_batched (one
+# round trip for all trends + one for all breakdowns). The per-series helpers
+# below remain for the admin endpoints and one-off queries.
 
 def get_trend(
     api_key: str,
