@@ -113,9 +113,10 @@ def test_overview_counselor_ignores_school_param(mock_posthog_configured):
 # ── /workshop ─────────────────────────────────────────────────────────────────
 
 def test_workshop_endpoint_shape(mock_posthog_configured):
+    dropoff = [{"label": "10%", "count": 40}, {"label": "50%", "count": 25}]
     with patch("src.analytics.posthog.get_trend", return_value=SAMPLE_TREND), \
-         patch("src.analytics.posthog.get_funnel", return_value=SAMPLE_FUNNEL), \
-         patch("src.analytics.posthog.get_top_breakdown", return_value=SAMPLE_QUERIES):
+         patch("src.analytics.posthog.get_top_breakdown", return_value=SAMPLE_QUERIES), \
+         patch("src.analytics.posthog.get_milestone_dropoff", return_value=dropoff):
         resp = admin_client().get("/api/v1/analytics/workshop")
 
     assert resp.status_code == 200
@@ -123,21 +124,21 @@ def test_workshop_endpoint_shape(mock_posthog_configured):
     assert "watch_recordings" in body
     assert "registrations_opened" in body
     assert "registrations" in body
-    assert "funnel" in body
+    assert "funnel" not in body  # removed — replaced by milestone_dropoff
     assert "top_videos" in body
     assert "top_watchtime" in body
-    assert body["funnel"][0]["name"] == "Opened"
-    assert body["funnel"][0]["count"] == 100
+    assert body["milestone_dropoff"][0]["label"] == "10%"
+    assert body["milestone_dropoff"][0]["count"] == 40
 
 
-def test_workshop_funnel_empty_when_no_data(mock_posthog_configured):
+def test_workshop_milestone_dropoff_empty_when_no_data(mock_posthog_configured):
     with patch("src.analytics.posthog.get_trend", return_value=EMPTY_TREND), \
-         patch("src.analytics.posthog.get_funnel", return_value=[]), \
-         patch("src.analytics.posthog.get_top_breakdown", return_value=[]):
+         patch("src.analytics.posthog.get_top_breakdown", return_value=[]), \
+         patch("src.analytics.posthog.get_milestone_dropoff", return_value=[]):
         resp = admin_client().get("/api/v1/analytics/workshop")
 
     assert resp.status_code == 200
-    assert resp.json()["funnel"] == []
+    assert resp.json()["milestone_dropoff"] == []
 
 
 # ── /content ──────────────────────────────────────────────────────────────────

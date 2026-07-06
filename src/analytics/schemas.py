@@ -39,9 +39,11 @@ class WorkshopData(BaseModel):
     watch_recordings: TrendMetric
     registrations_opened: TrendMetric
     registrations: TrendMetric
-    funnel: list[FunnelStep]
     top_videos: list[TopBreakdown]       # video_session_end count by workshop_name
     top_watchtime: list[TopBreakdown]    # video_session_end avg total_watch_seconds by workshop_name
+    # recording_progress counts per milestone_pct (10..100), milestone order —
+    # shows where viewers stop watching recordings
+    milestone_dropoff: list[TopBreakdown] = []
 
 
 class ContentData(BaseModel):

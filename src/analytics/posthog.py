@@ -131,6 +131,31 @@ def _school_filter(school_id: str | None, prop_type: str = "event") -> list[dict
     return [{"key": "school_id", "value": school_id, "operator": "exact", "type": prop_type}]
 
 
+def _cycle_filter(cycle_name: str | None) -> list[dict]:
+    """Property filter on the cycle_name super-property.
+
+    Events are tagged with the operationally-current cycle at browse time, so
+    this captures pre/post-cycle browsing that a start/end date range misses.
+    """
+    if not cycle_name:
+        return []
+    return [{"key": "cycle_name", "value": cycle_name, "operator": "exact", "type": "event"}]
+
+
+def _validate_cycle_name(cycle_name: str) -> str:
+    """Ensure cycle_name is safe for HogQL string interpolation."""
+    if len(cycle_name) > 100 or "'" in cycle_name or "\\" in cycle_name or "\n" in cycle_name:
+        raise ValueError(f"Invalid cycle_name for HogQL interpolation: {cycle_name!r}")
+    return cycle_name
+
+
+def _hogql_cycle_clause(cycle_name: str | None) -> str:
+    """Return a safe HogQL WHERE fragment for cycle scoping (empty string if None)."""
+    if not cycle_name:
+        return ""
+    return f" AND properties.cycle_name = '{_validate_cycle_name(cycle_name)}'"
+
+
 def _date_range(date_from: str, date_to: str | None) -> dict:
     dr: dict = {"date_from": date_from}
     if date_to:
@@ -191,6 +216,49 @@ def get_hogql_query(
 
 # ── Public helpers ────────────────────────────────────────────────────────────
 
+def get_milestone_dropoff(
+    api_key: str,
+    project_id: str,
+    *,
+    school_id: str | None = None,
+    date_from: str = "-30d",
+    date_to: str | None = None,
+    cycle_name: str | None = None,
+    db: Session | None = None,
+) -> list[TopBreakdown]:
+    """recording_progress counts per milestone_pct, in milestone order (10..100).
+
+    Unlike get_top_breakdown (sorted by count), drop-off must keep milestone
+    order so the bar chart reads as a left-to-right retention curve.
+    """
+    cache_key = _key(fn="milestone_dropoff", school_id=school_id, df=date_from, dt=date_to, cyc=cycle_name)
+    if (cached := _db_get(db, cache_key, school_id)) is not None:
+        return [TopBreakdown.model_validate(r) for r in cached]
+
+    date_clause = _hogql_date_clause(date_from, date_to)
+    school_clause = _hogql_school_clause(school_id)
+    cycle_clause = _hogql_cycle_clause(cycle_name)
+    hogql = (
+        "SELECT toInt(properties.milestone_pct) AS pct, count() "
+        "FROM events "
+        f"WHERE event = 'recording_progress' AND {date_clause}{school_clause}{cycle_clause} "
+        "AND isNotNull(properties.milestone_pct) "
+        "GROUP BY pct ORDER BY pct"
+    )
+    try:
+        rows = get_hogql_query(api_key, project_id, hogql)
+    except Exception as exc:
+        logger.warning("PostHog error in get_milestone_dropoff: %s — serving stale", exc)
+        stale = _db_get_stale(db, cache_key)
+        if stale is not None:
+            return [TopBreakdown.model_validate(r) for r in stale]
+        return []
+
+    dropoff = [TopBreakdown(label=f"{int(r[0])}%", count=int(r[1])) for r in rows if r[0] is not None]
+    _db_set(db, cache_key, [b.model_dump() for b in dropoff])
+    return dropoff
+
+
 def get_trend(
     api_key: str,
     project_id: str,
@@ -202,9 +270,10 @@ def get_trend(
     math: str = "total",
     math_property: str | None = None,
     prop_type: str = "event",
+    cycle_name: str | None = None,
     db: Session | None = None,
 ) -> TrendMetric:
-    cache_key = _key(fn="trend", event=event, school_id=school_id, df=date_from, dt=date_to, math=math, mp=math_property, pt=prop_type)
+    cache_key = _key(fn="trend", event=event, school_id=school_id, df=date_from, dt=date_to, math=math, mp=math_property, pt=prop_type, cyc=cycle_name)
     if (cached := _db_get(db, cache_key, school_id)) is not None:
         return TrendMetric.model_validate(cached) if isinstance(cached, dict) else cached
 
@@ -217,7 +286,7 @@ def get_trend(
             "kind": "TrendsQuery",
             "series": [series],
             "dateRange": _date_range(date_from, date_to),
-            "properties": _school_filter(school_id, prop_type),
+            "properties": _school_filter(school_id, prop_type) + _cycle_filter(cycle_name),
             "interval": "day",
             "filterTestAccounts": False,
             "version": 2,
@@ -244,9 +313,10 @@ def get_funnel(
     school_id: str | None = None,
     date_from: str = "-30d",
     date_to: str | None = None,
+    cycle_name: str | None = None,
     db: Session | None = None,
 ) -> list[FunnelStep]:
-    cache_key = _key(fn="funnel", s1=step1, s2=step2, school_id=school_id, df=date_from, dt=date_to)
+    cache_key = _key(fn="funnel", s1=step1, s2=step2, school_id=school_id, df=date_from, dt=date_to, cyc=cycle_name)
     if (cached := _db_get(db, cache_key, school_id)) is not None:
         if isinstance(cached, list) and cached and isinstance(cached[0], dict):
             return [FunnelStep.model_validate(s) for s in cached]
@@ -257,7 +327,7 @@ def get_funnel(
             "kind": "FunnelsQuery",
             "series": [{"kind": "EventsNode", "event": step1}, {"kind": "EventsNode", "event": step2}],
             "dateRange": _date_range(date_from, date_to),
-            "properties": _school_filter(school_id),
+            "properties": _school_filter(school_id) + _cycle_filter(cycle_name),
             "funnelsFilter": {"funnelVizType": "steps", "funnelOrderType": "ordered", "funnelWindowInterval": 1, "funnelWindowIntervalUnit": "day"},
             "filterTestAccounts": False,
         })
@@ -292,9 +362,10 @@ def get_top_breakdown(
     limit: int = 8,
     math: str = "total",
     math_property: str | None = None,
+    cycle_name: str | None = None,
     db: Session | None = None,
 ) -> list[TopBreakdown]:
-    cache_key = _key(fn="breakdown", event=event, bp=breakdown_prop, school_id=school_id, df=date_from, dt=date_to, math=math, mp=math_property)
+    cache_key = _key(fn="breakdown", event=event, bp=breakdown_prop, school_id=school_id, df=date_from, dt=date_to, math=math, mp=math_property, cyc=cycle_name)
     if (cached := _db_get(db, cache_key, school_id)) is not None:
         if isinstance(cached, list) and cached and isinstance(cached[0], dict):
             return [TopBreakdown.model_validate(r) for r in cached]
@@ -309,7 +380,7 @@ def get_top_breakdown(
             "kind": "TrendsQuery",
             "series": [series],
             "dateRange": _date_range(date_from, date_to),
-            "properties": _school_filter(school_id),
+            "properties": _school_filter(school_id) + _cycle_filter(cycle_name),
             "breakdownFilter": {"breakdowns": [{"type": "event", "property": breakdown_prop}], "breakdown_type": "event"},
             "trendsFilter": {"display": "ActionsBarValue"},
             "filterTestAccounts": False,

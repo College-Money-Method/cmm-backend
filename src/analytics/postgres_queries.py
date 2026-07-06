@@ -23,19 +23,17 @@ def get_webinars_for_school_in_range(
     school_id: uuid.UUID,
     date_from: str,
     date_to: str | None,
+    cycle_id: uuid.UUID | None = None,
 ) -> list[dict]:
-    """Return per-webinar registration counts for a school within the date range.
+    """Return per-webinar registration counts for a school.
 
     A webinar is included if:
       - It has a PortalMapping to the school, OR
       - It has at least one WorkshopRegistration from the school.
-    Date filter is on webinar.start_datetime.
+    Scope: when cycle_id is given, filter by webinar.cycle_id (a cycle's webinars
+    stay browsable outside its calendar dates); otherwise by start_datetime range.
     """
     from src.workshops.models import Workshop
-
-    # Build date bounds
-    df = _parse_date_from(date_from)
-    dt = _parse_date_to(date_to)
 
     # Webinar IDs via PortalMapping
     mapped_ids_q = select(PortalMapping.webinar_id).where(PortalMapping.school_id == school_id)
@@ -46,6 +44,13 @@ def get_webinars_for_school_in_range(
         .where(WorkshopRegistration.school_id == school_id)
         .distinct()
     )
+
+    if cycle_id is not None:
+        scope_clause = Webinar.cycle_id == cycle_id
+    else:
+        df = _parse_date_from(date_from)
+        dt = _parse_date_to(date_to)
+        scope_clause = and_(Webinar.start_datetime >= df, Webinar.start_datetime <= dt)
 
     # Core webinar query
     stmt = (
@@ -61,8 +66,7 @@ def get_webinars_for_school_in_range(
         .where(
             and_(
                 Webinar.id.in_(mapped_ids_q.union(reg_ids_q)),
-                Webinar.start_datetime >= df,
-                Webinar.start_datetime <= dt,
+                scope_clause,
             )
         )
         .order_by(Webinar.start_datetime)

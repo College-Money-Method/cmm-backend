@@ -60,10 +60,11 @@ def get_overview(
     school_id: str | None = Query(default=None),
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
+    cycle_name: str | None = Query(default=None),
 ) -> OverviewData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
-    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, db=db)
+    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
     return OverviewData(
         dau=ph.get_trend(api_key, project_id, "$pageview", math="dau", prop_type="person", **opts),
         sign_ins=ph.get_trend(api_key, project_id, "user_signed_in", **opts),
@@ -77,20 +78,21 @@ def get_workshop(
     school_id: str | None = Query(default=None),
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
+    cycle_name: str | None = Query(default=None),
 ) -> WorkshopData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
-    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, db=db)
+    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
     return WorkshopData(
         watch_recordings=ph.get_trend(api_key, project_id, "workshop_watch_recording", **opts),
         registrations_opened=ph.get_trend(api_key, project_id, "workshop_register_open", **opts),
         registrations=ph.get_trend(api_key, project_id, "workshop_registration_complete", **opts),
-        funnel=ph.get_funnel(api_key, project_id, "workshop_register_open", "workshop_registration_complete", **opts),
         top_videos=ph.get_top_breakdown(api_key, project_id, "video_session_end", "workshop_name", limit=10, **opts),
         top_watchtime=ph.get_top_breakdown(
             api_key, project_id, "video_session_end", "workshop_name",
             math="avg", math_property="total_watch_seconds", limit=10, **opts,
         ),
+        milestone_dropoff=ph.get_milestone_dropoff(api_key, project_id, **opts),
     )
 
 
@@ -101,10 +103,11 @@ def get_content(
     school_id: str | None = Query(default=None),
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
+    cycle_name: str | None = Query(default=None),
 ) -> ContentData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
-    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, db=db)
+    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
     return ContentData(
         resource_clicks=ph.get_trend(api_key, project_id, "resource_card_click", **opts),
         topic_clicks=ph.get_trend(api_key, project_id, "topic_card_click", **opts),
@@ -123,10 +126,11 @@ def get_search(
     school_id: str | None = Query(default=None),
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
+    cycle_name: str | None = Query(default=None),
 ) -> SearchData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
-    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, db=db)
+    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
     return SearchData(
         searches=ph.get_trend(api_key, project_id, "search_query", **opts),
         top_queries=ph.get_top_breakdown(api_key, project_id, "search_query", "query", **opts),
@@ -146,6 +150,8 @@ def get_workshops_detail(
     school_id: str | None = Query(default=None),
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
+    cycle_name: str | None = Query(default=None),
+    cycle_id: uuid.UUID | None = Query(default=None),
 ) -> WorkshopsDetailData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
@@ -153,16 +159,19 @@ def get_workshops_detail(
         raise HTTPException(status_code=400, detail="school_id is required for workshops-detail")
 
     school_uuid = uuid.UUID(sid)
-    rows = get_webinars_for_school_in_range(db, school_uuid, date_from, date_to)
+    # cycle_id filters webinars by their cycle (families browse cycle content
+    # outside the cycle's calendar dates); date range is the fallback
+    rows = get_webinars_for_school_in_range(db, school_uuid, date_from, date_to, cycle_id=cycle_id)
 
     if rows:
         # ONE PostHog HogQL: recording views + avg % watched per webinar_id
         date_clause = ph._hogql_date_clause(date_from, date_to)
         school_clause = ph._hogql_school_clause(sid)
+        cycle_clause = ph._hogql_cycle_clause(cycle_name)
         hogql = (
             "SELECT properties.webinar_id, count(), avg(toFloat(ifNull(properties.percent_watched, '0'))) "
             "FROM events "
-            f"WHERE event = 'video_session_end' AND {date_clause}{school_clause} "
+            f"WHERE event = 'video_session_end' AND {date_clause}{school_clause}{cycle_clause} "
             "AND isNotNull(properties.webinar_id) "
             "GROUP BY properties.webinar_id"
         )
@@ -241,20 +250,22 @@ def get_peak_usage(
     school_id: str | None = Query(default=None),
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
+    cycle_name: str | None = Query(default=None),
 ) -> PeakUsageData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
 
-    cache_key = ph._key(fn="peak_usage", school_id=sid, df=date_from, dt=date_to)
+    cache_key = ph._key(fn="peak_usage", school_id=sid, df=date_from, dt=date_to, cyc=cycle_name)
     if (cached := ph._db_get(db, cache_key, sid)) is not None:
         return PeakUsageData.model_validate(cached)
 
     date_clause = ph._hogql_date_clause(date_from, date_to)
     school_clause = ph._hogql_school_clause(sid)
+    cycle_clause = ph._hogql_cycle_clause(cycle_name)
     hogql = (
         "SELECT toDayOfWeek(timestamp), toHour(timestamp), count() "
         "FROM events "
-        f"WHERE event = '$pageview' AND {date_clause}{school_clause} "
+        f"WHERE event = '$pageview' AND {date_clause}{school_clause}{cycle_clause} "
         "GROUP BY 1, 2 ORDER BY 1, 2"
     )
     try:
@@ -279,6 +290,7 @@ def get_library_coverage(
     school_id: str | None = Query(default=None),
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
+    cycle_name: str | None = Query(default=None),
 ) -> LibraryCoverageData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
@@ -287,6 +299,7 @@ def get_library_coverage(
 
     date_clause = ph._hogql_date_clause(date_from, date_to)
     school_clause = ph._hogql_school_clause(sid)
+    cycle_clause = ph._hogql_cycle_clause(cycle_name)
 
     # ONE HogQL: distinct viewed asset IDs and topic IDs
     hogql = (
@@ -296,7 +309,7 @@ def get_library_coverage(
         "  countDistinctIf(properties.topic_id, "
         "    event IN ('topic_card_click', 'topic_viewed')) "
         "FROM events "
-        f"WHERE {date_clause}{school_clause} "
+        f"WHERE {date_clause}{school_clause}{cycle_clause} "
         "AND event IN ('resource_card_click', 'resource_viewed', 'topic_card_click', 'topic_viewed')"
     )
 
