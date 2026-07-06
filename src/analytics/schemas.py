@@ -49,11 +49,17 @@ class ContentData(BaseModel):
     topic_clicks: TrendMetric
     top_resources: list[TopBreakdown]   # resource_card_click by resource_name
     top_topics: list[TopBreakdown]      # topic_card_click by topic_title
+    resource_views: TrendMetric | None = None        # resource_viewed (detail page)
+    resource_link_opens: TrendMetric | None = None   # resource_detail_external_link_click
+    top_pages: list[TopBreakdown] | None = None      # $pageview by $pathname
 
 
 class SearchData(BaseModel):
     searches: TrendMetric
     top_queries: list[TopBreakdown]
+    # Resource Library keyword search (resource_library_searched event)
+    library_searches: TrendMetric | None = None
+    top_library_queries: list[TopBreakdown] | None = None
 
 
 # ── New hub endpoint schemas ───────────────────────────────────────────────────

@@ -23,6 +23,12 @@ class School(Base):
     state: Mapped[str | None] = mapped_column(String(2))
     zip_code: Mapped[str | None] = mapped_column(Text)
     enrollment_9_12: Mapped[int | None] = mapped_column(Integer)
+    # Self-reported by counselors in the Hub; enrollment_9_12 is kept in sync
+    # as the total whenever any per-grade value is updated (see update_school)
+    enrollment_grade_9: Mapped[int | None] = mapped_column(Integer)
+    enrollment_grade_10: Mapped[int | None] = mapped_column(Integer)
+    enrollment_grade_11: Mapped[int | None] = mapped_column(Integer)
+    enrollment_grade_12: Mapped[int | None] = mapped_column(Integer)
     enrollment_range: Mapped[str | None] = mapped_column(
         Text,
         Computed(

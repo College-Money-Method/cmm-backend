@@ -36,6 +36,15 @@ from src.schools.schemas import (
 
 router = APIRouter(prefix="/api/v1/schools", tags=["schools"])
 
+# Self-reported per-grade enrollment; enrollment_9_12 is recomputed as their
+# sum whenever any of these change (see update_school)
+_ENROLLMENT_GRADE_FIELDS = (
+    "enrollment_grade_9",
+    "enrollment_grade_10",
+    "enrollment_grade_11",
+    "enrollment_grade_12",
+)
+
 
 @router.get("/slug/{slug}/counselors", response_model=list[CounselorPublicOut])
 def get_school_counselors_public(
@@ -365,6 +374,7 @@ def update_school(
             "logo_url", "nickname",
             "city", "state", "zip_code", "street_address",
             "appointlet_link", "calendar_link",
+            "enrollment_9_12", *_ENROLLMENT_GRADE_FIELDS,
         }
         update_data = {k: v for k, v in update_data.items() if k in counselor_allowed}
 
@@ -375,6 +385,14 @@ def update_school(
 
     for field, value in update_data.items():
         setattr(school, field, value)
+
+    # Per-grade values are the source of truth for the total when present —
+    # enrollment_9_12 feeds the % reach metric and the enrollment_range
+    # computed column, so keep it in sync on any per-grade change
+    if any(f in update_data for f in _ENROLLMENT_GRADE_FIELDS):
+        grades = [getattr(school, f) for f in _ENROLLMENT_GRADE_FIELDS]
+        if any(g is not None for g in grades):
+            school.enrollment_9_12 = sum(g for g in grades if g is not None)
 
     db.commit()
     school = (

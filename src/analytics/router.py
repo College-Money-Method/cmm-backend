@@ -110,6 +110,9 @@ def get_content(
         topic_clicks=ph.get_trend(api_key, project_id, "topic_card_click", **opts),
         top_resources=ph.get_top_breakdown(api_key, project_id, "resource_card_click", "resource_name", limit=10, **opts),
         top_topics=ph.get_top_breakdown(api_key, project_id, "topic_card_click", "topic_title", limit=10, **opts),
+        resource_views=ph.get_trend(api_key, project_id, "resource_viewed", **opts),
+        resource_link_opens=ph.get_trend(api_key, project_id, "resource_detail_external_link_click", **opts),
+        top_pages=ph.get_top_breakdown(api_key, project_id, "$pageview", "$pathname", limit=10, **opts),
     )
 
 
@@ -127,6 +130,10 @@ def get_search(
     return SearchData(
         searches=ph.get_trend(api_key, project_id, "search_query", **opts),
         top_queries=ph.get_top_breakdown(api_key, project_id, "search_query", "query", **opts),
+        library_searches=ph.get_trend(api_key, project_id, "resource_library_searched", **opts),
+        top_library_queries=ph.get_top_breakdown(
+            api_key, project_id, "resource_library_searched", "query", **opts
+        ),
     )
 
 
