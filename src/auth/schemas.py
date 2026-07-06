@@ -60,6 +60,8 @@ class CounselorListResponse(BaseModel):
 
 
 class CounselorSyncResult(BaseModel):
+    contacts_created: int = 0
+    contacts_updated: int = 0
     counselors_created: int
     school_roles_updated: int
     skipped: int

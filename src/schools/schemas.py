@@ -177,7 +177,11 @@ class CounselorPublicOut(BaseModel):
 
 class SchoolSyncResult(BaseModel):
     schools_created: int
+    schools_updated: int = 0
     contacts_created: int
+    contacts_updated: int = 0
+    contacts_unlinked: int = 0
     counselors_created: int
+    school_roles_updated: int = 0
     skipped: int
     synced_at: datetime
