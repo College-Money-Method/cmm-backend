@@ -23,6 +23,12 @@ class School(Base):
     state: Mapped[str | None] = mapped_column(String(2))
     zip_code: Mapped[str | None] = mapped_column(Text)
     enrollment_9_12: Mapped[int | None] = mapped_column(Integer)
+    # Self-reported by counselors in the Hub; enrollment_9_12 is kept in sync
+    # as the total whenever any per-grade value is updated (see update_school)
+    enrollment_grade_9: Mapped[int | None] = mapped_column(Integer)
+    enrollment_grade_10: Mapped[int | None] = mapped_column(Integer)
+    enrollment_grade_11: Mapped[int | None] = mapped_column(Integer)
+    enrollment_grade_12: Mapped[int | None] = mapped_column(Integer)
     enrollment_range: Mapped[str | None] = mapped_column(
         Text,
         Computed(
@@ -84,7 +90,10 @@ class Contact(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
-    school_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
+    # Nullable — a counselor contact may not be attached to a school yet
+    school_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("schools.id", ondelete="SET NULL"), nullable=True)
+    # Supabase auth user provisioned for this contact (auth.users.id, no cross-schema FK)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, unique=True, index=True)
     first_name: Mapped[str | None] = mapped_column(Text)
     last_name: Mapped[str | None] = mapped_column(Text)
     full_name: Mapped[str | None] = mapped_column(
@@ -99,7 +108,7 @@ class Contact(Base):
     softr_access: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
-    school: Mapped[School] = relationship(back_populates="contacts")
+    school: Mapped[School | None] = relationship(back_populates="contacts")
 
     __table_args__ = (
         Index("idx_contacts_school_id", "school_id"),

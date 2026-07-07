@@ -1,0 +1,182 @@
+"""Batched PostHog HogQL helpers — many series/breakdowns per round trip.
+
+One dashboard tab used to make one PostHog Query API call PER series (7 for
+the content tab), each queueing server-side — slow enough to trip the
+frontend's stream timeout. These helpers collapse an endpoint to:
+  - ONE query for all its daily trends   (countIf/uniqIf per series)
+  - ONE query for all its breakdowns     (UNION ALL with a discriminator col)
+
+Caching mirrors src.analytics.posthog: durable DB cache, stale-on-error.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from datetime import date, timedelta
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from src.analytics import posthog as ph
+from src.analytics.schemas import TopBreakdown, TrendMetric
+
+logger = logging.getLogger(__name__)
+
+# Property names are code-supplied constants, but validate before interpolation
+_PROP_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+_EVENT_RE = re.compile(r"^[A-Za-z0-9_$]+$")
+_MAX_DAYS = 750  # bound the zero-filled series (cycle window is ~15 months)
+
+
+def _ident(value: str, pattern: re.Pattern, what: str) -> str:
+    if not pattern.match(value):
+        raise ValueError(f"Invalid {what} for HogQL interpolation: {value!r}")
+    return value
+
+
+def _day_range(date_from: str, date_to: str | None) -> list[str]:
+    """Zero-fill day list for the resolved range (relative -Nd or absolute)."""
+    today = date.today()
+    if ph._RELATIVE_DATE_RE.match(date_from):
+        start = today - timedelta(days=int(date_from[1:-1]))
+    else:
+        start = date.fromisoformat(ph._validate_date(date_from))
+    end = date.fromisoformat(ph._validate_date(date_to)) if date_to else today
+    end = min(end, today)
+    if end < start:
+        return []
+    n = min((end - start).days + 1, _MAX_DAYS)
+    return [(start + timedelta(days=i)).isoformat() for i in range(n)]
+
+
+def _scope_where(date_from: str, date_to: str | None, school_id: str | None, cycle_name: str | None) -> str:
+    return (
+        ph._hogql_date_clause(date_from, date_to)
+        + ph._hogql_school_clause(school_id)
+        + ph._hogql_cycle_clause(cycle_name)
+    )
+
+
+def get_batched_trends(
+    api_key: str,
+    project_id: str,
+    series: list[dict],
+    *,
+    school_id: str | None = None,
+    date_from: str = "-30d",
+    date_to: str | None = None,
+    cycle_name: str | None = None,
+    db: Session | None = None,
+) -> dict[str, TrendMetric]:
+    """All daily trends for an endpoint in ONE HogQL query.
+
+    series item: {"key": str, "event": str, "math": "total" | "dau"}
+    Returns {key: TrendMetric} with zero-filled aligned days.
+    """
+    cache_key = ph._key(fn="batched_trends", series=series, school_id=school_id, df=date_from, dt=date_to, cyc=cycle_name)
+    if (cached := ph._db_get(db, cache_key, school_id)) is not None:
+        return {k: TrendMetric.model_validate(v) for k, v in cached.items()}
+
+    days = _day_range(date_from, date_to)
+    cols: list[str] = []
+    for s in series:
+        ev = _ident(s["event"], _EVENT_RE, "event")
+        if s.get("math") == "dau":
+            cols.append(f"uniqIf(person_id, event = '{ev}')")
+        else:
+            cols.append(f"countIf(event = '{ev}')")
+    events_in = ", ".join(f"'{_ident(s['event'], _EVENT_RE, 'event')}'" for s in series)
+    hogql = (
+        f"SELECT toStartOfDay(timestamp) AS day, {', '.join(cols)} "
+        "FROM events "
+        f"WHERE {_scope_where(date_from, date_to, school_id, cycle_name)} "
+        f"AND event IN ({events_in}) "
+        "GROUP BY day ORDER BY day"
+    )
+
+    try:
+        rows = ph.get_hogql_query(api_key, project_id, hogql)
+    except Exception as exc:
+        logger.warning("PostHog error in get_batched_trends: %s — serving stale", exc)
+        stale = ph._db_get_stale(db, cache_key)
+        if stale is not None:
+            return {k: TrendMetric.model_validate(v) for k, v in stale.items()}
+        empty = TrendMetric(total=0, data=[0.0] * len(days), days=days)
+        return {s["key"]: empty for s in series}
+
+    by_day = {str(r[0])[:10]: r[1:] for r in rows}
+    result: dict[str, TrendMetric] = {}
+    for i, s in enumerate(series):
+        data = [float(by_day.get(d, [0] * len(series))[i] or 0) for d in days]
+        result[s["key"]] = TrendMetric(total=int(sum(data)), data=data, days=days)
+
+    ph._db_set(db, cache_key, {k: v.model_dump() for k, v in result.items()})
+    return result
+
+
+def get_batched_breakdowns(
+    api_key: str,
+    project_id: str,
+    specs: list[dict],
+    *,
+    school_id: str | None = None,
+    date_from: str = "-30d",
+    date_to: str | None = None,
+    cycle_name: str | None = None,
+    db: Session | None = None,
+) -> dict[str, list[TopBreakdown]]:
+    """All breakdowns for an endpoint in ONE HogQL query (UNION ALL + kind col).
+
+    spec: {"key": str, "event": str, "prop": str, "math": "count" | "avg",
+           "math_prop"?: str, "limit"?: int, "order"?: "desc" | "label_num"}
+    order "label_num" keeps numeric-label order (milestone drop-off curves).
+    """
+    cache_key = ph._key(fn="batched_breakdowns", specs=specs, school_id=school_id, df=date_from, dt=date_to, cyc=cycle_name)
+    if (cached := ph._db_get(db, cache_key, school_id)) is not None:
+        return {k: [TopBreakdown.model_validate(r) for r in v] for k, v in cached.items()}
+
+    where = _scope_where(date_from, date_to, school_id, cycle_name)
+    branches: list[str] = []
+    for sp in specs:
+        ev = _ident(sp["event"], _EVENT_RE, "event")
+        prop = _ident(sp["prop"], _PROP_RE, "property")
+        if sp.get("math") == "avg":
+            mp = _ident(sp["math_prop"], _PROP_RE, "math property")
+            val = f"avg(toFloat(ifNull(properties.{mp}, '0')))"
+        else:
+            val = "toFloat(count())"
+        branches.append(
+            f"SELECT '{sp['key']}' AS kind, toString(properties.{prop}) AS label, {val} AS val "
+            f"FROM events WHERE event = '{ev}' AND {where} "
+            f"AND isNotNull(properties.{prop}) GROUP BY label"
+        )
+    hogql = " UNION ALL ".join(branches)
+
+    try:
+        rows = ph.get_hogql_query(api_key, project_id, hogql)
+    except Exception as exc:
+        logger.warning("PostHog error in get_batched_breakdowns: %s — serving stale", exc)
+        stale = ph._db_get_stale(db, cache_key)
+        if stale is not None:
+            return {k: [TopBreakdown.model_validate(r) for r in v] for k, v in stale.items()}
+        return {sp["key"]: [] for sp in specs}
+
+    grouped: dict[str, list[TopBreakdown]] = {sp["key"]: [] for sp in specs}
+    for r in rows:
+        kind, label, val = str(r[0]), str(r[1]), float(r[2] or 0)
+        if kind in grouped and label and label != "Other" and not label.startswith("$$_posthog"):
+            grouped[kind].append(TopBreakdown(label=label, count=val))
+
+    for sp in specs:
+        items = grouped[sp["key"]]
+        if sp.get("order") == "label_num":
+            # numeric-label curves (e.g. milestone_pct 10..100) keep label order
+            items.sort(key=lambda b: float(b.label))
+            grouped[sp["key"]] = [TopBreakdown(label=f"{int(float(b.label))}%", count=b.count) for b in items]
+        else:
+            items.sort(key=lambda b: b.count, reverse=True)
+            grouped[sp["key"]] = items[: sp.get("limit", 10)]
+
+    ph._db_set(db, cache_key, {k: [b.model_dump() for b in v] for k, v in grouped.items()})
+    return grouped

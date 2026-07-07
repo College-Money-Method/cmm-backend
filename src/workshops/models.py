@@ -86,6 +86,8 @@ class Webinar(Base):
     audio_transcript: Mapped[str | None] = mapped_column(Text)
     track_registrations: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     attendance_synced_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Zoom participants with no matching registration ("joined without registering")
+    unmatched_participants_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     workshop: Mapped[Workshop] = relationship(back_populates="webinars")

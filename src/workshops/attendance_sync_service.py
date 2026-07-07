@@ -51,12 +51,23 @@ def sync_webinar_attendance(zoom_webinar_id: str, db: Session) -> bool:
     }
 
     attended_ids: set = set()
+    # Zoom participants with no matching registration ("joined without registering").
+    # Dedup by email/participant id — Zoom reports one row per join/leave segment.
+    unmatched_participants: set[str] = set()
 
     for p in participants:
         reg = by_registrant_id.get(p.get("registrant_id", "")) or by_email.get(
             (p.get("user_email") or "").lower()
         )
         if not reg:
+            unmatched_key = (
+                (p.get("user_email") or "").lower()
+                or p.get("id")
+                or p.get("user_id")
+                or p.get("name", "")
+            )
+            if unmatched_key:
+                unmatched_participants.add(str(unmatched_key))
             continue
 
         reg.attended = True
@@ -81,6 +92,7 @@ def sync_webinar_attendance(zoom_webinar_id: str, db: Session) -> bool:
             reg.attended = False
 
     webinar.attendance_synced_at = datetime.now(tz=timezone.utc)
+    webinar.unmatched_participants_count = len(unmatched_participants)
     db.commit()
 
     logger.info(

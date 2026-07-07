@@ -33,6 +33,7 @@ def get_me(user: CurrentUserDep) -> UserRoleOut:
         user_id=user.user_id,
         role=user.role,
         school_id=user.school_id,
+        school_role=user.school_role,
     )
 
 

@@ -50,6 +50,7 @@ async def get_current_user(
         user_id=user_id,
         role=role_record.role,
         school_id=role_record.school_id,
+        school_role=role_record.school_role,
     )
 
 

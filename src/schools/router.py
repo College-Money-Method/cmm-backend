@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
+from src.analytics.group_identify import identify_school_group
 from src.auth.deps import AdminDep, CounselorDep, CurrentUserDep
 from src.auth.models import UserRole
 from src.config import settings
@@ -34,6 +35,15 @@ from src.schools.schemas import (
 )
 
 router = APIRouter(prefix="/api/v1/schools", tags=["schools"])
+
+# Self-reported per-grade enrollment; enrollment_9_12 is recomputed as their
+# sum whenever any of these change (see update_school)
+_ENROLLMENT_GRADE_FIELDS = (
+    "enrollment_grade_9",
+    "enrollment_grade_10",
+    "enrollment_grade_11",
+    "enrollment_grade_12",
+)
 
 
 @router.get("/slug/{slug}/counselors", response_model=list[CounselorPublicOut])
@@ -265,6 +275,8 @@ def create_school(body: SchoolCreate, _admin: AdminDep, db: DbDep) -> SchoolDeta
         .filter(School.id == school.id)
         .one()
     )
+    # Keep PostHog "school" group props in sync (fire-and-forget)
+    identify_school_group(school)
     return SchoolDetail.model_validate(school)
 
 
@@ -362,6 +374,7 @@ def update_school(
             "logo_url", "nickname",
             "city", "state", "zip_code", "street_address",
             "appointlet_link", "calendar_link",
+            "enrollment_9_12", *_ENROLLMENT_GRADE_FIELDS,
         }
         update_data = {k: v for k, v in update_data.items() if k in counselor_allowed}
 
@@ -373,6 +386,14 @@ def update_school(
     for field, value in update_data.items():
         setattr(school, field, value)
 
+    # Per-grade values are the source of truth for the total when present —
+    # enrollment_9_12 feeds the % reach metric and the enrollment_range
+    # computed column, so keep it in sync on any per-grade change
+    if any(f in update_data for f in _ENROLLMENT_GRADE_FIELDS):
+        grades = [getattr(school, f) for f in _ENROLLMENT_GRADE_FIELDS]
+        if any(g is not None for g in grades):
+            school.enrollment_9_12 = sum(g for g in grades if g is not None)
+
     db.commit()
     school = (
         db.query(School)
@@ -380,6 +401,8 @@ def update_school(
         .filter(School.id == school_id)
         .one()
     )
+    # Keep PostHog "school" group props in sync (fire-and-forget)
+    identify_school_group(school)
     return SchoolDetail.model_validate(school)
 
 

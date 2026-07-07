@@ -41,6 +41,10 @@ class SchoolListItem(BaseModel):
     state: str | None = None
     zip_code: str | None = None
     enrollment_9_12: int | None = None
+    enrollment_grade_9: int | None = None
+    enrollment_grade_10: int | None = None
+    enrollment_grade_11: int | None = None
+    enrollment_grade_12: int | None = None
     enrollment_range: str | None = None
     is_current_customer: bool = False
     logo_url: str | None = None
@@ -105,6 +109,10 @@ class SchoolUpdate(BaseModel):
     zip_code: str | None = None
     street_address: str | None = None
     enrollment_9_12: int | None = None
+    enrollment_grade_9: int | None = None
+    enrollment_grade_10: int | None = None
+    enrollment_grade_11: int | None = None
+    enrollment_grade_12: int | None = None
     cohort_id: uuid.UUID | None = None
     grade_set_id: uuid.UUID | None = None
     is_current_customer: bool | None = None
@@ -177,7 +185,11 @@ class CounselorPublicOut(BaseModel):
 
 class SchoolSyncResult(BaseModel):
     schools_created: int
+    schools_updated: int = 0
     contacts_created: int
+    contacts_updated: int = 0
+    contacts_unlinked: int = 0
     counselors_created: int
+    school_roles_updated: int = 0
     skipped: int
     synced_at: datetime

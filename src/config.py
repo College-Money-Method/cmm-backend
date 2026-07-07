@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # PostHog (analytics queries — server-side only)
     posthog_api_key: str = ""
     posthog_project_id: str = ""
+    # PostHog project token (phc_...) — same public token the frontend uses;
+    # required for server-side event capture ($groupidentify)
+    posthog_project_token: str = ""
 
     # App
     log_level: str = "DEBUG"

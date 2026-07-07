@@ -12,12 +12,14 @@ class UserRoleOut(BaseModel):
     user_id: uuid.UUID
     role: Literal["super_admin", "hub_admin", "hub_user", "viewer"]
     school_id: uuid.UUID | None = None
+    school_role: str | None = None  # cosmetic Airtable title, e.g. "Director"
 
 
 class CurrentUser(BaseModel):
     user_id: uuid.UUID
     role: Literal["super_admin", "hub_admin", "hub_user", "viewer"]
     school_id: uuid.UUID | None = None
+    school_role: str | None = None  # cosmetic Airtable title, e.g. "Director"
 
 
 class CounselorCreate(BaseModel):
@@ -60,6 +62,8 @@ class CounselorListResponse(BaseModel):
 
 
 class CounselorSyncResult(BaseModel):
+    contacts_created: int = 0
+    contacts_updated: int = 0
     counselors_created: int
     school_roles_updated: int
     skipped: int
