@@ -39,8 +39,17 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            version_table_schema="public",
+        )
         with context.begin_transaction():
+            # Supabase transaction pooler (port 6543) assigns a backend per transaction
+            # and may hand over one whose search_path was reset (DISCARD ALL), causing
+            # "no schema has been selected to create in". Pin it as the first statement
+            # in the migration transaction so all DDL runs against the right schema.
+            connection.exec_driver_sql("SET LOCAL search_path TO public, extensions")
             context.run_migrations()
 
 

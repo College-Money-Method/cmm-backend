@@ -7,6 +7,7 @@ shapes. New hub endpoints added below.
 from __future__ import annotations
 
 import uuid
+from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 from src.analytics import posthog as ph
@@ -20,15 +21,21 @@ from src.analytics.schemas import (
     ReachBenchmark,
     ReachData,
     SearchData,
+    TrendMetric,
     WebinarDetail,
     WorkshopData,
     WorkshopsDetailData,
     WorkshopsDetailTotals,
+    WorkshopTimelineTrends,
+    WorkshopTimelineEntry,
+    WorkshopsTimelineOverviewData,
 )
 from src.analytics.postgres_queries import (
     get_library_published_counts,
     get_reach_benchmark,
     get_reach_data,
+    get_webinar_by_id,
+    get_webinars_for_school_by_cycle_name,
     get_webinars_for_school_in_range,
     get_workshops_detail_totals,
 )
@@ -314,6 +321,261 @@ def get_peak_usage(
     result = PeakUsageData(cells=cells, max_count=max_count)
     ph._db_set(db, cache_key, result.model_dump())
     return result
+
+
+@router.get("/workshop-timeline", response_model=WorkshopTimelineTrends)
+def get_workshop_timeline(
+    current_user: CounselorDep,
+    db: DbDep,
+    webinar_id: str = Query(...),
+    school_id: str | None = Query(default=None),
+) -> WorkshopTimelineTrends:
+    """Per-webinar windowed engagement: 30d before → 14d after start_datetime.
+
+    webinar_id = internal webinar UUID (matches PostHog properties.webinar_id).
+    Returns 4 daily TrendMetric series zero-filled across a 44-day window.
+    """
+    api_key, project_id = _check_configured()
+    # Validate webinar_id as UUID — PostHog properties.webinar_id is the internal UUID
+    try:
+        webinar_uuid = uuid.UUID(webinar_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"webinar_id must be a valid UUID: {webinar_id!r}")
+    phb._validate_webinar_id(webinar_id)  # belt-and-suspenders: rejects non-UUID chars
+    sid = _resolve_school(current_user, school_id)
+
+    cache_key = ph._key(fn="workshop_timeline", webinar_id=webinar_id, school_id=sid)
+    if (cached := ph._db_get(db, cache_key, sid)) is not None:
+        return WorkshopTimelineTrends.model_validate(cached)
+
+    # Lookup webinar metadata from Postgres by internal UUID
+    webinar = get_webinar_by_id(db, webinar_uuid)
+    if webinar is None:
+        raise HTTPException(status_code=404, detail=f"Webinar {webinar_id!r} not found")
+    if webinar["start_datetime"] is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Webinar {webinar_id!r} has no start_datetime; cannot compute timeline window",
+        )
+
+    # -30d to +14d inclusive = 45 days (30 before + day-0 + 14 after)
+    start_dt = webinar["start_datetime"]
+    window_start: date = (start_dt - timedelta(days=30)).date()
+    window_end: date = (start_dt + timedelta(days=14)).date()
+    days = [(window_start + timedelta(days=i)).isoformat() for i in range(45)]
+
+    webinar_windows: list[phb.WebinarWindow] = [
+        {"webinar_id": webinar_id, "window_start": window_start, "window_end": window_end}
+    ]
+
+    # Resource views need per-webinar via/from filter — inline extra_filter
+    resource_extra = f" AND properties.via = 'workshop' AND properties.from = '{webinar_id}'"
+    event_specs: list[phb.EventSpec] = [
+        {"key": "registrations", "event": "workshop_registration_complete"},
+        {"key": "detail_views", "event": "workshop_detail_view"},
+        {"key": "video_watch_count", "event": "video_session_end"},
+        {"key": "resource_views", "event": "resource_viewed", "extra_filter": resource_extra},
+    ]
+
+    try:
+        raw = phb.get_windowed_trends_by_webinar(api_key, project_id, webinar_windows, event_specs, sid, db)
+    except Exception as exc:
+        stale = ph._db_get_stale(db, cache_key)
+        if stale:
+            return WorkshopTimelineTrends.model_validate(stale)
+        raise HTTPException(status_code=503, detail="PostHog unavailable") from exc
+
+    # Build each TrendMetric with zero-fill
+    def _trend(event_key: str) -> TrendMetric:
+        pairs = raw.get(event_key, {}).get(webinar_id, [])
+        day_count: dict[str, int] = {}
+        for d, cnt in pairs:
+            day_count[d] = day_count.get(d, 0) + cnt
+        data = [float(day_count.get(d, 0)) for d in days]
+        return TrendMetric(total=int(sum(data)), data=data, days=days)
+
+    result = WorkshopTimelineTrends(
+        webinar_id=webinar_id,
+        workshop_name=webinar["workshop_name"],
+        start_datetime=start_dt.isoformat(),
+        window_start=window_start.isoformat(),
+        window_end=window_end.isoformat(),
+        days=days,
+        registrations=_trend("registrations"),
+        detail_views=_trend("detail_views"),
+        video_watch_count=_trend("video_watch_count"),
+        resource_views=_trend("resource_views"),
+    )
+    ph._db_set(db, cache_key, result.model_dump())
+    return result
+
+
+@router.get("/workshops-timeline-overview", response_model=WorkshopsTimelineOverviewData)
+def get_workshops_timeline_overview(
+    current_user: CounselorDep,
+    db: DbDep,
+    school_id: str | None = Query(default=None),
+    cycle_name: str = Query(...),
+) -> WorkshopsTimelineOverviewData:
+    """All-workshop aggregate + per-workshop headline for the overview tab.
+
+    cycle_name (required) bounds the webinar set — resolves to webinars via
+    cycle.name → Cycle.id → webinars for school+cycle.
+    Aggregate series use relative days ("-30" .. "0" .. "+14").
+    """
+    api_key, project_id = _check_configured()
+    ph._validate_cycle_name(cycle_name)  # validate before cache key + HogQL use
+    sid = _resolve_school(current_user, school_id)
+    if not sid:
+        raise HTTPException(status_code=400, detail="school_id required for workshops-timeline-overview")
+
+    school_uuid = uuid.UUID(sid)
+    cache_key = ph._key(fn="workshops_timeline_overview", school_id=sid, cycle_name=cycle_name)
+    if (cached := ph._db_get(db, cache_key, sid)) is not None:
+        return WorkshopsTimelineOverviewData.model_validate(cached)
+
+    # Resolve cycle_name → webinars for this school
+    webinar_rows = get_webinars_for_school_by_cycle_name(db, school_uuid, cycle_name)
+
+    if len(webinar_rows) > phb._MAX_WEBINARS_PER_REQUEST:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "workshops-timeline-overview: %d webinars for school %s cycle %r; capped at %d",
+            len(webinar_rows), sid, cycle_name, phb._MAX_WEBINARS_PER_REQUEST,
+        )
+        webinar_rows = webinar_rows[:phb._MAX_WEBINARS_PER_REQUEST]
+
+    # Relative day labels: -30 to +14 (inclusive = 45 points)
+    relative_days = [str(i) for i in range(-30, 15)]
+
+    # Separate webinars with/without start_datetime
+    valid_rows = [r for r in webinar_rows if r["start_datetime"] is not None]
+    null_rows = [r for r in webinar_rows if r["start_datetime"] is None]
+
+    if not valid_rows:
+        # All webinars lack start_datetime — return empty aggregates
+        empty_trend = _empty_relative_trend(relative_days)
+        workshops = [_null_entry(r) for r in webinar_rows]
+        result = WorkshopsTimelineOverviewData(
+            workshops=workshops,
+            aggregate_registrations=empty_trend,
+            aggregate_detail_views=empty_trend,
+            aggregate_video_watch_count=empty_trend,
+        )
+        ph._db_set(db, cache_key, result.model_dump())
+        return result
+
+    # Build windowed query inputs for valid webinars only
+    webinar_windows: list[phb.WebinarWindow] = []
+    window_map: dict[str, tuple[date, date]] = {}  # webinar_id → (ws, we)
+    for row in valid_rows:
+        start_dt = row["start_datetime"]
+        ws = (start_dt - timedelta(days=30)).date()
+        we = (start_dt + timedelta(days=14)).date()
+        vid = row["webinar_id"]
+        webinar_windows.append({"webinar_id": vid, "window_start": ws, "window_end": we})
+        window_map[vid] = (ws, we)
+
+    # resource_views need per-webinar via/from filters — one event_spec per webinar
+    # For simplicity: we issue the base events in one batch query, then resource_views
+    # in a separate per-webinar batch. Both are ONE HogQL each (UNION ALL).
+    base_specs: list[phb.EventSpec] = [
+        {"key": "registrations", "event": "workshop_registration_complete"},
+        {"key": "detail_views", "event": "workshop_detail_view"},
+        {"key": "video_watch_count", "event": "video_session_end"},
+    ]
+
+    try:
+        raw = phb.get_windowed_trends_by_webinar(
+            api_key, project_id, webinar_windows, base_specs, sid, db
+        )
+    except Exception as exc:
+        stale = ph._db_get_stale(db, cache_key)
+        if stale:
+            return WorkshopsTimelineOverviewData.model_validate(stale)
+        raise HTTPException(status_code=503, detail="PostHog unavailable") from exc
+
+    # Build aggregate relative-day buckets: {relative_day_str: {event_key: count}}
+    # Note: resource_views not included in WorkshopTimelineEntry (overview headline).
+    agg_reg: dict[str, int] = {d: 0 for d in relative_days}
+    agg_detail: dict[str, int] = {d: 0 for d in relative_days}
+    agg_video: dict[str, int] = {d: 0 for d in relative_days}
+
+    for row in valid_rows:
+        _vid = row["webinar_id"]
+        _start_dt = row["start_datetime"]
+
+        for event_key, agg in (
+            ("registrations", agg_reg),
+            ("detail_views", agg_detail),
+            ("video_watch_count", agg_video),
+        ):
+            for day_str, cnt in raw.get(event_key, {}).get(_vid, []):
+                try:
+                    d = date.fromisoformat(day_str)
+                    rel_key = str((d - _start_dt.date()).days)
+                    if rel_key in agg:
+                        agg[rel_key] += cnt
+                except Exception:
+                    pass
+
+    def _to_relative_trend(agg: dict[str, int]) -> TrendMetric:
+        data = [float(agg.get(d, 0)) for d in relative_days]
+        return TrendMetric(total=int(sum(data)), data=data, days=relative_days)
+
+    def _build_entry(row: dict) -> WorkshopTimelineEntry:
+        vid = row["webinar_id"]
+        ws_we = window_map.get(vid)
+        if ws_we is None:
+            return _null_entry(row)
+        ws, we = ws_we
+
+        # Totals from raw
+        reg_total = sum(cnt for _, cnt in raw.get("registrations", {}).get(vid, []))
+        detail_total = sum(cnt for _, cnt in raw.get("detail_views", {}).get(vid, []))
+        video_total = sum(cnt for _, cnt in raw.get("video_watch_count", {}).get(vid, []))
+
+        start_dt = row["start_datetime"]
+        return WorkshopTimelineEntry(
+            webinar_id=vid,
+            workshop_name=row["workshop_name"],
+            start_datetime=start_dt.isoformat() if start_dt else None,
+            window_start=ws.isoformat(),
+            window_end=we.isoformat(),
+            registered=reg_total,
+            detail_views=detail_total,
+            video_watch_count=video_total,
+        )
+
+    workshops = [_build_entry(r) for r in valid_rows] + [_null_entry(r) for r in null_rows]
+    # Sort by start_datetime: valid (ascending) then null
+    workshops.sort(key=lambda e: (e.start_datetime is None, e.start_datetime or ""))
+
+    result = WorkshopsTimelineOverviewData(
+        workshops=workshops,
+        aggregate_registrations=_to_relative_trend(agg_reg),
+        aggregate_detail_views=_to_relative_trend(agg_detail),
+        aggregate_video_watch_count=_to_relative_trend(agg_video),
+    )
+    ph._db_set(db, cache_key, result.model_dump())
+    return result
+
+
+def _empty_relative_trend(relative_days: list[str]) -> TrendMetric:
+    return TrendMetric(total=0, data=[0.0] * len(relative_days), days=relative_days)
+
+
+def _null_entry(row: dict) -> WorkshopTimelineEntry:
+    return WorkshopTimelineEntry(
+        webinar_id=row["webinar_id"],
+        workshop_name=row["workshop_name"],
+        start_datetime=None,
+        window_start=None,
+        window_end=None,
+        registered=0,
+        detail_views=0,
+        video_watch_count=0,
+    )
 
 
 @router.get("/library-coverage", response_model=LibraryCoverageData)

@@ -1233,6 +1233,35 @@ def _call_claude(model: str, api_key: str, prompt: str) -> dict[str, Any]:
     return _extract_json_object("\n".join(text_blocks))
 
 
+def _call_claude_bedrock(model: str, prompt: str) -> dict[str, Any]:
+    """Call Claude via Amazon Bedrock using AWS credentials (no ANTHROPIC_API_KEY).
+
+    Reuses the same AWS creds/region as the S3 client (src.config.settings). When
+    the explicit keys are blank, the client falls back to the default boto3
+    credential chain (env vars, shared profile, instance/task role).
+    """
+    from anthropic import AnthropicBedrock
+    from src.config import settings
+
+    client = AnthropicBedrock(
+        aws_access_key=settings.aws_access_key_id or None,
+        aws_secret_key=settings.aws_secret_access_key or None,
+        aws_region=settings.aws_region,
+    )
+
+    # NOTE: temperature is intentionally omitted — it is removed on Claude 4.7/4.8
+    # (returns 400) and only guides, never guarantees, determinism on older models.
+    message = client.messages.create(
+        model=model,
+        max_tokens=8192,
+        system=_LLM_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    text_blocks = [b.text for b in message.content if b.type == "text"]
+    return _extract_json_object("\n".join(text_blocks))
+
+
 def _normalize_with_llm(
     provider: str,
     model: str,
@@ -1256,6 +1285,8 @@ def _normalize_with_llm(
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is required when provider=claude")
         parsed = _call_claude(model=model, api_key=api_key, prompt=prompt)
+    elif provider == "bedrock":
+        parsed = _call_claude_bedrock(model=model, prompt=prompt)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
@@ -1564,6 +1595,11 @@ def _default_model(provider: str) -> str:
         return "gpt-4.1"
     if provider == "claude":
         return "claude-3-7-sonnet-latest"
+    if provider == "bedrock":
+        # Bedrock model IDs differ from the direct API. Override with --model to
+        # match a model you've enabled; region-scoped inference profiles are often
+        # required (e.g. "us.anthropic.claude-3-7-sonnet-20250219-v1:0").
+        return "anthropic.claude-3-7-sonnet-20250219-v1:0"
     return "none"
 
 
@@ -1572,7 +1608,7 @@ def main() -> int:
     parser.add_argument("--input", required=True, help="Path to CSV or JSON input file")
     parser.add_argument(
         "--provider",
-        choices=["auto", "openai", "claude", "none"],
+        choices=["auto", "openai", "claude", "bedrock", "none"],
         default="auto",
         help="LLM provider used to normalize content",
     )

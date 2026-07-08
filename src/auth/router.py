@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session, joinedload
 
 from src.auth.deps import AdminDep, CurrentUserDep, get_current_user
+from src.auth.hub_password import default_hub_password
 from src.auth.models import UserRole
 from src.auth.schemas import (
     CounselorCreate,
@@ -40,6 +41,10 @@ def get_me(user: CurrentUserDep) -> UserRoleOut:
 # ──────────────────────────────────────────────
 # Counselor management (admin only)
 # ──────────────────────────────────────────────
+
+
+# Airtable-style display label derived from the access role.
+_SCHOOL_ROLE_BY_ROLE = {"hub_admin": "Director", "hub_user": "Counselor"}
 
 
 def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut:
@@ -155,29 +160,61 @@ def list_counselors(
 @router.post("/api/v1/counselors", response_model=CounselorOut, status_code=status.HTTP_201_CREATED)
 def create_counselor(
     body: CounselorCreate,
-    _admin: AdminDep,
+    current: CurrentUserDep,
     db: DbDep,
     supabase=Depends(get_supabase),
 ) -> CounselorOut:
-    """Create a Supabase Auth user and assign them a counselor/viewer role."""
+    """Create a Supabase Auth user and assign them a counselor/director role.
+
+    Super admins may create for any school with any role. Directors (hub_admin)
+    may create counselors or directors for their own school only; the account
+    password defaults to the email handle + the school's resource-center password.
+    """
+    # Authorization: super_admin (any school/role) or hub_admin (own school, hub roles)
+    if current.role not in ("super_admin", "hub_admin"):
+        raise HTTPException(status_code=403, detail="Hub admin access required")
+
+    if current.role == "hub_admin":
+        if not current.school_id:
+            raise HTTPException(status_code=403, detail="You are not assigned to a school")
+        # Directors create only for their own school and only counselor/director roles
+        school_id = current.school_id
+        if body.role not in ("hub_admin", "hub_user"):
+            raise HTTPException(
+                status_code=403, detail="Directors may only create counselors or directors"
+            )
+    else:
+        school_id = body.school_id
+        if not school_id:
+            raise HTTPException(status_code=400, detail="school_id is required")
+
     # Verify school exists
-    school = db.query(School).filter(School.id == body.school_id).first()
+    school = db.query(School).filter(School.id == school_id).first()
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
+
+    # Name defaults to the email handle so directors can supply just an email
+    first_name = body.first_name or body.email.split("@", 1)[0]
+    last_name = body.last_name or ""
+    # Airtable-style display label follows the access role
+    school_role = _SCHOOL_ROLE_BY_ROLE.get(body.role)
 
     # Create user in Supabase
     create_params = {
         "email": body.email,
         "user_metadata": {
-            "first_name": body.first_name,
-            "last_name": body.last_name,
+            "first_name": first_name,
+            "last_name": last_name,
         },
         "email_confirm": True,
     }
-    if body.password:
-        create_params["password"] = body.password
+    # Explicit password wins; otherwise derive the default hub password (email handle
+    # + the school's resource-center password, or just the handle when it has none).
+    create_params["password"] = body.password or default_hub_password(
+        body.email, school.cmm_website_password
+    )
 
-    logger.info("Creating Supabase user: email=%s school_id=%s role=%s", body.email, body.school_id, body.role)
+    logger.info("Creating Supabase user: email=%s school_id=%s role=%s", body.email, school_id, body.role)
     try:
         resp = supabase.auth.admin.create_user(create_params)
         if not resp or not resp.user:
@@ -211,7 +248,9 @@ def create_counselor(
     existing_role = db.query(UserRole).filter(UserRole.user_id == uuid.UUID(new_user.id)).first()
     if existing_role:
         existing_role.role = body.role
-        existing_role.school_id = body.school_id
+        existing_role.school_id = school_id
+        if school_role is not None:
+            existing_role.school_role = school_role
         if body.title is not None:
             existing_role.title = body.title
         db.commit()
@@ -232,7 +271,8 @@ def create_counselor(
     role_record = UserRole(
         user_id=uuid.UUID(new_user.id),
         role=body.role,
-        school_id=body.school_id,
+        school_id=school_id,
+        school_role=school_role,
         title=body.title,
     )
     db.add(role_record)

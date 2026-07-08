@@ -197,3 +197,40 @@ class EnrollmentBandStat(BaseModel):
 class GeographicData(BaseModel):
     by_state: list[TopBreakdown]
     by_enrollment_band: list[EnrollmentBandStat]
+
+
+# ── Workshop-timeline analytics schemas ───────────────────────────────────────
+
+class WorkshopTimelineTrends(BaseModel):
+    """Per-webinar windowed engagement — 45-day window: -30d to +14d around start_datetime."""
+    webinar_id: str
+    workshop_name: str
+    start_datetime: str          # ISO-8601 UTC
+    window_start: str            # YYYY-MM-DD
+    window_end: str              # YYYY-MM-DD
+    days: list[str]              # 44 YYYY-MM-DD strings
+    registrations: TrendMetric   # workshop_registration_complete
+    detail_views: TrendMetric    # workshop_detail_view
+    video_watch_count: TrendMetric  # video_session_end
+    resource_views: TrendMetric  # resource_viewed via=workshop AND from=<webinar_id>
+
+
+class WorkshopTimelineEntry(BaseModel):
+    """Headline row per webinar in the overview list."""
+    webinar_id: str
+    workshop_name: str
+    start_datetime: str | None
+    window_start: str | None
+    window_end: str | None
+    registered: int
+    detail_views: int
+    video_watch_count: int
+
+
+class WorkshopsTimelineOverviewData(BaseModel):
+    """All-workshop aggregate for the overview tab."""
+    workshops: list[WorkshopTimelineEntry]
+    # Aggregate overlay TrendMetrics keyed by relative day (-30..+14)
+    aggregate_registrations: TrendMetric
+    aggregate_detail_views: TrendMetric
+    aggregate_video_watch_count: TrendMetric

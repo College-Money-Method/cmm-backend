@@ -123,6 +123,94 @@ def get_webinars_for_school_in_range(
     return result
 
 
+def get_webinar_by_id(db: Session, webinar_id: uuid.UUID) -> dict | None:
+    """Lookup a webinar by its internal UUID.
+
+    PostHog properties.webinar_id is the internal webinar UUID string, not
+    the Zoom numeric ID. Returns start_datetime + workshop_name, or None.
+    """
+    from src.workshops.models import Workshop
+
+    stmt = (
+        select(
+            Webinar.id,
+            Webinar.webinar_name,
+            Webinar.start_datetime,
+            Workshop.name.label("workshop_name"),
+        )
+        .join(Workshop, Webinar.workshop_id == Workshop.id)
+        .where(Webinar.id == webinar_id)
+        .limit(1)
+    )
+    row = db.execute(stmt).mappings().first()
+    if row is None:
+        return None
+    return {
+        "webinar_id": str(row["id"]),
+        "workshop_name": row["workshop_name"] or row["webinar_name"] or "",
+        "start_datetime": row["start_datetime"],  # datetime | None, tz-aware
+    }
+
+
+def get_webinars_for_school_by_cycle_name(
+    db: Session,
+    school_id: uuid.UUID,
+    cycle_name: str,
+) -> list[dict]:
+    """Return webinars for a school scoped to a specific cycle by name.
+
+    Resolves cycle_name → Cycle.id → webinars for that cycle that are
+    associated with the school (via PortalMapping or WorkshopRegistration).
+    webinar_id = str(webinar.id) — the internal UUID that PostHog uses.
+    Webinars with null start_datetime are included (caller handles them).
+    """
+    from src.cycles.models import Cycle
+    from src.workshops.models import Workshop
+
+    # Resolve cycle_name → Cycle.id
+    cycle_row = db.execute(
+        select(Cycle.id).where(Cycle.name == cycle_name).limit(1)
+    ).first()
+    if cycle_row is None:
+        return []
+    cycle_id = cycle_row[0]
+
+    # School-associated webinar IDs (same logic as get_webinars_for_school_in_range)
+    mapped_ids_q = select(PortalMapping.webinar_id).where(PortalMapping.school_id == school_id)
+    reg_ids_q = (
+        select(WorkshopRegistration.webinar_id)
+        .where(WorkshopRegistration.school_id == school_id)
+        .distinct()
+    )
+
+    stmt = (
+        select(
+            Webinar.id,
+            Webinar.webinar_name,
+            Webinar.start_datetime,
+            Workshop.name.label("workshop_name"),
+        )
+        .join(Workshop, Webinar.workshop_id == Workshop.id)
+        .where(
+            and_(
+                Webinar.cycle_id == cycle_id,
+                Webinar.id.in_(mapped_ids_q.union(reg_ids_q)),
+            )
+        )
+        .order_by(Webinar.start_datetime.nullslast())
+    )
+
+    rows = db.execute(stmt).mappings().all()
+    return [
+        {
+            "webinar_id": str(row["id"]),  # internal UUID — matches PostHog properties.webinar_id
+            "workshop_name": row["workshop_name"] or row["webinar_name"] or "",
+            "start_datetime": row["start_datetime"],  # datetime | None, tz-aware
+        }
+        for row in rows
+    ]
+
+
 def get_workshops_detail_totals(rows: list[dict]) -> dict:
     return {
         "registered": sum(r["registered"] for r in rows),

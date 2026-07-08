@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, TypedDict
 
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,31 @@ logger = logging.getLogger(__name__)
 _PROP_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 _EVENT_RE = re.compile(r"^[A-Za-z0-9_$]+$")
 _MAX_DAYS = 750  # bound the zero-filled series (cycle window is ~15 months)
+_MAX_WEBINARS_PER_REQUEST = 50  # log warning if exceeded
+
+
+class WebinarWindow(TypedDict):
+    webinar_id: str       # Zoom string ID (safe: validated before use)
+    window_start: date    # Python date (safe: generated in Python, not user input)
+    window_end: date      # Python date
+
+
+class EventSpec(TypedDict, total=False):
+    key: str              # result dict key
+    event: str            # PostHog event name
+    extra_filter: str     # optional extra HogQL WHERE fragment (e.g. "AND properties.via = 'workshop'")
+
+
+def _validate_webinar_id(webinar_id: str) -> str:
+    """Ensure webinar_id is a valid UUID string safe for HogQL interpolation.
+
+    PostHog properties.webinar_id is the internal webinar UUID — same format
+    as school_id. Delegates to _validate_school_id for consistency.
+    """
+    validated = ph._validate_school_id(webinar_id)
+    if validated is None:
+        raise ValueError(f"Invalid webinar_id for HogQL interpolation: {webinar_id!r}")
+    return validated
 
 
 def _ident(value: str, pattern: re.Pattern, what: str) -> str:
@@ -180,3 +205,102 @@ def get_batched_breakdowns(
 
     ph._db_set(db, cache_key, {k: [b.model_dump() for b in v] for k, v in grouped.items()})
     return grouped
+
+
+def get_windowed_trends_by_webinar(
+    api_key: str,
+    project_id: str,
+    webinar_windows: list[WebinarWindow],
+    event_specs: list[EventSpec],
+    school_id: str | None,
+    db: "Session | None" = None,
+) -> dict[str, dict[str, list[tuple[str, int]]]]:
+    """ONE HogQL round trip for windowed engagement across multiple webinars.
+
+    Builds a UNION ALL query: one subquery per (event, webinar). Each subquery
+    filters by the webinar's date window (Python-generated dates, safe) and the
+    event name. Returns per-event, per-webinar daily counts.
+
+    Args:
+        webinar_windows: list of {webinar_id, window_start, window_end}.
+        event_specs: list of {key, event, extra_filter?}.
+            extra_filter is a pre-validated HogQL AND fragment for this event.
+        school_id: optional school scoping.
+        db: DB session for caching.
+
+    Returns:
+        {event_key: {webinar_id: [(day_str, count), ...]}}
+        Caller zero-fills each series against its window.
+    """
+    if not webinar_windows or not event_specs:
+        return {spec["key"]: {} for spec in event_specs}
+
+    if len(webinar_windows) > _MAX_WEBINARS_PER_REQUEST:
+        logger.warning(
+            "get_windowed_trends_by_webinar: %d webinars exceeds cap of %d; "
+            "query may be slow — consider paginating",
+            len(webinar_windows),
+            _MAX_WEBINARS_PER_REQUEST,
+        )
+
+    school_clause = ph._hogql_school_clause(school_id)
+
+    # Build UNION ALL: one branch per (event_spec × webinar) group.
+    # We group all webinars for the same event into a single subquery using OR
+    # date-window clauses, then discriminate by webinar_id in GROUP BY.
+    branches: list[str] = []
+    for spec in event_specs:
+        ev = _ident(spec["event"], _EVENT_RE, "event")
+        key = spec["key"]
+        extra = spec.get("extra_filter") or ""
+
+        # Build the webinar OR clause: per-webinar date window + id filter.
+        # Dates are Python date objects formatted as 'YYYY-MM-DD' — safe.
+        webinar_conditions: list[str] = []
+        for ww in webinar_windows:
+            vid = _validate_webinar_id(ww["webinar_id"])
+            ws = ww["window_start"].isoformat()
+            we = ww["window_end"].isoformat()
+            webinar_conditions.append(
+                f"(properties.webinar_id = '{vid}' "
+                f"AND timestamp >= toDateTime('{ws}') "
+                f"AND timestamp <= toDateTime('{we} 23:59:59'))"
+            )
+
+        webinar_or = " OR ".join(webinar_conditions)
+
+        # extra_filter may be webinar-specific (resource_views uses AND from=<vid>).
+        # For events where each webinar needs its own extra filter, callers supply
+        # one EventSpec per webinar (see router for resource_views handling).
+        branches.append(
+            f"SELECT '{key}' AS event_key, "
+            f"properties.webinar_id AS webinar_id, "
+            f"toStartOfDay(timestamp) AS day, "
+            f"count() AS cnt "
+            f"FROM events "
+            f"WHERE event = '{ev}'{school_clause} "
+            f"AND ({webinar_or}){extra} "
+            f"GROUP BY webinar_id, day"
+        )
+
+    hogql = " UNION ALL ".join(branches)
+
+    try:
+        rows = ph.get_hogql_query(api_key, project_id, hogql)
+    except Exception as exc:
+        logger.warning("PostHog error in get_windowed_trends_by_webinar: %s", exc)
+        return {spec["key"]: {} for spec in event_specs}
+
+    # Accumulate results: {event_key: {webinar_id: [(day_str, count)]}}
+    result: dict[str, dict[str, list[tuple[str, int]]]] = {
+        spec["key"]: {} for spec in event_specs
+    }
+    for row in rows:
+        event_key = str(row[0])
+        vid = str(row[1]) if row[1] else None
+        day_str = str(row[2])[:10] if row[2] else None
+        cnt = int(row[3] or 0)
+        if event_key in result and vid and day_str:
+            result[event_key].setdefault(vid, []).append((day_str, cnt))
+
+    return result
