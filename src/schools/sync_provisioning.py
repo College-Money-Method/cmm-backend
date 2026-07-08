@@ -11,8 +11,9 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.auth.hub_password import default_hub_password
 from src.auth.models import UserRole
-from src.schools.models import Contact
+from src.schools.models import Contact, School
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,11 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
     all_roles: list[UserRole] = db.execute(select(UserRole)).scalars().all()
     role_by_user_id: dict[str, UserRole] = {str(r.user_id): r for r in all_roles}
 
+    # School resource-center passwords, for deriving default account passwords
+    password_by_school_id: dict[uuid.UUID, str | None] = dict(
+        db.execute(select(School.id, School.cmm_website_password)).all()
+    )
+
     try:
         supabase_users_by_email = _fetch_supabase_users_by_email(supabase)
     except Exception as exc:
@@ -75,14 +81,20 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
             auth_user = supabase_users_by_email.get(email_lower)
             if auth_user is None:
                 try:
-                    resp = supabase.auth.admin.create_user({
+                    create_params = {
                         "email": email,
                         "user_metadata": {
                             "first_name": contact.first_name or "",
                             "last_name": contact.last_name or "",
                         },
                         "email_confirm": True,
-                    })
+                    }
+                    # Default password: email handle + the school's resource-center
+                    # password (just the handle when the school has none) — never an invite
+                    create_params["password"] = default_hub_password(
+                        email, password_by_school_id.get(contact.school_id)
+                    )
+                    resp = supabase.auth.admin.create_user(create_params)
                     if not resp or not resp.user:
                         logger.error("create_user returned no user for %s", email)
                         skipped += 1
