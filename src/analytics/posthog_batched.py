@@ -40,6 +40,8 @@ class EventSpec(TypedDict, total=False):
     key: str              # result dict key
     event: str            # PostHog event name
     extra_filter: str     # optional extra HogQL WHERE fragment (e.g. "AND properties.via = 'workshop'")
+    match_prop: str       # property holding the webinar id for THIS event (default "webinar_id").
+    #                       resource_viewed carries the origin webinar in "from", not "webinar_id".
 
 
 def _validate_webinar_id(webinar_id: str) -> str:
@@ -253,6 +255,10 @@ def get_windowed_trends_by_webinar(
         ev = _ident(spec["event"], _EVENT_RE, "event")
         key = spec["key"]
         extra = spec.get("extra_filter") or ""
+        # Which property holds the webinar id for this event. Most events use
+        # `webinar_id`; resource_viewed carries the origin webinar in `from`
+        # (its `webinar_id` is empty), so the match/group key must be `from`.
+        match_prop = _ident(spec.get("match_prop") or "webinar_id", _PROP_RE, "match_prop")
 
         # Build the webinar OR clause: per-webinar date window + id filter.
         # Dates are Python date objects formatted as 'YYYY-MM-DD' — safe.
@@ -262,19 +268,18 @@ def get_windowed_trends_by_webinar(
             ws = ww["window_start"].isoformat()
             we = ww["window_end"].isoformat()
             webinar_conditions.append(
-                f"(properties.webinar_id = '{vid}' "
+                f"(properties.{match_prop} = '{vid}' "
                 f"AND timestamp >= toDateTime('{ws}') "
                 f"AND timestamp <= toDateTime('{we} 23:59:59'))"
             )
 
         webinar_or = " OR ".join(webinar_conditions)
 
-        # extra_filter may be webinar-specific (resource_views uses AND from=<vid>).
-        # For events where each webinar needs its own extra filter, callers supply
-        # one EventSpec per webinar (see router for resource_views handling).
+        # Group by the SAME property used to match, so the returned webinar_id
+        # aligns with the caller's window regardless of which property carries it.
         branches.append(
             f"SELECT '{key}' AS event_key, "
-            f"properties.webinar_id AS webinar_id, "
+            f"properties.{match_prop} AS webinar_id, "
             f"toStartOfDay(timestamp) AS day, "
             f"count() AS cnt "
             f"FROM events "
