@@ -419,13 +419,19 @@ def get_workshop_timeline(
         {"webinar_id": webinar_id, "window_start": window_start, "window_end": window_end}
     ]
 
-    # Resource views need per-webinar via/from filter — inline extra_filter
-    resource_extra = f" AND properties.via = 'workshop' AND properties.from = '{webinar_id}'"
+    # resource_viewed carries the origin workshop in properties.from (its
+    # webinar_id is empty), so match on `from` and add only the via='workshop'
+    # filter — the windowed helper matches from=<webinar_id> per window.
     event_specs: list[phb.EventSpec] = [
         {"key": "registrations", "event": "workshop_registration_complete"},
         {"key": "detail_views", "event": "workshop_detail_view"},
         {"key": "video_watch_count", "event": "video_session_end"},
-        {"key": "resource_views", "event": "resource_viewed", "extra_filter": resource_extra},
+        {
+            "key": "resource_views",
+            "event": "resource_viewed",
+            "match_prop": "from",
+            "extra_filter": " AND properties.via = 'workshop'",
+        },
     ]
 
     try:
