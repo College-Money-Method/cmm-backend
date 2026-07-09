@@ -234,6 +234,8 @@ class ObjectiveWorkshop(Base):
     workshop_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("workshops.id", ondelete="CASCADE"), primary_key=True
     )
+    # Preserves the admin-defined display order of objectives within a workshop.
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
 
 class ContentAssetObjective(Base):

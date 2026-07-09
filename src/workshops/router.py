@@ -16,7 +16,7 @@ from src.auth.deps import AdminDep, CounselorDep, CurrentUserDep
 from src.db.deps import DbDep
 from src.integrations import zoom as zoom_client
 from src.utils.tiptap import extract_text
-from src.content.models import ContentAsset, WorkshopResource, Objective
+from src.content.models import ContentAsset, WorkshopResource, Objective, ObjectiveWorkshop
 from src.cycles.models import Cycle
 from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
@@ -1124,13 +1124,29 @@ def update_workshop_objectives(
     if not obj:
         raise HTTPException(status_code=404, detail="Workshop not found")
 
-    new_objectives = db.execute(
+    fetched = db.execute(
         select(Objective)
         .where(Objective.id.in_(body.ids))
         .options(selectinload(Objective.content_assets))
     ).scalars().all() if body.ids else []
 
+    # SQL IN does not preserve order — reorder to match the admin-defined body.ids order.
+    by_id = {o.id: o for o in fetched}
+    new_objectives = [by_id[oid] for oid in body.ids if oid in by_id]
+
     obj.objectives = list(new_objectives)
+    db.flush()  # create objective_workshops join rows before stamping their sort_order
+
+    # Persist the display order on the join table (index within body.ids)
+    for order, objective in enumerate(new_objectives):
+        db.execute(
+            ObjectiveWorkshop.__table__.update()
+            .where(
+                (ObjectiveWorkshop.workshop_id == workshop_id)
+                & (ObjectiveWorkshop.objective_id == objective.id)
+            )
+            .values(sort_order=order)
+        )
 
     # Auto-sync workshop_resources from the union of all linked objective content assets
     all_asset_ids: dict[uuid.UUID, int] = {}
