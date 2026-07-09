@@ -61,6 +61,7 @@ def get_webinars_for_school_in_range(
             Webinar.start_datetime,
             Webinar.unmatched_participants_count,
             Workshop.name.label("workshop_name"),
+            Workshop.sequence_number.label("sequence_number"),
         )
         .join(Workshop, Webinar.workshop_id == Workshop.id)
         .where(
@@ -108,17 +109,21 @@ def get_webinars_for_school_in_range(
         registered = reg["registered"] if reg else 0
         attended_live = int(reg["attended_live"] or 0) if reg else 0
         result.append({
-            "webinar_id": str(row["zoom_webinar_id"] or row["id"]),
+            # Always use internal UUID — matches PostHog properties.webinar_id
+            "webinar_id": str(wid),
             "workshop_name": row["workshop_name"] or row["webinar_name"] or "",
             "start_datetime": row["start_datetime"].isoformat() if row["start_datetime"] else None,
             "registered": registered,
             "attended_live": attended_live,
             "no_show": registered - attended_live,
             "joined_without_reg": row["unmatched_participants_count"],
-            # recording_views and avg_percent_watched filled in by caller from PostHog
+            "sequence_number": row["sequence_number"],
+            # recording_views, avg_percent_watched, detail_views, resource_views filled by caller from PostHog
             "recording_views": 0,
             "avg_percent_watched": None,
-            "_webinar_id_raw": wid,  # internal: for PostHog join
+            "detail_views": 0,
+            "resource_views": 0,
+            "_webinar_id_raw": wid,  # internal UUID (same as webinar_id now, kept for compatibility)
         })
     return result
 
@@ -152,64 +157,6 @@ def get_webinar_by_id(db: Session, webinar_id: uuid.UUID) -> dict | None:
     }
 
 
-def get_webinars_for_school_by_cycle_name(
-    db: Session,
-    school_id: uuid.UUID,
-    cycle_name: str,
-) -> list[dict]:
-    """Return webinars for a school scoped to a specific cycle by name.
-
-    Resolves cycle_name → Cycle.id → webinars for that cycle that are
-    associated with the school (via PortalMapping or WorkshopRegistration).
-    webinar_id = str(webinar.id) — the internal UUID that PostHog uses.
-    Webinars with null start_datetime are included (caller handles them).
-    """
-    from src.cycles.models import Cycle
-    from src.workshops.models import Workshop
-
-    # Resolve cycle_name → Cycle.id
-    cycle_row = db.execute(
-        select(Cycle.id).where(Cycle.name == cycle_name).limit(1)
-    ).first()
-    if cycle_row is None:
-        return []
-    cycle_id = cycle_row[0]
-
-    # School-associated webinar IDs (same logic as get_webinars_for_school_in_range)
-    mapped_ids_q = select(PortalMapping.webinar_id).where(PortalMapping.school_id == school_id)
-    reg_ids_q = (
-        select(WorkshopRegistration.webinar_id)
-        .where(WorkshopRegistration.school_id == school_id)
-        .distinct()
-    )
-
-    stmt = (
-        select(
-            Webinar.id,
-            Webinar.webinar_name,
-            Webinar.start_datetime,
-            Workshop.name.label("workshop_name"),
-        )
-        .join(Workshop, Webinar.workshop_id == Workshop.id)
-        .where(
-            and_(
-                Webinar.cycle_id == cycle_id,
-                Webinar.id.in_(mapped_ids_q.union(reg_ids_q)),
-            )
-        )
-        .order_by(Webinar.start_datetime.nullslast())
-    )
-
-    rows = db.execute(stmt).mappings().all()
-    return [
-        {
-            "webinar_id": str(row["id"]),  # internal UUID — matches PostHog properties.webinar_id
-            "workshop_name": row["workshop_name"] or row["webinar_name"] or "",
-            "start_datetime": row["start_datetime"],  # datetime | None, tz-aware
-        }
-        for row in rows
-    ]
-
 
 def get_workshops_detail_totals(rows: list[dict]) -> dict:
     return {
@@ -217,6 +164,8 @@ def get_workshops_detail_totals(rows: list[dict]) -> dict:
         "attended_live": sum(r["attended_live"] for r in rows),
         "no_show": sum(r["no_show"] for r in rows),
         "recording_views": sum(r["recording_views"] for r in rows),
+        "detail_views": sum(r.get("detail_views", 0) for r in rows),
+        "resource_views": sum(r.get("resource_views", 0) for r in rows),
     }
 
 

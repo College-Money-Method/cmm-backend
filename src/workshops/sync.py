@@ -1,10 +1,13 @@
 """Airtable → DB sync logic for workshops and webinars."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from src.cycles.models import Cohort, Cycle
 from src.integrations.airtable import get_webinar_records, get_workshops_records
@@ -52,6 +55,15 @@ def sync_workshops_from_airtable(db: Session) -> dict:
 
         workshop = by_airtable_id.get(airtable_rec_id) or (by_sequence.get(seq) if seq is not None else None)
         if not workshop:
+            # A workshop skipped here cascades: its webinars cannot resolve a workshop
+            # and will also be skipped (no session created).
+            logger.warning(
+                "Airtable workshop sync SKIPPED: airtable_rec_id=%s sequence=%s name=%r — "
+                "no DB workshop with matching airtable_id or sequence_number",
+                airtable_rec_id,
+                seq,
+                fields.get("Name"),
+            )
             skipped += 1
             continue
 
@@ -167,6 +179,22 @@ def sync_webinars_from_airtable(db: Session) -> dict:
             workshop_at_id = linked_workshops[0] if linked_workshops else None
             workshop = workshop_by_airtable_id.get(workshop_at_id) if workshop_at_id else None
             if not workshop:
+                # Surface exactly why a new webinar could not be created so the
+                # cause (empty link vs. unmatched workshop airtable_id) is visible.
+                reason = (
+                    "no 'Workshops' linked field on the Airtable record"
+                    if not workshop_at_id
+                    else f"linked workshop airtable_id={workshop_at_id!r} not found in DB "
+                    "(workshop missing or its airtable_id/sequence_number not synced)"
+                )
+                logger.warning(
+                    "Airtable webinar sync SKIPPED (no session created): "
+                    "airtable_rec_id=%s zoom_webinar_id=%s webinar_name=%r — %s",
+                    airtable_rec_id,
+                    zoom_id,
+                    fields.get("Webinar Name"),
+                    reason,
+                )
                 skipped += 1
                 continue
 
@@ -246,6 +274,13 @@ def sync_all_from_airtable(db: Session) -> dict:
     """Run workshop sync then webinar sync, commit once, return combined stats."""
     w = sync_workshops_from_airtable(db)
     v = sync_webinars_from_airtable(db)
+
+    logger.info(
+        "Airtable sync summary — workshops: matched=%d updated=%d skipped=%d | "
+        "webinars: matched=%d updated=%d created=%d skipped=%d",
+        w["matched"], w["updated"], w["skipped"],
+        v["matched"], v["updated"], v["created"], v["skipped"],
+    )
 
     synced_at = datetime.now(timezone.utc)
     combined = {

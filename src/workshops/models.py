@@ -46,7 +46,12 @@ class Workshop(Base):
     webinars: Mapped[list[Webinar]] = relationship(back_populates="workshop")
     assets: Mapped[list[Asset]] = relationship(secondary="workshop_assets", back_populates="workshops")
     date_selectors: Mapped[list[SchoolDateSelector]] = relationship(back_populates="workshop")
-    objectives = relationship("Objective", secondary="objective_workshops", back_populates="workshops")
+    objectives = relationship(
+        "Objective",
+        secondary="objective_workshops",
+        back_populates="workshops",
+        order_by="ObjectiveWorkshop.sort_order",
+    )
     content_assets = relationship(
         "ContentAsset",
         secondary="workshop_resources",

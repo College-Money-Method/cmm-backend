@@ -76,6 +76,9 @@ class WebinarDetail(BaseModel):
     joined_without_reg: int | None
     recording_views: int
     avg_percent_watched: float | None
+    sequence_number: int | None = None
+    detail_views: int = 0
+    resource_views: int = 0
 
 
 class WorkshopsDetailTotals(BaseModel):
@@ -83,6 +86,8 @@ class WorkshopsDetailTotals(BaseModel):
     attended_live: int
     no_show: int
     recording_views: int
+    detail_views: int = 0
+    resource_views: int = 0
 
 
 class WorkshopsDetailData(BaseModel):
@@ -201,36 +206,32 @@ class GeographicData(BaseModel):
 
 # ── Workshop-timeline analytics schemas ───────────────────────────────────────
 
+class WorkshopVideoStats(BaseModel):
+    """Aggregate video stats for a single workshop within the timeline window."""
+    total_plays: int
+    total_minutes_watched: int
+    avg_percent_watched: float | None
+
+
+class ResourceUsedRow(BaseModel):
+    """Single resource breakdown row for workshop-timeline resources_used."""
+    resource_name: str
+    count: int
+
+
 class WorkshopTimelineTrends(BaseModel):
-    """Per-webinar windowed engagement — 45-day window: -30d to +14d around start_datetime."""
+    """Per-webinar windowed engagement — adjustable window around start_datetime."""
     webinar_id: str
     workshop_name: str
     start_datetime: str          # ISO-8601 UTC
     window_start: str            # YYYY-MM-DD
     window_end: str              # YYYY-MM-DD
-    days: list[str]              # 44 YYYY-MM-DD strings
+    weeks_before: int            # applied window weeks before start
+    weeks_after: int             # applied window weeks after start
+    days: list[str]              # YYYY-MM-DD strings across full window
     registrations: TrendMetric   # workshop_registration_complete
     detail_views: TrendMetric    # workshop_detail_view
     video_watch_count: TrendMetric  # video_session_end
     resource_views: TrendMetric  # resource_viewed via=workshop AND from=<webinar_id>
-
-
-class WorkshopTimelineEntry(BaseModel):
-    """Headline row per webinar in the overview list."""
-    webinar_id: str
-    workshop_name: str
-    start_datetime: str | None
-    window_start: str | None
-    window_end: str | None
-    registered: int
-    detail_views: int
-    video_watch_count: int
-
-
-class WorkshopsTimelineOverviewData(BaseModel):
-    """All-workshop aggregate for the overview tab."""
-    workshops: list[WorkshopTimelineEntry]
-    # Aggregate overlay TrendMetrics keyed by relative day (-30..+14)
-    aggregate_registrations: TrendMetric
-    aggregate_detail_views: TrendMetric
-    aggregate_video_watch_count: TrendMetric
+    video: WorkshopVideoStats    # aggregate video stats within window
+    resources_used: list[ResourceUsedRow]  # resource_viewed breakdown by asset_name
