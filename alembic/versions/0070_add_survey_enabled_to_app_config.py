@@ -1,7 +1,7 @@
 """add survey_enabled to app_config
 
 @70
-@31765d344a94
+@0069
 Create Date: 2026-07-01
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0070"
-down_revision: Union[str, None] = "31765d344a94"
+down_revision: Union[str, None] = "0069"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
