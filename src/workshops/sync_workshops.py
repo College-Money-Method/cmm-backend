@@ -36,6 +36,28 @@ def _normalize_name(name: str) -> str:
     return re.sub(r"\s+", " ", name).strip().lower()
 
 
+_GRADE_NUMBER_RE = re.compile(r"\d+")
+
+
+def _canonical_grades(values: list[str] | str | None) -> str | None:
+    """Normalize grade labels to the canonical comma-separated int string.
+
+    Airtable's "Suggested Grades" holds free-text labels ("10th grade", "12th");
+    the DB/API contract is bare sorted ints ("10,12"). Accepts either the
+    Airtable list or an already-stored string. Unparseable tokens are dropped;
+    returns None when nothing numeric remains.
+    """
+    if not values:
+        return None
+    tokens = values.split(",") if isinstance(values, str) else values
+    grades: set[int] = set()
+    for token in tokens:
+        match = _GRADE_NUMBER_RE.search(str(token))
+        if match:
+            grades.add(int(match.group()))
+    return ",".join(str(g) for g in sorted(grades)) or None
+
+
 def _claimable(workshop: Workshop | None, airtable_rec_id: str) -> Workshop | None:
     """Reject a candidate already linked to a *different* Airtable record."""
     if workshop and workshop.airtable_id and workshop.airtable_id != airtable_rec_id:
@@ -148,7 +170,7 @@ def sync_workshops_from_airtable(db: Session) -> dict:
                 airtable_id=airtable_rec_id,
                 description=fields.get("Description") or None,
                 key_actions=fields.get("Workshop Key Actions") or None,
-                suggested_grades=", ".join(grades) if grades else None,
+                suggested_grades=_canonical_grades(grades),
                 resource_center_slug=slug,
                 workshop_art_url=attachment_url(fields.get("Workshop Art")),
             )
@@ -176,6 +198,15 @@ def sync_workshops_from_airtable(db: Session) -> dict:
             by_norm_name.pop(_normalize_name(workshop.name), None)
             by_norm_name[norm_name] = workshop
             workshop.name = name
+            changed = True
+
+        # Keep grades in canonical "9,10,12" form: Airtable wins when it has
+        # grades; otherwise re-canonicalize whatever is stored so legacy
+        # free-text values ("10th grade") get fixed on the next sync.
+        airtable_grades = _canonical_grades(fields.get("Suggested Grades"))
+        new_grades = airtable_grades or _canonical_grades(workshop.suggested_grades)
+        if new_grades and workshop.suggested_grades != new_grades:
+            workshop.suggested_grades = new_grades
             changed = True
 
         if changed:
