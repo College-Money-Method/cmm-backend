@@ -31,4 +31,9 @@ airtable_csv_exports/
 .gitnexus
 scripts/input/
 scripts/output/
-.claude
+
+# Claude Code: ignore everything except project-specific skills
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/vibe-coding/

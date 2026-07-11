@@ -378,12 +378,18 @@ def list_registrations(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
 
 
 @router.get("/webinars/{webinar_id}/my-registrations", response_model=list[RegistrationOut])
-def list_my_registrations(webinar_id: uuid.UUID, user: CounselorDep, db: DbDep):
+def list_my_registrations(
+    webinar_id: uuid.UUID,
+    user: CounselorDep,
+    db: DbDep,
+    school_id: Annotated[uuid.UUID | None, Query()] = None,
+):
     """Counselor-facing registrations list, scoped to the caller's own school.
 
-    super_admin sees every registration (same as the admin endpoint). Counselors /
-    viewers only see registrations tagged with their school, and only for webinars
-    that are mapped to their school's portal.
+    Counselors / viewers only see registrations tagged with their school, and only
+    for webinars mapped to their school's portal. A super_admin impersonating a
+    school passes it via ``school_id`` to get the same per-school scope; without it
+    (no impersonation) they see every registration (same as the admin endpoint).
     """
     webinar = db.get(Webinar, webinar_id)
     if not webinar:
@@ -396,18 +402,25 @@ def list_my_registrations(webinar_id: uuid.UUID, user: CounselorDep, db: DbDep):
         .order_by(WorkshopRegistration.created_at)
     )
 
-    if user.role != "super_admin":
+    # Determine the school to scope to: counselors/viewers are locked to their own
+    # school; a super_admin scopes only when impersonating (school_id passed).
+    if user.role == "super_admin":
+        scope_school_id = school_id
+    else:
         if not user.school_id:
             raise HTTPException(status_code=403, detail="No school associated with your account")
+        scope_school_id = user.school_id
+
+    if scope_school_id is not None:
         mapping = db.execute(
             select(PortalMapping).where(
                 PortalMapping.webinar_id == webinar_id,
-                PortalMapping.school_id == user.school_id,
+                PortalMapping.school_id == scope_school_id,
             )
         ).scalar_one_or_none()
         if not mapping:
             raise HTTPException(status_code=403, detail="Webinar not in your school's portal")
-        stmt = stmt.where(WorkshopRegistration.school_id == user.school_id)
+        stmt = stmt.where(WorkshopRegistration.school_id == scope_school_id)
 
     regs = db.execute(stmt).scalars().all()
     return [_registration_out(r) for r in regs]

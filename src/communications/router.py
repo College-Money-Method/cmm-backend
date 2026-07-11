@@ -93,6 +93,15 @@ def _require_school(user: CurrentUser) -> uuid.UUID:
     return user.school_id
 
 
+def _resolve_school(user: CurrentUser, school_id: uuid.UUID | None) -> uuid.UUID:
+    """Resolve the school to operate on. Super admins impersonating a school pass
+    it via the ``school_id`` query param; counselors always use their own school
+    from the JWT (the param is ignored for them)."""
+    if user.role == "super_admin" and school_id:
+        return school_id
+    return _require_school(user)
+
+
 @router.get("/schedule", response_model=CalendarResponse)
 def get_schedule(
     cycle_id: Annotated[uuid.UUID, Query()],
@@ -102,10 +111,7 @@ def get_schedule(
 ) -> dict:
     """Return webinars and schedule items for a cycle. Admins can pass school_id;
     counselors always use their own school from the JWT."""
-    if user.role == "super_admin" and school_id:
-        effective_school_id = school_id
-    else:
-        effective_school_id = _require_school(user)
+    effective_school_id = _resolve_school(user, school_id)
 
     webinars = db.scalars(
         select(Webinar)
@@ -165,12 +171,13 @@ def create_schedule_item(
     body: ScheduleItemCreate,
     db: DbDep,
     user: CounselorDep,
+    school_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> dict:
     """Create an explicit schedule item (announcement/followup override, or communication date)."""
-    school_id = _require_school(user)
+    effective_school_id = _resolve_school(user, school_id)
 
     item = CommunicationScheduleItem(
-        school_id=school_id,
+        school_id=effective_school_id,
         cycle_id=body.cycle_id,
         event_type=body.event_type,
         webinar_id=body.webinar_id,
@@ -196,16 +203,17 @@ def update_schedule_item(
     body: ScheduleItemUpdate,
     db: DbDep,
     user: CounselorDep,
+    school_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> dict:
     """Update scheduled_at or notes; automatically marks item as manually set."""
-    school_id = _require_school(user)
+    effective_school_id = _resolve_school(user, school_id)
 
     item = db.scalar(
         select(CommunicationScheduleItem)
         .options(selectinload(CommunicationScheduleItem.template))
         .where(
             CommunicationScheduleItem.id == item_id,
-            CommunicationScheduleItem.school_id == school_id,
+            CommunicationScheduleItem.school_id == effective_school_id,
         )
     )
     if item is None:
@@ -228,14 +236,15 @@ def delete_schedule_item(
     item_id: uuid.UUID,
     db: DbDep,
     user: CounselorDep,
+    school_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> None:
     """Delete a schedule item. For announcement/followup, this reverts to the computed default."""
-    school_id = _require_school(user)
+    effective_school_id = _resolve_school(user, school_id)
 
     item = db.scalar(
         select(CommunicationScheduleItem).where(
             CommunicationScheduleItem.id == item_id,
-            CommunicationScheduleItem.school_id == school_id,
+            CommunicationScheduleItem.school_id == effective_school_id,
         )
     )
     if item is None:

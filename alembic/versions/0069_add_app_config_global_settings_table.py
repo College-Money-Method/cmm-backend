@@ -1,6 +1,6 @@
 """add app_config global settings table
 
-Revision ID: 31765d344a94
+Revision ID: 0069
 Revises: 0068
 Create Date: 2026-06-27 19:33:12.145525
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '31765d344a94'
+revision: str = '0069'
 down_revision: Union[str, None] = '0068'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

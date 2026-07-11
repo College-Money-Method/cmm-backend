@@ -46,7 +46,7 @@ async def _sync_with_retry(zoom_webinar_id: str) -> None:
 
         db = SessionLocal()
         try:
-            synced = sync_webinar_attendance(zoom_webinar_id, db)
+            synced = await asyncio.to_thread(sync_webinar_attendance, zoom_webinar_id, db)
             if synced:
                 logger.info("Attendance sync succeeded on attempt %d — webinar=%s", i + 1, zoom_webinar_id)
                 return
