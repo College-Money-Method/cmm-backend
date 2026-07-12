@@ -6,6 +6,7 @@ shapes. New hub endpoints added below.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import date, timedelta
 
@@ -47,6 +48,8 @@ from src.config import settings
 from src.db.deps import DbDep
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_school(current_user: CounselorDep, school_id_param: str | None) -> str | None:
@@ -182,20 +185,29 @@ def get_content_breakdown(
     sid = _resolve_school(current_user, school_id)
     event, prop = _CONTENT_BREAKDOWN_KINDS[kind]
 
+    # The HogQL Query API rejects bare OFFSET, so fetch the top `offset+limit+1`
+    # rows (breakdown lists are small) and slice the page in Python — matching the
+    # LIMIT-only style of the working batched-breakdown query.
     where = f"{ph._hogql_date_clause(date_from, date_to)}{ph._hogql_school_clause(sid)}{ph._hogql_cycle_clause(cycle_name)}"
+    fetch_n = offset + limit + 1
     hogql = (
         f"SELECT toString(properties.{prop}) AS label, count() AS c "
         f"FROM events WHERE event = '{event}' AND {where} "
-        f"AND isNotNull(properties.{prop}) AND properties.{prop} != '' "
-        f"GROUP BY label ORDER BY c DESC LIMIT {limit + 1} OFFSET {offset}"
+        f"AND isNotNull(properties.{prop}) "
+        f"GROUP BY label ORDER BY c DESC LIMIT {fetch_n}"
     )
-    rows: list[TopBreakdown] = []
+    all_rows: list[TopBreakdown] = []
     try:
         result = ph.get_hogql_query(api_key, project_id, hogql)
-        rows = [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in result if r[0]]
+        all_rows = [
+            TopBreakdown(label=str(r[0]), count=float(r[1]))
+            for r in result
+            if r[0] and str(r[0]) not in ("", "Other") and not str(r[0]).startswith("$$_posthog")
+        ]
     except Exception:
-        pass
-    return ContentBreakdownPage(rows=rows[:limit], has_more=len(rows) > limit)
+        logger.warning("PostHog error in get_content_breakdown(%s)", kind, exc_info=True)
+    page = all_rows[offset : offset + limit]
+    return ContentBreakdownPage(rows=page, has_more=len(all_rows) > offset + limit)
 
 
 @router.get("/search", response_model=SearchData)
