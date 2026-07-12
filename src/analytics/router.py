@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from src.analytics import posthog as ph
 from src.analytics import posthog_batched as phb
 from src.analytics.schemas import (
+    ContentBreakdownPage,
     ContentData,
     LibraryCoverageData,
     OverviewData,
@@ -22,7 +23,10 @@ from src.analytics.schemas import (
     ReachData,
     ResourceUsedRow,
     SearchData,
+    SiteTotals,
+    TopBreakdown,
     TrendMetric,
+    VideoBreakdownRow,
     WebinarDetail,
     WorkshopData,
     WorkshopsDetailData,
@@ -128,27 +132,70 @@ def get_content(
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
     opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
-    # TWO PostHog round trips total (was 7 sequential calls)
-    trends = phb.get_batched_trends(api_key, project_id, [
-        {"key": "resource_clicks", "event": "resource_card_click"},
-        {"key": "topic_clicks", "event": "topic_card_click"},
-        {"key": "resource_views", "event": "resource_viewed"},
-        {"key": "resource_link_opens", "event": "resource_detail_external_link_click"},
-    ], **opts)
+    # Number-only content page — ONE PostHog round trip, no time-series (lightweight).
+    # Videos need two aggregations (view count + avg % watched) on the same breakdown;
+    # a wider limit on the pct branch ensures every top-viewed video has its avg merged.
+    # Videos: show all (only a handful of workshop recordings per cycle). Resources
+    # & topics: top 10 in the card; the "View all" popup paginates via /content-breakdown.
     breakdowns = phb.get_batched_breakdowns(api_key, project_id, [
-        {"key": "top_resources", "event": "resource_card_click", "prop": "resource_name", "limit": 10},
-        {"key": "top_topics", "event": "topic_card_click", "prop": "topic_title", "limit": 10},
-        {"key": "top_pages", "event": "$pageview", "prop": "$pathname", "limit": 10},
+        {"key": "video_views", "event": "video_session_end", "prop": "workshop_name", "limit": 50},
+        {"key": "video_pct", "event": "video_session_end", "prop": "workshop_name",
+         "math": "avg", "math_prop": "percent_watched", "limit": 100},
+        {"key": "resources", "event": "resource_viewed", "prop": "asset_name", "limit": 10},
+        {"key": "topics", "event": "topic_viewed", "prop": "topic_title", "limit": 10},
     ], **opts)
+    pct_by_name = {r.label: r.count for r in breakdowns["video_pct"]}
+    videos = [
+        VideoBreakdownRow(name=r.label, view_count=int(r.count), avg_percent_watched=pct_by_name.get(r.label))
+        for r in breakdowns["video_views"]
+    ]
     return ContentData(
-        resource_clicks=trends["resource_clicks"],
-        topic_clicks=trends["topic_clicks"],
-        top_resources=breakdowns["top_resources"],
-        top_topics=breakdowns["top_topics"],
-        resource_views=trends["resource_views"],
-        resource_link_opens=trends["resource_link_opens"],
-        top_pages=breakdowns["top_pages"],
+        videos=videos,
+        resources=breakdowns["resources"],
+        topics=breakdowns["topics"],
     )
+
+
+# kind → (event, breakdown property) for the Content-tab "View all" popup.
+_CONTENT_BREAKDOWN_KINDS = {
+    "resources": ("resource_viewed", "asset_name"),
+    "topics": ("topic_viewed", "topic_title"),
+}
+
+
+@router.get("/content-breakdown", response_model=ContentBreakdownPage)
+def get_content_breakdown(
+    current_user: CounselorDep,
+    kind: str = Query(..., description="resources | topics"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    school_id: str | None = Query(default=None),
+    date_from: str = Query(default="-30d"),
+    date_to: str | None = Query(default=None),
+    cycle_name: str | None = Query(default=None),
+) -> ContentBreakdownPage:
+    """Paginated full ranked list for the Content-tab resources/topics popup.
+    Fetches limit+1 rows so the client knows whether another page exists."""
+    if kind not in _CONTENT_BREAKDOWN_KINDS:
+        raise HTTPException(status_code=400, detail="kind must be 'resources' or 'topics'")
+    api_key, project_id = _check_configured()
+    sid = _resolve_school(current_user, school_id)
+    event, prop = _CONTENT_BREAKDOWN_KINDS[kind]
+
+    where = f"{ph._hogql_date_clause(date_from, date_to)}{ph._hogql_school_clause(sid)}{ph._hogql_cycle_clause(cycle_name)}"
+    hogql = (
+        f"SELECT toString(properties.{prop}) AS label, count() AS c "
+        f"FROM events WHERE event = '{event}' AND {where} "
+        f"AND isNotNull(properties.{prop}) AND properties.{prop} != '' "
+        f"GROUP BY label ORDER BY c DESC LIMIT {limit + 1} OFFSET {offset}"
+    )
+    rows: list[TopBreakdown] = []
+    try:
+        result = ph.get_hogql_query(api_key, project_id, hogql)
+        rows = [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in result if r[0]]
+    except Exception:
+        pass
+    return ContentBreakdownPage(rows=rows[:limit], has_more=len(rows) > limit)
 
 
 @router.get("/search", response_model=SearchData)
@@ -202,11 +249,31 @@ def get_workshops_detail(
     # outside the cycle's calendar dates); date range is the fallback
     rows = get_webinars_for_school_in_range(db, school_uuid, date_from, date_to, cycle_id=cycle_id)
 
-    if rows:
-        date_clause = ph._hogql_date_clause(date_from, date_to)
-        school_clause = ph._hogql_school_clause(sid)
-        cycle_clause = ph._hogql_cycle_clause(cycle_name)
+    date_clause = ph._hogql_date_clause(date_from, date_to)
+    school_clause = ph._hogql_school_clause(sid)
+    cycle_clause = ph._hogql_cycle_clause(cycle_name)
 
+    # Website-wide content totals for the summary cards — one round trip, NOT
+    # restricted to workshops (still scoped by this school + selected period).
+    site_totals = SiteTotals()
+    try:
+        site_hogql = (
+            "SELECT "
+            "countIf(event = '$pageview') AS visits, "
+            "countIf(event = 'video_session_end') AS video_views, "
+            "countIf(event = 'resource_viewed') AS resource_views "
+            "FROM events "
+            f"WHERE {date_clause}{school_clause}{cycle_clause} "
+            "AND event IN ('$pageview', 'video_session_end', 'resource_viewed')"
+        )
+        site_rows = ph.get_hogql_query(api_key, project_id, site_hogql)
+        if site_rows:
+            r0 = site_rows[0]
+            site_totals = SiteTotals(visits=int(r0[0]), video_views=int(r0[1]), resource_views=int(r0[2]))
+    except Exception:
+        pass
+
+    if rows:
         # Query 1: recording views + avg % watched per webinar_id (video_session_end)
         hogql_rec = (
             "SELECT properties.webinar_id, count(), avg(toFloat(ifNull(properties.percent_watched, '0'))) "
@@ -287,6 +354,7 @@ def get_workshops_detail(
     return WorkshopsDetailData(
         webinars=webinars,
         totals=WorkshopsDetailTotals(**totals_dict),
+        site_totals=site_totals,
     )
 
 

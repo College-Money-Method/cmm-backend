@@ -162,17 +162,37 @@ def test_workshop_milestone_dropoff_empty_when_no_data(mock_posthog_configured):
 # ── /content ──────────────────────────────────────────────────────────────────
 
 def test_content_endpoint_shape(mock_posthog_configured):
-    with patch("src.analytics.posthog_batched.get_batched_trends", side_effect=fake_trends()), \
-         patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=fake_breakdowns()):
+    # Number-only content page: videos (views + avg % watched), resources, topics.
+    with patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=fake_breakdowns()):
         resp = admin_client().get("/api/v1/analytics/content")
 
     assert resp.status_code == 200
     body = resp.json()
-    assert "resource_clicks" in body
-    assert "topic_clicks" in body
-    assert "top_resources" in body
-    assert "top_topics" in body
-    assert body["resource_clicks"]["total"] == 42
+    assert "videos" in body and "resources" in body and "topics" in body
+    # videos merge the count breakdown (view_count) with the avg-% breakdown
+    assert body["videos"][0]["name"] == "FAFSA"
+    assert body["videos"][0]["view_count"] == 30
+    assert body["videos"][0]["avg_percent_watched"] == 30
+    assert body["resources"][0]["label"] == "FAFSA"
+    assert body["topics"][0]["label"] == "FAFSA"
+
+
+def test_content_breakdown_paginates(mock_posthog_configured):
+    # 21 rows for limit=20 → has_more True, trimmed to 20.
+    rows = [[f"Resource {i}", float(100 - i)] for i in range(21)]
+    with patch("src.analytics.posthog.get_hogql_query", return_value=rows):
+        resp = admin_client().get("/api/v1/analytics/content-breakdown?kind=resources&limit=20")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["has_more"] is True
+    assert len(body["rows"]) == 20
+    assert body["rows"][0]["label"] == "Resource 0"
+
+
+def test_content_breakdown_rejects_invalid_kind(mock_posthog_configured):
+    resp = admin_client().get("/api/v1/analytics/content-breakdown?kind=bogus")
+    assert resp.status_code == 400
 
 
 # ── /search ───────────────────────────────────────────────────────────────────
@@ -195,12 +215,11 @@ def test_date_params_forwarded_to_posthog(mock_posthog_configured):
     """date_from and date_to should be passed through to the batched helpers."""
     calls = []
 
-    def spy(api_key, project_id, series, **kwargs):
+    def spy(api_key, project_id, specs, **kwargs):
         calls.append({"date_from": kwargs.get("date_from"), "date_to": kwargs.get("date_to")})
-        return {s["key"]: EMPTY_TREND for s in series}
+        return {sp["key"]: [] for sp in specs}
 
-    with patch("src.analytics.posthog_batched.get_batched_trends", side_effect=spy), \
-         patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=fake_breakdowns([])):
+    with patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=spy):
         admin_client().get("/api/v1/analytics/content?date_from=2025-07-01&date_to=2026-06-30")
 
     assert any(c["date_from"] == "2025-07-01" for c in calls)
