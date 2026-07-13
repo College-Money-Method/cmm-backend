@@ -233,8 +233,9 @@ def list_all_webinars(
     school_id: uuid.UUID | None = None,
     workshop_id: uuid.UUID | None = None,
     cycle_id: uuid.UUID | None = None,
+    zoom_webinar_id: str | None = None,
 ):
-    """Admin: global webinar list filterable by cycle, school, workshop, status, and search."""
+    """Admin: global webinar list filterable by cycle, school, workshop, status, search, and zoom webinar id."""
     now = datetime.now(tz=timezone.utc)
     stmt = select(Webinar).options(
         selectinload(Webinar.workshop),
@@ -259,6 +260,10 @@ def list_all_webinars(
 
     if search:
         stmt = stmt.where(Webinar.webinar_name.ilike(f"%{search}%"))
+
+    if zoom_webinar_id:
+        # Substring match so admins can paste a partial or full zoom webinar id
+        stmt = stmt.where(Webinar.zoom_webinar_id.ilike(f"%{zoom_webinar_id}%"))
 
     if status == "upcoming":
         stmt = stmt.where((Webinar.start_datetime >= now) | (Webinar.start_datetime.is_(None)))
