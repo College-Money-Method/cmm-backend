@@ -23,7 +23,7 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dotenv import load_dotenv  # noqa: E402 — loaded after sys.path fix
 
@@ -34,7 +34,7 @@ if not FIRECRAWL_API_KEY:
     print("ERROR: FIRECRAWL_API_KEY not set in .env")
     sys.exit(1)
 
-OUTPUT_DIR = Path(__file__).parent / "output" / "crawl"
+OUTPUT_DIR = Path(__file__).parent.parent / "output" / "crawl"
 BASE_URL = "https://collegemoneymethod.com"
 
 

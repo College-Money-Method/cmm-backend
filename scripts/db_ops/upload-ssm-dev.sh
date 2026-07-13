@@ -14,7 +14,7 @@ if [[ "$ENV" != "dev" && "$ENV" != "prod" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="$REPO_ROOT/.env.${ENV}"
 PREFIX="/copilot/cmm-backend/${ENV}/secrets"
 REGION="${AWS_REGION:-us-east-1}"

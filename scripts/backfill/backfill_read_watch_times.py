@@ -6,9 +6,9 @@ for Topics and ContentAssets.
     video_duration_seconds — fetched from Vimeo oEmbed API or YouTube Data API
 
 Usage:
-    python -m scripts.backfill_read_watch_times            # NULL records only
-    python -m scripts.backfill_read_watch_times --all      # recalculate all
-    python -m scripts.backfill_read_watch_times --dry-run  # preview, no DB writes
+    python -m scripts.backfill.backfill_read_watch_times            # NULL records only
+    python -m scripts.backfill.backfill_read_watch_times --all      # recalculate all
+    python -m scripts.backfill.backfill_read_watch_times --dry-run  # preview, no DB writes
 
 Note: YouTube requires YOUTUBE_API_KEY env var. Vimeo works without any key.
 """
@@ -20,7 +20,7 @@ import re
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 import src.assets.models  # noqa: F401
 import src.auth.models  # noqa: F401

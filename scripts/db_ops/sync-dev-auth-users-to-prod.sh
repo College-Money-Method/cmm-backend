@@ -11,7 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 read_db_url() { grep '^DATABASE_URL=' "$1" | cut -d'=' -f2- | sed "s/^['\"]//;s/['\"]$//"; }
 DEV_DB_URL=$(read_db_url "$REPO_ROOT/.env.dev");  DEV_DB_URL=${DEV_DB_URL/:6543\//:5432\/}

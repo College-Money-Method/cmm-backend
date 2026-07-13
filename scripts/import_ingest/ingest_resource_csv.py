@@ -27,7 +27,7 @@ import sys
 import uuid
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sqlalchemy import text
 
@@ -36,7 +36,7 @@ from src.db.base import get_engine
 # ── CSV location ──────────────────────────────────────────────────────────────
 
 CSV_PATH = (
-    Path(__file__).parent
+    Path(__file__).parent.parent
     / "input"
     / "resource_ingest"
     / "CMM_Resource_Center_Assets_Preview content_v1.xlsx - CMM Resource Center Assets.csv"

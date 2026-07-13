@@ -3,7 +3,7 @@ One-time backfill script: populate search_text for existing Topics, Workshops,
 and ContentAssets. The DB trigger then auto-populates search_vector on each UPDATE.
 
 Usage:
-    python -m scripts.backfill_search_text
+    python -m scripts.backfill.backfill_search_text
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import sys
 import os
 
 # Allow running from the project root
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 # Import all models so SQLAlchemy can resolve relationships before the session is used
 import src.assets.models  # noqa: F401

@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from sqlalchemy import text

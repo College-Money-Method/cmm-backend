@@ -9,9 +9,9 @@ Inline formatting (bold, italic, links) is preserved where possible.
 Workshops that already have key_action_items are skipped unless --overwrite is passed.
 
 Usage:
-    python -m scripts.migrate_key_actions_to_key_action_items           # skip existing
-    python -m scripts.migrate_key_actions_to_key_action_items --dry-run # preview only
-    python -m scripts.migrate_key_actions_to_key_action_items --overwrite
+    python -m scripts.migrate_data.migrate_key_actions_to_key_action_items           # skip existing
+    python -m scripts.migrate_data.migrate_key_actions_to_key_action_items --dry-run # preview only
+    python -m scripts.migrate_data.migrate_key_actions_to_key_action_items --overwrite
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import os
 import sys
 from html.parser import HTMLParser
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 import src.assets.models  # noqa: F401
 import src.auth.models  # noqa: F401

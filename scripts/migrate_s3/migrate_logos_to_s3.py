@@ -31,7 +31,7 @@ import requests
 from PIL import Image
 from pyairtable import Api
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Must import all models so SQLAlchemy can resolve cross-model relationships

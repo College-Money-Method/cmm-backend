@@ -57,7 +57,7 @@ from dotenv import load_dotenv
 import requests
 from sqlalchemy import text
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.db.base import get_engine
 

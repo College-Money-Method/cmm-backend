@@ -33,18 +33,18 @@ Primary keys and relations:
     (requires psycopg2: pip install psycopg2-binary)
 
 Usage (from project root). Recommended flow: generate schema → db reset → pull data:
-  uv run python scripts/airtable_schema_to_postgres.py --all-tables -o supabase/migrations/20250312000000_airtable_schema.sql
+  uv run python scripts.airtable.airtable_schema_to_postgres.py --all-tables -o supabase/migrations/20250312000000_airtable_schema.sql
   supabase db reset
   uv run python scripts/airtable_pull_data.py --all-tables
 
-  uv run python scripts/airtable_schema_to_postgres.py --all-tables
-  uv run python scripts/airtable_schema_to_postgres.py --tables "Table1" "Table2"
-  uv run python scripts/airtable_schema_to_postgres.py --tables "Schools" -o migration.sql
-  uv run python scripts/airtable_schema_to_postgres.py --all-tables --apply  # if DATABASE_URL set
+  uv run python scripts.airtable.airtable_schema_to_postgres.py --all-tables
+  uv run python scripts.airtable.airtable_schema_to_postgres.py --tables "Table1" "Table2"
+  uv run python scripts.airtable.airtable_schema_to_postgres.py --tables "Schools" -o migration.sql
+  uv run python scripts.airtable.airtable_schema_to_postgres.py --all-tables --apply  # if DATABASE_URL set
 
 From FastAPI (e.g. background task)::
 
-  from scripts.airtable_schema_to_postgres import run_inference_and_generate
+  from scripts.airtable.airtable_schema_to_postgres import run_inference_and_generate
   inferred, junctions, sql = run_inference_and_generate(
       None, settings.airtable_api_key, settings.airtable_base_id, all_tables=True
   )
@@ -63,7 +63,7 @@ from pathlib import Path
 from typing import Any
 
 # Project root
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 try:
     from pyairtable import Api

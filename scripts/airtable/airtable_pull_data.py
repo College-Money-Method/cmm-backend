@@ -26,14 +26,14 @@ from pathlib import Path
 from typing import Any
 
 # Project root
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 try:
     import psycopg2
 except ImportError:
     psycopg2 = None  # type: ignore[assignment]
 
-from scripts.airtable_schema_to_postgres import (
+from scripts.airtable.airtable_schema_to_postgres import (
     Api,
     build_junction_tables,
     creation_order,
@@ -41,8 +41,8 @@ from scripts.airtable_schema_to_postgres import (
     get_all_table_names,
     infer_schema,
 )
-from scripts.airtable_schema_to_postgres import InferredTable as InferredTableType
-from scripts.airtable_schema_to_postgres import JunctionTable as JunctionTableType
+from scripts.airtable.airtable_schema_to_postgres import InferredTable as InferredTableType
+from scripts.airtable.airtable_schema_to_postgres import JunctionTable as JunctionTableType
 
 
 def _quote_ident(name: str) -> str:
@@ -295,7 +295,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Only fetch and report row counts, do not write")
     args = parser.parse_args()
 
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from src.config import settings
 
     if not settings.airtable_api_key or not settings.airtable_base_id:

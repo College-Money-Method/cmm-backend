@@ -18,7 +18,7 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.config import settings  # noqa: E402
 
 S3_PREFIX = "portal/assets/thumbnails"

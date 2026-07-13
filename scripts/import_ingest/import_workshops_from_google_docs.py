@@ -48,11 +48,11 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 import requests
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 # Reuse parsing infrastructure from the topics import script.
 # It has an if __name__ == "__main__" guard so importing is safe.
-from scripts.import_topics_from_google_docs import (
+from scripts.import_ingest.import_topics_from_google_docs import (
     _DOMBuilder,
     _HN,
     _clean_google_export_html,

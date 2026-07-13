@@ -25,9 +25,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.airtable_schema_to_postgres import (
+from scripts.airtable.airtable_schema_to_postgres import (
     Api,
     fetch_all_records,
     get_all_table_names,
