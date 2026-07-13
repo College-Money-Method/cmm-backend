@@ -7,11 +7,13 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 logger = logging.getLogger(__name__)
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from src.auth.deps import AdminDep, CurrentUserDep, get_current_user
 from src.auth.hub_password import default_hub_password
-from src.auth.models import UserRole
+from src.auth.models import Profile, UserRole
+from src.auth.profile_sync import delete_profile, upsert_profile
 from src.auth.schemas import (
     CounselorCreate,
     CounselorListResponse,
@@ -47,14 +49,16 @@ def get_me(user: CurrentUserDep) -> UserRoleOut:
 _SCHOOL_ROLE_BY_ROLE = {"hub_admin": "Director", "hub_user": "Counselor"}
 
 
-def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut:
-    first = auth_user.get("user_metadata", {}).get("first_name") or ""
-    last = auth_user.get("user_metadata", {}).get("last_name") or ""
+def _counselor_out(
+    role_record: UserRole, email: str, first: str, last: str
+) -> CounselorOut:
+    first = first or ""
+    last = last or ""
     full = f"{first} {last}".strip() or None
     school_name = role_record.school.name if role_record.school else None
     return CounselorOut(
         user_id=role_record.user_id,
-        email=auth_user.get("email", ""),
+        email=email or "",
         first_name=first or None,
         last_name=last or None,
         full_name=full,
@@ -63,6 +67,29 @@ def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut
         school_name=school_name,
         title=role_record.title or None,
         school_role=role_record.school_role or None,
+    )
+
+
+def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut:
+    """Build from a Supabase auth response dict (single-user endpoints)."""
+    meta = auth_user.get("user_metadata", {})
+    return _counselor_out(
+        role_record,
+        auth_user.get("email", ""),
+        meta.get("first_name") or "",
+        meta.get("last_name") or "",
+    )
+
+
+def _sync_profile_from_auth(db: Session, user_id, auth_user: dict) -> None:
+    """Mirror a Supabase auth response into the local profiles table."""
+    meta = auth_user.get("user_metadata", {})
+    upsert_profile(
+        db,
+        user_id,
+        auth_user.get("email", ""),
+        meta.get("first_name") or None,
+        meta.get("last_name") or None,
     )
 
 
@@ -78,7 +105,6 @@ def sync_counselors_airtable(_admin: AdminDep, db: DbDep, supabase=Depends(get_s
 def list_counselors(
     user: CurrentUserDep,
     db: DbDep,
-    supabase=Depends(get_supabase),
     search: str | None = Query(default=None),
     school_id: uuid.UUID | None = Query(default=None),
     no_school: bool = Query(default=False),
@@ -97,10 +123,14 @@ def list_counselors(
         elif school_id != user.school_id:
             raise HTTPException(status_code=403, detail="Access restricted to your own school")
 
-    # Build base query
+    # Single indexed join: user_roles → profiles (email/name) → schools (name).
+    # Search, filter, count, and pagination all happen in SQL — no Supabase
+    # directory enumeration. Profiles are kept fresh on every create/update.
     q = (
-        db.query(UserRole)
-        .options(joinedload(UserRole.school))
+        db.query(UserRole, Profile)
+        .join(Profile, Profile.user_id == UserRole.user_id)
+        .outerjoin(School, School.id == UserRole.school_id)
+        .options(contains_eager(UserRole.school))
         .filter(UserRole.role.in_(["hub_admin", "hub_user", "viewer"]))
     )
 
@@ -113,48 +143,30 @@ def list_counselors(
     if school_role:
         q = q.filter(UserRole.school_role == school_role)
 
-    role_records = q.order_by(UserRole.created_at).all()
-
-    # Batch-fetch all Supabase auth users
-    auth_users_map: dict[str, dict] = {}
-    try:
-        page = 1
-        while True:
-            users_resp = supabase.auth.admin.list_users(page=page, per_page=1000)
-            users = users_resp if isinstance(users_resp, list) else []
-            for u in users:
-                auth_users_map[u.id] = {
-                    "email": u.email or "",
-                    "user_metadata": u.user_metadata or {},
-                }
-            if len(users) < 1000:
-                break
-            page += 1
-    except Exception as exc:
-        logger.warning("Could not batch-fetch Supabase users: %s", exc)
-
-    # Build full list with auth data merged
-    all_items: list[CounselorOut] = []
-    for record in role_records:
-        auth_user = auth_users_map.get(str(record.user_id))
-        if not auth_user:
-            continue
-        all_items.append(_build_counselor_out(record, auth_user))
-
-    # Apply search filter (on name, email, school_name)
     if search:
-        term = search.lower()
-        all_items = [
-            c for c in all_items
-            if term in (c.full_name or "").lower()
-            or term in c.email.lower()
-            or term in (c.school_name or "").lower()
-        ]
+        like = f"%{search}%"
+        full_name = func.concat(
+            func.coalesce(Profile.first_name, ""), " ", func.coalesce(Profile.last_name, "")
+        )
+        q = q.filter(
+            or_(
+                Profile.email.ilike(like),
+                Profile.first_name.ilike(like),
+                Profile.last_name.ilike(like),
+                full_name.ilike(like),
+                School.name.ilike(like),
+            )
+        )
 
-    total = len(all_items)
-    paginated = all_items[skip : skip + limit]
+    total = q.count()
+    rows = q.order_by(UserRole.created_at).offset(skip).limit(limit).all()
 
-    return CounselorListResponse(items=paginated, total=total, skip=skip, limit=limit)
+    items = [
+        _counselor_out(role, profile.email, profile.first_name, profile.last_name)
+        for role, profile in rows
+    ]
+
+    return CounselorListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.post("/api/v1/counselors", response_model=CounselorOut, status_code=status.HTTP_201_CREATED)
@@ -265,6 +277,8 @@ def create_counselor(
             "email": new_user.email or "",
             "user_metadata": getattr(new_user, "user_metadata", {}) or {},
         }
+        _sync_profile_from_auth(db, new_user.id, auth_user)
+        db.commit()
         return _build_counselor_out(role_record, auth_user)
 
     # Create role record
@@ -291,6 +305,8 @@ def create_counselor(
         "email": new_user.email or "",
         "user_metadata": new_user.user_metadata or {},
     }
+    _sync_profile_from_auth(db, new_user.id, auth_user)
+    db.commit()
     return _build_counselor_out(role_record, auth_user)
 
 
@@ -390,6 +406,8 @@ def update_counselor(
         .filter(UserRole.user_id == user_id)
         .one()
     )
+    _sync_profile_from_auth(db, user_id, auth_user)
+    db.commit()
     return _build_counselor_out(role_record, auth_user)
 
 
@@ -412,4 +430,5 @@ def delete_counselor(
         pass
 
     db.delete(role_record)
+    delete_profile(db, user_id)
     db.commit()

@@ -42,3 +42,26 @@ class UserRole(Base):
     )
 
     school: Mapped["School"] = relationship("School", foreign_keys=[school_id])
+
+
+class Profile(Base):
+    """Person-centric mirror of Supabase ``auth.users`` (email + name).
+
+    Kept in sync on every account create/update so counselor search and
+    pagination run as one indexed SQL join instead of enumerating the whole
+    Supabase Auth directory. Keyed by user_id (one row per person), so it stays
+    correct even if a person later holds multiple roles.
+    """
+
+    __tablename__ = "profiles"
+
+    # References auth.users(id) in Supabase — not a FK to avoid cross-schema FK issues
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True
+    )
+    email: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    first_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), onupdate=func.now(), nullable=False
+    )

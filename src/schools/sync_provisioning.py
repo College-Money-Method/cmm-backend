@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from src.auth.hub_password import default_hub_password
 from src.auth.models import UserRole
+from src.auth.profile_sync import upsert_profile
 from src.schools.models import Contact, School
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,10 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
             else:
                 contact.user_id = uuid.UUID(user_id_str)
                 claimed_user_ids.add(user_id_str)
+
+        # Keep the local profiles mirror in sync (contact is the name source).
+        if user_id_str:
+            upsert_profile(db, user_id_str, email, contact.first_name, contact.last_name)
 
         # ── Upsert UserRole (contact.role is source of truth) ──
         existing_role = role_by_user_id.get(user_id_str)
