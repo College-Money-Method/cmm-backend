@@ -1,6 +1,6 @@
 """Pydantic schemas for analytics endpoints.
 
-Existing shapes (OverviewData, WorkshopData, ContentData, SearchData) are
+Existing shapes (OverviewData, WorkshopData, SearchData) are
 FROZEN — the frontend depends on them exactly as-is.
 New hub + admin schemas are appended below.
 """
@@ -46,14 +46,24 @@ class WorkshopData(BaseModel):
     milestone_dropoff: list[TopBreakdown] = []
 
 
+class VideoBreakdownRow(BaseModel):
+    name: str                              # workshop_name (videos are workshop recordings)
+    view_count: int                        # video_session_end count
+    avg_percent_watched: float | None = None
+
+
 class ContentData(BaseModel):
-    resource_clicks: TrendMetric
-    topic_clicks: TrendMetric
-    top_resources: list[TopBreakdown]   # resource_card_click by resource_name
-    top_topics: list[TopBreakdown]      # topic_card_click by topic_title
-    resource_views: TrendMetric | None = None        # resource_viewed (detail page)
-    resource_link_opens: TrendMetric | None = None   # resource_detail_external_link_click
-    top_pages: list[TopBreakdown] | None = None      # $pageview by $pathname
+    """Number-only content breakdowns (no time-series charts) — kept lightweight:
+    top videos (views + avg % watched), resources (views), topics (views)."""
+    videos: list[VideoBreakdownRow] = []   # video_session_end by workshop_name
+    resources: list[TopBreakdown] = []     # resource_viewed by asset_name
+    topics: list[TopBreakdown] = []        # topic_viewed by topic_title
+
+
+class ContentBreakdownPage(BaseModel):
+    """One page of a full resources/topics ranked list (Content-tab "View all" popup)."""
+    rows: list[TopBreakdown] = []
+    has_more: bool = False
 
 
 class SearchData(BaseModel):
@@ -90,9 +100,18 @@ class WorkshopsDetailTotals(BaseModel):
     resource_views: int = 0
 
 
+class SiteTotals(BaseModel):
+    """Website-wide content totals (NOT workshop-scoped) for the summary cards.
+    Still scoped by the counselor's school and the selected period."""
+    visits: int = 0          # $pageview across the whole site
+    video_views: int = 0     # video_session_end across all videos
+    resource_views: int = 0  # resource_viewed across all resources
+
+
 class WorkshopsDetailData(BaseModel):
     webinars: list[WebinarDetail]
     totals: WorkshopsDetailTotals
+    site_totals: SiteTotals = SiteTotals()
 
 
 class ReachBenchmark(BaseModel):
