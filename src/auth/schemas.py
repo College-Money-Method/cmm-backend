@@ -68,6 +68,18 @@ class ContactListResponse(BaseModel):
     limit: int
 
 
+class HubPasswordResetRequest(BaseModel):
+    """Reset a contact's hub password. Omit `password` to reset to the default."""
+
+    password: str | None = None
+
+
+class HubPasswordResetOut(BaseModel):
+    """Result of resetting a contact's hub login password."""
+
+    password: str
+
+
 class ContactSyncResult(BaseModel):
     contacts_created: int = 0
     contacts_updated: int = 0
