@@ -67,7 +67,12 @@ class CounselorListResponse(BaseModel):
 class CounselorSyncResult(BaseModel):
     contacts_created: int = 0
     contacts_updated: int = 0
+    contacts_deactivated: int = 0
+    contacts_reactivated: int = 0
+    email_collisions: int = 0
     counselors_created: int
     school_roles_updated: int
+    counselors_revoked: int = 0
+    drift_relinked: int = 0
     skipped: int
     synced_at: str

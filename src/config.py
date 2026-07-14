@@ -56,5 +56,13 @@ class Settings(BaseSettings):
     environment: str = "development"
     frontend_url: str = "http://localhost:5173"
 
+    # Airtable sync — offboarding safety. When False, the counselor revoke pass
+    # runs in log-only mode (reports what WOULD be revoked without acting). Flip
+    # to True after reviewing the first-deploy logs to enable live revocation.
+    sync_enable_revoke: bool = False
+    # Skip contact deactivation if more than this fraction of known Airtable-linked
+    # contacts are missing from a pull (guards against partial/failed Airtable fetch).
+    sync_deactivation_max_missing_fraction: float = 0.1
+
 
 settings = Settings()

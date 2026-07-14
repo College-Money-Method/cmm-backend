@@ -106,7 +106,15 @@ class Contact(Base):
     receive_comms: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     auto_emails: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     softr_access: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # Set when a contact is removed entirely from Airtable (soft-deactivation).
+    # Row is kept so the provisioned auth account can be reconciled/revoked.
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    @property
+    def is_active(self) -> bool:
+        """A contact is active (not deactivated) while ``deleted_at`` is unset."""
+        return self.deleted_at is None
 
     school: Mapped[School | None] = relationship(back_populates="contacts")
 

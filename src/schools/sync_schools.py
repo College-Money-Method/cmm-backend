@@ -57,7 +57,7 @@ def sync_schools_from_airtable(db: Session) -> dict:
     school_by_name: dict[str, School] = {s.name.strip().lower(): s for s in all_schools if s.name}
     all_slugs: set[str] = {s.slug for s in all_schools if s.slug}
 
-    schools_created = schools_updated = skipped = 0
+    schools_created = schools_updated = skipped = cohorts_unresolved = 0
 
     for srec in at_schools:
         fields = srec.get("fields", {})
@@ -73,6 +73,13 @@ def sync_schools_from_airtable(db: Session) -> dict:
 
         cohort_links: list[str] = fields.get("Cohort 2") or []
         cohort = _resolve_cohort(cohort_links)
+        # ISSUE-4: surface silent NULL cohort links (e.g. cohorts not yet synced)
+        if cohort_links and cohort is None:
+            cohorts_unresolved += 1
+            logger.warning(
+                "School %s (%s) has cohort link(s) %s that resolve to no DB cohort",
+                name, airtable_rec_id, cohort_links,
+            )
         is_customer = parse_bool(fields.get("Current Customer"))
 
         existing = (
@@ -129,11 +136,12 @@ def sync_schools_from_airtable(db: Session) -> dict:
 
     db.commit()
     logger.info(
-        "Schools sync complete: created=%d updated=%d skipped=%d",
-        schools_created, schools_updated, skipped,
+        "Schools sync complete: created=%d updated=%d skipped=%d cohorts_unresolved=%d",
+        schools_created, schools_updated, skipped, cohorts_unresolved,
     )
     return {
         "schools_created": schools_created,
         "schools_updated": schools_updated,
+        "cohorts_unresolved": cohorts_unresolved,
         "skipped": skipped,
     }
