@@ -58,6 +58,7 @@ def _find_public_school(db, *, slug: str | None = None, school_id: uuid.UUID | N
         raise HTTPException(status_code=404, detail=_SCHOOL_NOT_FOUND_DETAIL)
     return school
 
+
 # Self-reported per-grade enrollment; enrollment_9_12 is recomputed as their
 # sum whenever any of these change (see update_school)
 _ENROLLMENT_GRADE_FIELDS = (
@@ -186,9 +187,7 @@ def get_school_by_slug(slug: str, db: DbDep) -> SchoolPublic:
 @router.post("/slug/{slug}/verify-password", status_code=status.HTTP_200_OK)
 def verify_school_password(slug: str, body: SchoolPasswordVerify, db: DbDep) -> dict:
     """Verify the school portal password. Returns 200 + school data if correct, 401 if wrong."""
-    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
-    if not school:
-        raise HTTPException(status_code=404, detail="School not found")
+    school = _find_public_school(db, slug=slug)
     if school.cmm_website_password != body.password:
         raise HTTPException(status_code=401, detail="Incorrect password")
     return {"school": SchoolPublic.model_validate(school).model_dump(mode="json")}
@@ -197,9 +196,7 @@ def verify_school_password(slug: str, body: SchoolPasswordVerify, db: DbDep) -> 
 @router.get("/{school_id}/public", response_model=SchoolPublic)
 def get_school_public(school_id: uuid.UUID, db: DbDep) -> SchoolPublic:
     """Get a school by UUID (no auth required). Returns safe public fields only."""
-    school = db.query(School).filter(School.id == school_id).first()
-    if not school:
-        raise HTTPException(status_code=404, detail="School not found")
+    school = _find_public_school(db, school_id=school_id)
     return SchoolPublic.model_validate(school)
 
 
