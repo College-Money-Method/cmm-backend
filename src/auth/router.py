@@ -116,6 +116,41 @@ def _sync_profile_from_auth(db: Session, user_id, auth_user: dict) -> None:
     )
 
 
+def _upsert_contact_row(
+    db: Session,
+    user_id: uuid.UUID,
+    email: str,
+    first_name: str,
+    last_name: str,
+    school_id: uuid.UUID | None,
+    school_role: str | None,
+) -> None:
+    """Keep the contacts table (source of the school contact lists) coherent with
+    a provisioned login: adding a contact with a role = granting hub access.
+    Match by user_id first, then by unclaimed email; create the row when missing.
+    """
+    contact = db.query(Contact).filter(Contact.user_id == user_id).first()
+    if contact is None and email:
+        contact = (
+            db.query(Contact)
+            .filter(func.lower(Contact.email) == email.lower(), Contact.user_id.is_(None))
+            .first()
+        )
+    if contact is None:
+        contact = Contact(email=email or None)
+        db.add(contact)
+    contact.user_id = user_id
+    contact.school_id = school_id
+    if first_name:
+        contact.first_name = first_name
+    if last_name:
+        contact.last_name = last_name
+    # Airtable-style display label (Director/Counselor); keep an existing label
+    if school_role and not contact.role:
+        contact.role = school_role
+    contact.deleted_at = None
+
+
 @router.post("/api/v1/contacts/sync-airtable", response_model=ContactSyncResult)
 def sync_contacts_airtable(_admin: AdminDep, db: DbDep, supabase=Depends(get_supabase)) -> ContactSyncResult:
     """Provision missing counselor accounts from Airtable contacts."""
@@ -294,6 +329,9 @@ def create_contact(
             "user_metadata": getattr(new_user, "user_metadata", {}) or {},
         }
         _sync_profile_from_auth(db, new_user.id, auth_user)
+        _upsert_contact_row(
+            db, uuid.UUID(new_user.id), body.email, first_name, last_name, school_id, school_role
+        )
         db.commit()
         return _build_contact_out(role_record, auth_user)
 
@@ -322,6 +360,9 @@ def create_contact(
         "user_metadata": new_user.user_metadata or {},
     }
     _sync_profile_from_auth(db, new_user.id, auth_user)
+    _upsert_contact_row(
+        db, uuid.UUID(new_user.id), body.email, first_name, last_name, school_id, school_role
+    )
     db.commit()
     return _build_contact_out(role_record, auth_user)
 
@@ -395,6 +436,27 @@ def update_contact(
         if hasattr(role_record, field):
             setattr(role_record, field, value)
 
+    # Changing the access role (hub_admin/hub_user) is the hub access change; keep
+    # the cosmetic Director/Counselor label (school_role) in step with it.
+    new_school_role = None
+    if "role" in update_data and update_data["role"] is not None:
+        new_school_role = _SCHOOL_ROLE_BY_ROLE.get(update_data["role"])
+        if new_school_role is not None:
+            role_record.school_role = new_school_role
+
+    # Mirror school assignment + name changes onto the contacts row so the
+    # school contact list (sourced from the contacts table) stays coherent.
+    contact = db.query(Contact).filter(Contact.user_id == user_id).first()
+    if contact is not None:
+        if "school_id" in update_data:
+            contact.school_id = update_data["school_id"]
+        if new_school_role is not None:
+            contact.role = new_school_role
+        if body.first_name is not None:
+            contact.first_name = body.first_name
+        if body.last_name is not None:
+            contact.last_name = body.last_name
+
     db.commit()
     db.refresh(role_record)
 
@@ -444,6 +506,11 @@ def delete_contact(
         supabase.auth.admin.delete_user(str(user_id))
     except Exception:
         pass
+
+    # Detach the contacts row (keep it — the person remains a contact without access)
+    contact = db.query(Contact).filter(Contact.user_id == user_id).first()
+    if contact is not None:
+        contact.user_id = None
 
     db.delete(role_record)
     delete_profile(db, user_id)
