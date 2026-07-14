@@ -17,6 +17,9 @@ class ContactSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    # Supabase auth user id when a counselor-hub login has been provisioned; None
+    # means the contact exists but has no hub access yet.
+    user_id: uuid.UUID | None = None
     first_name: str | None = None
     last_name: str | None = None
     full_name: str | None = None
