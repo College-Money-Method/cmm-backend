@@ -36,6 +36,29 @@ from src.schools.schemas import (
 
 router = APIRouter(prefix="/api/v1/schools", tags=["schools"])
 
+# Shown to unauthenticated visitors when a school slug/id is missing OR belongs
+# to a non-customer. Identical for both cases so the response never reveals that
+# a non-partnered school exists in the database.
+_SCHOOL_NOT_FOUND_DETAIL = "We couldn't find your partnered school, contact College Money Method"
+
+
+def _find_public_school(db, *, slug: str | None = None, school_id: uuid.UUID | None = None) -> School:
+    """Fetch a current-customer school for a public (no-auth) endpoint.
+
+    Non-customer schools are hidden from public portal routes: they raise the
+    same 404 as a missing school so prospects can't be reached by direct URL.
+    """
+    q = db.query(School).filter(School.is_current_customer.is_(True))
+    if slug is not None:
+        q = q.filter(or_(School.slug == slug, School.airtable_slug == slug))
+    if school_id is not None:
+        q = q.filter(School.id == school_id)
+    school = q.first()
+    if not school:
+        raise HTTPException(status_code=404, detail=_SCHOOL_NOT_FOUND_DETAIL)
+    return school
+
+
 # Self-reported per-grade enrollment; enrollment_9_12 is recomputed as their
 # sum whenever any of these change (see update_school)
 _ENROLLMENT_GRADE_FIELDS = (
@@ -53,9 +76,7 @@ def get_school_counselors_public(
     supabase=Depends(get_supabase),
 ) -> list[CounselorPublicOut]:
     """Return counselors assigned to a school (public, no auth required)."""
-    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
-    if not school:
-        raise HTTPException(status_code=404, detail="School not found")
+    school = _find_public_school(db, slug=slug)
 
     roles = (
         db.query(UserRole)
@@ -159,18 +180,14 @@ def list_schools_public(
 @router.get("/slug/{slug}", response_model=SchoolPublic)
 def get_school_by_slug(slug: str, db: DbDep) -> SchoolPublic:
     """Get a school by slug (no auth required). Returns safe public fields only."""
-    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
-    if not school:
-        raise HTTPException(status_code=404, detail="School not found")
+    school = _find_public_school(db, slug=slug)
     return SchoolPublic.model_validate(school)
 
 
 @router.post("/slug/{slug}/verify-password", status_code=status.HTTP_200_OK)
 def verify_school_password(slug: str, body: SchoolPasswordVerify, db: DbDep) -> dict:
     """Verify the school portal password. Returns 200 + school data if correct, 401 if wrong."""
-    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
-    if not school:
-        raise HTTPException(status_code=404, detail="School not found")
+    school = _find_public_school(db, slug=slug)
     if school.cmm_website_password != body.password:
         raise HTTPException(status_code=401, detail="Incorrect password")
     return {"school": SchoolPublic.model_validate(school).model_dump(mode="json")}
@@ -179,9 +196,7 @@ def verify_school_password(slug: str, body: SchoolPasswordVerify, db: DbDep) -> 
 @router.get("/{school_id}/public", response_model=SchoolPublic)
 def get_school_public(school_id: uuid.UUID, db: DbDep) -> SchoolPublic:
     """Get a school by UUID (no auth required). Returns safe public fields only."""
-    school = db.query(School).filter(School.id == school_id).first()
-    if not school:
-        raise HTTPException(status_code=404, detail="School not found")
+    school = _find_public_school(db, school_id=school_id)
     return SchoolPublic.model_validate(school)
 
 

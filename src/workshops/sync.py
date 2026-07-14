@@ -34,9 +34,9 @@ def sync_all_from_airtable(db: Session) -> dict:
 
     logger.info(
         "Airtable sync summary — workshops: matched=%d updated=%d created=%d skipped=%d | "
-        "webinars: matched=%d updated=%d created=%d skipped=%d",
+        "webinars: matched=%d updated=%d created=%d skipped=%d mappings_removed=%d",
         w["matched"], w["updated"], w["created"], w["skipped"],
-        v["matched"], v["updated"], v["created"], v["skipped"],
+        v["matched"], v["updated"], v["created"], v["skipped"], v.get("mappings_removed", 0),
     )
 
     synced_at = datetime.now(timezone.utc)

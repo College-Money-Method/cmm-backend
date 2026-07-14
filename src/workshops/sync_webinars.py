@@ -6,11 +6,12 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.config import settings
 from src.cycles.models import Cohort, Cycle
 from src.integrations.airtable import get_webinar_records
 from src.schools.models import School
 from src.workshops.models import PortalMapping, Webinar, Workshop
-from src.workshops.sync_utils import attachment_url, parse_airtable_datetime
+from src.workshops.sync_utils import attachment_url, parse_airtable_datetime, select_stale_mapping_pairs
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +30,24 @@ _WEBINAR_DT_FIELD_MAP = [
 ]
 
 
-def _sync_portal_mappings(db: Session, webinar_id, school_airtable_ids: list[str], school_by_airtable_id: dict) -> None:
-    """Create missing portal_mapping rows for a webinar's school list."""
+def _sync_portal_mappings(
+    db: Session,
+    webinar_id,
+    school_airtable_ids: list[str],
+    school_by_airtable_id: dict,
+    desired_pairs: set,
+) -> None:
+    """Create missing portal_mapping rows for a webinar's school list.
+
+    Also records every resolvable (school_id, webinar_id) pair Airtable declares
+    into ``desired_pairs`` so the post-loop reconciliation can delete any DB
+    mapping that Airtable no longer lists (school removed from a webinar).
+    """
     for at_id in school_airtable_ids:
         school = school_by_airtable_id.get(at_id)
         if not school:
             continue
+        desired_pairs.add((school.id, webinar_id))
         # unique constraint on (school_id, webinar_id) prevents duplicates
         exists = db.execute(
             select(PortalMapping).where(
@@ -44,6 +57,56 @@ def _sync_portal_mappings(db: Session, webinar_id, school_airtable_ids: list[str
         ).scalar_one_or_none()
         if not exists:
             db.add(PortalMapping(school_id=school.id, webinar_id=webinar_id))
+
+
+def _reconcile_portal_mappings(
+    db: Session,
+    desired_pairs: set,
+    processed_webinar_ids: set,
+    max_missing_fraction: float,
+) -> int:
+    """Delete portal_mapping rows Airtable no longer lists (school un-assigned
+    from a webinar), scoped to webinars seen in this pull.
+
+    ``processed_webinar_ids`` contains only webinars whose Airtable "Schools"
+    list is non-empty; webinars absent from the pull or with an empty list are
+    never touched. Mirrors the contacts-sync partial-fetch guard: skips (logs
+    error, deletes nothing) when the stale fraction exceeds
+    ``max_missing_fraction`` — a spike signals a bad/partial Airtable pull rather
+    than genuine removals. Returns the number of mappings removed.
+    """
+    if not processed_webinar_ids:
+        return 0
+    existing: list[PortalMapping] = db.execute(
+        select(PortalMapping).where(PortalMapping.webinar_id.in_(processed_webinar_ids))
+    ).scalars().all()
+    if not existing:
+        return 0
+
+    pm_by_pair = {(pm.school_id, pm.webinar_id): pm for pm in existing}
+    stale, guard_tripped = select_stale_mapping_pairs(
+        list(pm_by_pair.keys()), desired_pairs, max_missing_fraction
+    )
+    if not stale:
+        return 0
+    if guard_tripped:
+        logger.error(
+            "Portal-mapping reconciliation SKIPPED: %d/%d (%.1f%%) mappings would be "
+            "removed, exceeding max_missing_fraction=%.2f — treating as a bad/partial "
+            "Airtable pull. No mappings deleted.",
+            len(stale), len(existing), len(stale) / len(existing) * 100, max_missing_fraction,
+        )
+        return 0
+
+    for pair in stale:
+        pm = pm_by_pair[pair]
+        logger.info(
+            "Removing stale portal_mapping: school_id=%s webinar_id=%s "
+            "(school no longer linked to this webinar in Airtable)",
+            pm.school_id, pm.webinar_id,
+        )
+        db.delete(pm)
+    return len(stale)
 
 
 def sync_webinars_from_airtable(db: Session) -> dict:
@@ -79,6 +142,11 @@ def sync_webinars_from_airtable(db: Session) -> dict:
     school_by_airtable_id: dict[str, School] = {s.airtable_id: s for s in db.execute(select(School)).scalars().all() if s.airtable_id}
 
     matched = updated = skipped = created = 0
+
+    # (school_id, webinar_id) pairs Airtable declares this run, and the webinars
+    # actually seen in the pull — both drive the post-loop mapping reconciliation.
+    desired_pairs: set = set()
+    processed_webinar_ids: set = set()
 
     for rec in records:
         fields = rec["fields"]
@@ -149,7 +217,12 @@ def sync_webinars_from_airtable(db: Session) -> dict:
             )
             db.add(webinar)
             db.flush()  # populate webinar.id
-            _sync_portal_mappings(db, webinar.id, schools_linked, school_by_airtable_id)
+            # Only reconcile webinars whose Airtable "Schools" list is populated —
+            # an empty list is ambiguous (template/unmanaged webinar or a lookup
+            # glitch), so we never wipe existing mappings on it.
+            if schools_linked:
+                processed_webinar_ids.add(webinar.id)
+            _sync_portal_mappings(db, webinar.id, schools_linked, school_by_airtable_id, desired_pairs)
             created += 1
             continue
 
@@ -197,7 +270,22 @@ def sync_webinars_from_airtable(db: Session) -> dict:
         if changed:
             updated += 1
 
-        _sync_portal_mappings(db, webinar.id, schools_linked, school_by_airtable_id)
+        # Only reconcile when Airtable actually lists schools for this webinar
+        # (see create-path note): empty list ≠ "remove all mappings".
+        if schools_linked:
+            processed_webinar_ids.add(webinar.id)
+        _sync_portal_mappings(db, webinar.id, schools_linked, school_by_airtable_id, desired_pairs)
+
+    # Remove school↔webinar mappings Airtable no longer lists (guarded).
+    mappings_removed = _reconcile_portal_mappings(
+        db, desired_pairs, processed_webinar_ids, settings.sync_deactivation_max_missing_fraction
+    )
 
     db.flush()
-    return {"matched": matched, "updated": updated, "skipped": skipped, "created": created}
+    return {
+        "matched": matched,
+        "updated": updated,
+        "skipped": skipped,
+        "created": created,
+        "mappings_removed": mappings_removed,
+    }

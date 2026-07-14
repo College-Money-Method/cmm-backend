@@ -1,190 +1,136 @@
-# Airtable Sync — Known Issues (for AI agent to fix)
+# Airtable Sync — Current State & Resolution
 
-**Status:** current-state report. Documents behavior found in the Airtable→Supabase sync as of 2026-07-14. Each issue is written to be actionable by an AI agent: location, current behavior, impact, expected behavior, suggested direction, acceptance criteria.
+**Status:** current-state reference for the Airtable→Supabase counselor sync. Reflects `main` as of 2026-07-14 (offboarding work merged + post-merge refinements + the nuke-and-resync launch strategy). Verify each claim at the cited line before relying on it; line numbers drift.
 
-**Direction of sync:** Airtable → Supabase, one-way. Mode today is *"add new + overwrite matches"* — NOT a full mirror. Verify each claim at the cited line before fixing; line numbers may drift.
+**Direction:** Airtable → Supabase, one-way. For **counselors** the sync now mirrors Airtable closely, including removals (add / update / deactivate / revoke). For **schools, cohorts, workshops, webinars** it is still *"add new + overwrite some fields"* — no deletion.
 
----
+**Access rule (enforced):** a contact has counselor-hub access ⟺ `email IS NOT NULL AND school_id IS NOT NULL AND deleted_at IS NULL` (`sync_provisioning.py:88-99`). Airtable is source-of-truth. Revocation is *soft* — deletes `UserRole` + `profiles`, KEEPS the Supabase auth user (reversible). `super_admin` never touched.
 
-## Resolution status (2026-07-14, branch `feat/airtable-sync-offboarding`)
-
-**Access rule (now enforced):** a contact has counselor-hub access ⟺ `email IS NOT NULL AND school_id IS NOT NULL AND deleted_at IS NULL`. Airtable stays source-of-truth. Revocation is *soft* — drops `UserRole` + `profiles`, keeps the Supabase auth user (reversible). `super_admin` never touched.
-
-| Issue | Status | Notes |
-|-------|--------|-------|
-| ISSUE-1 offboarding revoke | ✅ Resolved | Reconcile pass in `sync_provisioning._reconcile_revocations`. Gated by `SYNC_ENABLE_REVOKE` (default **log-only** for first deploy). |
-| ISSUE-2 empty email | ✅ Resolved | Emptying a set email is now a no-op + warning; access is tied to `school_id`, not email. |
-| ISSUE-3 contacts deletion | ✅ Resolved | New `contacts.deleted_at` (migration 0080). Contacts absent from the pull (matched by `airtable_id` only) are soft-deactivated; guarded by `SYNC_DEACTIVATION_MAX_MISSING_FRACTION` (default 0.2). Reappearing `airtable_id` reactivates. |
-| ISSUE-3 schools/cohorts/workshops/webinars | ⏭️ Deferred | Intentionally out of scope this pass. |
-| ISSUE-4 cohort chaining | ✅ Resolved | `sync_schools_contacts_from_airtable` runs cohort sync first; unresolved school→cohort links counted (`cohorts_unresolved`). |
-| ISSUE-6 cohort upsert | ✅ Resolved | `hide_unavailability_calendar` upserted on match; `name` stays create-only. |
-| ISSUE-7 duplicate email | ✅ Resolved | First-occurrence-only, collisions logged with record IDs + `email_collisions` count. |
-| ISSUE-5, ISSUE-8 | ⏭️ Deferred | Out of scope this pass. |
-
-**Access signal note:** `softr_access` is the *legacy* Softr hub flag and is NOT the new-hub access signal — do not use it for offboarding.
+**Access signal note:** `softr_access` is the *legacy* Softr flag, NOT the new-hub access signal — do not use it for offboarding. Whether a contact has access is signalled by `contacts.user_id` being set (there is no `hub_access` DB column).
 
 ---
 
-**Key files**
-- `src/schools/sync_contacts.py` — contact upsert
-- `src/schools/sync_provisioning.py` — auth user + UserRole + profile provisioning
-- `src/schools/sync_schools.py` — school upsert
-- `src/schools/sync.py` — schools/contacts/provisioning orchestrator
-- `src/cycles/sync.py` — cohort sync (create-only)
-- `src/workshops/sync_workshops.py`, `src/workshops/sync_webinars.py` — workshop/webinar sync
+## Divergence strategy: nuke-and-resync (the current answer)
+
+In-place reconciliation of a drifted contacts↔auth state proved too fragile, so the operational reset is a **clean wipe + rebuild from Airtable**.
+
+**Script:** `scripts/backfill/nuke_and_resync_counselors.py`
+**Run:** `uv run --env-file=.env.local python -m scripts.backfill.nuke_and_resync_counselors [--apply]` (dry-run without `--apply`).
+
+With `--apply` (one DB txn, then auth deletes):
+1. `DELETE FROM survey_responses` (avoids dangling `user_id` FKs)
+2. `DELETE FROM sales` — ⚠️ **destructive side-effect**: sales rows FK contacts and are wiped too
+3. `DELETE FROM user_roles WHERE role <> 'super_admin'`
+4. `DELETE FROM profiles WHERE user_id NOT IN (:super_ids)`
+5. `DELETE FROM contacts` (full wipe — rebuilt from Airtable)
+6. commit
+7. delete each non-super Supabase auth user
+8. run `sync_schools_contacts_from_airtable` up to 3× until stable (`contacts_created == 0 AND contacts_deactivated == 0 AND counselors_created == 0`)
+
+`super_admin` roles + their auth users are preserved throughout.
+
+> **Implication:** because the reset path is a full rebuild, the sync no longer needs to perfectly reconcile every divergence in place. The "provisioning drift self-heal" logic was intentionally dropped (commit `84cf65b`).
+
+---
+
+## Pipeline order (`sync.py:36-39`)
+
+`sync_schools_contacts_from_airtable` runs, in fixed order:
+1. `sync_cohorts_from_airtable` (cohorts first, so schools resolve their cohort link)
+2. `sync_schools_from_airtable`
+3. `sync_contacts_from_airtable`
+4. `provision_counselors_from_contacts` (provision active contacts + reconcile revocations)
+
+---
+
+## Resolution status
+
+| Issue | Status | Current behavior (on `main`) |
+|-------|--------|------------------------------|
+| ISSUE-1 offboarding revoke | ✅ Resolved | `_reconcile_revocations` (`sync_provisioning.py:24-61`) revokes access when the backing contact is inactive. Gated by `SYNC_ENABLE_REVOKE` (default **False = log-only**). |
+| ISSUE-2 empty email | ✅ Resolved | Emptying a set email is a no-op + warning (`sync_contacts.py:109-117`); access is tied to `school_id`, not email. |
+| ISSUE-3 contacts deletion | ✅ Resolved | `contacts.deleted_at` (migration 0080). Contacts absent from the pull (matched by `airtable_id` only) are soft-deactivated; guarded by `sync_deactivation_max_missing_fraction` (**default 0.1 = 10%**). Reappearing `airtable_id` reactivates. |
+| ISSUE-4 cohort chaining | ✅ Resolved | Cohort sync runs first in the pipeline; unresolved school→cohort links counted (`cohorts_unresolved`). |
+| ISSUE-6 cohort upsert | ✅ Resolved | `hide_unavailability_calendar` upserted on match; `name` stays create-only (dedup key). |
+| ISSUE-7 duplicate email | ✅ Resolved | **School-preferring** dedup — see below. Collisions logged; losers skipped. |
+| ISSUE-3 schools/cohorts/workshops deletion | ⏭️ Deferred | Only contacts deactivate. These entity rows never delete. |
+| ISSUE-3b webinar↔school mapping removal | ✅ Resolved | `_reconcile_portal_mappings` (`sync_webinars.py`) deletes `portal_mapping` rows Airtable no longer lists. Scoped to webinars with a **non-empty** Airtable `Schools` list; guarded by `sync_deactivation_max_missing_fraction` (default 0.1). |
+| ISSUE-5 school write-once fields | ⏭️ Deferred | Out of scope. |
+| ISSUE-8 reassignment unlink | ⏭️ Deferred / mostly mitigated | See below. |
+
+---
+
+## Resolved — implementation notes
+
+### ISSUE-1 — Airtable-driven offboarding revoke
+`_reconcile_revocations` (`sync_provisioning.py:24-61`) runs at the end of every provisioning pass. Revokes a role when `should_revoke_access` is true: `role != super_admin` AND `user_id ∈ managed` (has a backing contact) AND `user_id ∉ active` (active = `school_id NOT NULL AND deleted_at NULL AND user_id NOT NULL`). When revoking: `db.delete(role)` + `delete_profile`; the auth user is kept (reversible). Gated by `settings.sync_enable_revoke` (default `False`) — when off, logs `[log-only] WOULD revoke…` without acting.
+Manual path also exists: `DELETE /api/v1/contacts/{user_id}` (`router.py:498-523`) hard-deletes the auth user, deletes the `UserRole` + `profiles`, and detaches the contact (`contact.user_id = None`, row kept).
+
+### ISSUE-2 — Empty email is a no-op
+`sync_contacts.py:109-117`: if an existing contact has an email and the Airtable record now sends empty, `effective_email = existing.email` (kept) + warning. Never blanks a previously-set email.
+
+### ISSUE-3 — Contact soft-deactivation (contacts only)
+`sync_contacts.py:188-215`: after upserting the pull, re-queries all contacts with a non-NULL `airtable_id`; any `airtable_id` in DB but absent from the pull gets `deleted_at = now()`. Match by `airtable_id` ONLY (never email). Guarded by `deactivation_is_safe` (`sync_utils.py:55-71`): skips deactivation + logs error if the pull is empty while contacts exist, or if `missing/known > sync_deactivation_max_missing_fraction` (default 0.1). Reappearance clears `deleted_at` (reactivated).
+
+### ISSUE-4 — Cohorts chained first
+Cohort sync is step 1 of the pipeline (`sync.py:36`). Schools count unresolved cohort links (`cohorts_unresolved`).
+
+### ISSUE-6 — Cohort upsert
+`cycles/sync.py:16-87`: on match, backfills `airtable_id` and updates `hide_unavailability_calendar`. `name` is create-only.
+
+### ISSUE-7 — Duplicate email → school-preferring dedup
+Changed from the earlier first-occurrence rule (commit `2462328`). `pick_collision_skip_ids` (`sync_utils.py:40-52`): when several Airtable records share an email in one pull, the **winner is the first record with a non-empty `Sch` (school link)**; if none have one, the first occurrence wins. All other same-email records are skipped (`sync_contacts.py:90-93`) and logged with record IDs. Separately, the DB-side `contact_by_email` map prefers a row with `user_id` set when two DB rows share an email (`sync_contacts.py:72-77`). Contact match order: `airtable_id` → global lowercased `email`.
+Duplicate-login guard (`sync_provisioning.py:170-180`): if a contact resolves to an auth user already claimed by another contact, it is **skipped entirely** (`skipped += 1; continue`) — no role synced. `claimed_user_ids` is seeded from all contacts first (`:119-124`).
+
+---
+
+## Still open / deferred
+
+### ISSUE-3 (non-contacts) — Schools / cohorts / workshops never delete
+Records removed from Airtable persist forever for these entity rows. Only contacts deactivate. Deferred on purpose.
+- [ ] Decide per-entity soft-delete/active-flag policy. Must reuse the partial-fetch guard so a bad pull can't mass-delete.
+
+**Resolved sub-case — webinar↔school mappings (ISSUE-3b):** removing a school from a webinar's `Schools` list in Airtable now deletes the corresponding `portal_mapping` on the next sync. `_reconcile_portal_mappings` runs post-loop, scoped to webinars whose Airtable `Schools` list is **non-empty** (an empty list is treated as "unmanaged / lookup glitch", never as "wipe all mappings"), and is protected by the same `sync_deactivation_max_missing_fraction` guard (skips + logs `reconciliation SKIPPED` if the stale fraction exceeds the threshold). Known limitation: removing the *last* school from a webinar (Airtable `Schools` → empty) is not reconciled — remove it via `DELETE /webinars/{id}/schools/{school_id}` if needed.
+
+### ISSUE-5 — School descriptive fields are write-once [MEDIUM]
+`sync_schools.py` update branch refreshes only `airtable_id`, `is_current_customer`, `cohort_id`, `airtable_slug`. `name`, address, and URL fields are set on create and never updated — Airtable edits to them are ignored.
+- [ ] Document field ownership; update Airtable-owned fields on existing schools (keep `slug` app-owned for URL stability).
+
+### ISSUE-8 — Reassignment to an un-synced school unlinks [LOW]
+If a contact's `Sch` points to a school not yet in Supabase, `school_id` → NULL. Under the access rule this now means access is (log-)revoked until the school syncs. Because cohorts+schools sync before contacts in one run, a full sync self-corrects; still silent per-contact when it happens.
+- [ ] Log unresolved `Sch` links per-contact; decide retain-vs-unlink.
+
+---
+
+## Key files
+
+- `src/schools/sync.py` — orchestrator (cohorts → schools → contacts → provisioning)
+- `src/schools/sync_contacts.py` — contact upsert, empty-email no-op, collision skip, soft-deactivation
+- `src/schools/sync_provisioning.py` — auth user + `UserRole` + `profiles` provisioning; `_reconcile_revocations`
+- `src/schools/sync_schools.py` — school upsert (write-once descriptive fields)
+- `src/cycles/sync.py` — cohort create + `hide_unavailability_calendar` upsert
+- `src/schools/sync_utils.py` — `pick_collision_skip_ids`, `deactivation_is_safe`, `should_revoke_access`, `parse_bool/int`
 - `src/auth/profile_sync.py` — `upsert_profile` / `delete_profile` for the `profiles` mirror table
-- `src/auth/router.py` — admin counselor CRUD, incl. `DELETE /api/v1/counselors/{user_id}` (the only revoke path)
+- `src/auth/router.py` — contact CRUD incl. `DELETE /api/v1/contacts/{user_id}` (renamed from `/counselors`, commit `dbe0360`)
+- `scripts/backfill/nuke_and_resync_counselors.py` — clean wipe + rebuild
+- migrations: `0079_add_profiles_table.py`, `0080_add_deleted_at_to_contacts.py`
 
-**Recent change (migration 0079, 2026-07-14):** a local `profiles` table now mirrors Supabase `auth.users` (email + name) for fast counselor search. Provisioning keeps it in sync (`sync_provisioning.py:122-124`); the admin delete endpoint cleans it up. This adds a third place email is stored (contacts, profiles, auth.users) — relevant to ISSUE-2.
+**Config keys:** `sync_enable_revoke` (default `False`, log-only), `sync_deactivation_max_missing_fraction` (default `0.1`).
 
----
-
-## ISSUE-1 — Airtable-driven offboarding does not revoke access [HIGH]
-
-> **Updated 2026-07-14 (profiles-table work, migration 0079):** a *manual* deprovisioning path now exists — `DELETE /api/v1/counselors/{user_id}` in `src/auth/router.py:414` deletes the Supabase auth user + `UserRole` + `profiles` row. So the earlier "no revoke anywhere" framing is no longer true. The remaining gap is that **the Airtable sync is not wired to it**.
-
-**Location:** `src/schools/sync_provisioning.py` (whole module); `src/schools/sync_contacts.py`; admin delete lives in `src/auth/router.py:414-434`
-
-**Current behavior:**
-- The sync path only ever *creates/reads* Supabase auth users and `UserRole` rows — it never revokes. Revocation exists only as a manual admin API call.
-- Removing a contact from Airtable does nothing (see ISSUE-3). Clearing a contact's email (ISSUE-2) leaves the auth user + `UserRole` + `profiles` row fully intact.
-- `provision_counselors_from_contacts` iterates only `Contact.email IS NOT NULL` (`sync_provisioning.py:46`), so any contact that loses access-relevant state is simply skipped, never revoked.
-
-**Impact:** No way to offboard a counselor *via Airtable*. Former staff retain working hub access until an admin manually calls the delete endpoint. Airtable is not a complete access-management source.
-
-**Expected behavior:** A defined, auditable Airtable-driven deprovisioning signal — e.g. a "Softr Access"/active flag or record removal — that revokes the `UserRole` (and optionally disables the auth user), reusing the existing delete/`delete_profile` plumbing. Must be explicit and logged; must never touch `super_admin`.
-
-**Suggested direction:** Add a reconciliation pass to provisioning: for each existing counselor `UserRole`, if the driving contact is gone/inactive, revoke via the same helpers `delete_counselor` uses. Decide product rule for the auth user (disable vs. keep). Gate behind an explicit flag to avoid mass-revoke accidents (see partial-fetch safety).
-
-**Acceptance criteria:**
-- [ ] A documented Airtable signal (flag or deletion) results in `UserRole` revocation + `profiles` cleanup.
-- [ ] `super_admin` never affected.
-- [ ] Every revoke is logged with contact identity + reason.
-- [ ] Idempotent and safe to re-run.
+**`profiles` table:** mirrors Supabase `auth.users` (email + name) for fast counselor search. Kept in sync by `upsert_profile` in provisioning (`sync_provisioning.py:186`, every pass) and cleaned by `delete_profile` in revoke + the DELETE endpoint.
 
 ---
 
-## ISSUE-2 — Clearing email in Airtable orphans the contact but keeps access [HIGH]
+## Cross-cutting invariants
 
-**Location:** `src/schools/sync_contacts.py:58,78,92-95`
-
-**Current behavior:** When an Airtable contact's `Email` is emptied, the contact is matched by `airtable_id`, `new_values["email"] = None`, and the diff loop sets `contacts.email = None`. The `user_id` link is NOT in `new_values`, so it persists. Auth user + `UserRole` are untouched (ISSUE-1). **Now also:** provisioning skips email-less contacts (`sync_provisioning.py:46`), so `upsert_profile` is never called for them — the `profiles` row keeps the OLD email. Result: `contacts.email` is NULL while `profiles.email` and `auth.users.email` still hold the stale address. The mirror silently drifts.
-
-**Impact:** Worst of both worlds — the contact loses the email that identifies it, but the person keeps hub access, and now the `profiles` mirror is out of sync with `contacts`. Admins may (wrongly) use "remove email" as a deactivation gesture.
-
-**Expected behavior:** Decide the intended semantics of an emptied email. Either (a) treat it as a no-op / warning (don't blank a previously-set email), or (b) treat it as deactivation and trigger ISSUE-1's revoke path. Do not silently orphan.
-
-**Acceptance criteria:**
-- [ ] Emptying an email no longer leaves a stranded login+role with no path to detect it.
-- [ ] Behavior is logged and documented.
-
----
-
-## ISSUE-3 — Nothing is ever deleted or deactivated [HIGH]
-
-**Location:** all sync modules (`sync_schools.py`, `sync_contacts.py`, `cycles/sync.py`, `sync_workshops.py`, `sync_webinars.py`)
-
-**Current behavior:** No sync removes or soft-deletes records absent from Airtable. Every sync only iterates Airtable records and upserts. Deleting a school / cohort / contact / workshop / webinar in Airtable leaves the Supabase copy live forever.
-
-**Impact:** Stale data accumulates. Deleted schools/workshops still appear in the app. No cleanup path.
-
-**Expected behavior:** A deliberate policy per entity — likely soft-delete/deactivate (not hard delete) for records that disappear from Airtable, or an explicit "active" flag synced from Airtable. Must be conservative (never mass-delete on a partial/failed Airtable fetch).
-
-**Acceptance criteria:**
-- [ ] Records removed from Airtable are flagged inactive (or documented as intentionally retained).
-- [ ] Guard against wiping everything when Airtable returns empty/partial due to API error.
-- [ ] Per-entity policy documented.
-
----
-
-## ISSUE-4 — Cohort sync not chained before school sync [MEDIUM]
-
-**Location:** `src/schools/sync.py` (`sync_schools_contacts_from_airtable`); cohort sync in `src/cycles/sync.py`
-
-**Current behavior:** The schools pipeline does NOT run cohort sync first. Schools link to cohorts by cohort `airtable_id`/name; if cohorts are stale in Supabase, the school→cohort link silently resolves to NULL.
-
-**Impact:** Schools silently end up with no cohort after a sync, with no error surfaced. Requires an admin to remember to run "Sync Cohorts" first, manually.
-
-**Expected behavior:** Either chain cohort sync into the school pipeline, or surface a clear warning/count when a school's cohort link can't be resolved.
-
-**Acceptance criteria:**
-- [ ] School cohort links resolve reliably without manual ordering, OR unresolved links are counted + logged.
-
----
-
-## ISSUE-5 — School descriptive fields are write-once (Airtable edits ignored) [MEDIUM]
-
-**Location:** `src/schools/sync_schools.py` (update branch)
-
-**Current behavior:** On an existing school, only `airtable_id`, `is_current_customer`, `cohort_id`, `airtable_slug` are refreshed. `name`, address fields, and URL fields are set on create and never updated. Editing them in Airtable afterward has no effect.
-
-**Impact:** Contradicts the "Airtable is source of truth" assumption. Address/URL corrections in Airtable silently don't propagate.
-
-**Expected behavior:** Decide which school fields Airtable owns and update them consistently. Document intentional exceptions (e.g. `slug` deliberately app-owned for URL stability).
-
-**Acceptance criteria:**
-- [ ] Field ownership documented per column.
-- [ ] Airtable-owned fields update on existing schools.
-
----
-
-## ISSUE-6 — Cohorts are create-only (existing never updated) [LOW]
-
-**Location:** `src/cycles/sync.py`
-
-**Current behavior:** If a cohort matches by `airtable_id` or `name`, it's skipped entirely (only backfills a missing `airtable_id`). Field changes in Airtable (e.g. `Hide Unavailability Calendar`, renamed `Name`) never reach Supabase.
-
-**Impact:** Cohort edits in Airtable are silently dropped.
-
-**Expected behavior:** Upsert cohort fields on match (at least `hide_unavailability_calendar`; decide on `name`).
-
-**Acceptance criteria:**
-- [ ] Existing cohorts update editable fields from Airtable.
-
----
-
-## ISSUE-7 — Duplicate email in Airtable → order-dependent "last wins" [MEDIUM]
-
-**Location:** `src/schools/sync_contacts.py:70-72,86-98`
-
-**Current behavior:** Two Airtable contacts with the same email map to the same Supabase row (global email dedup). The first to run claims the `airtable_id` slot; each later one still matches by email and overwrites all fields. Net result depends on Airtable iteration order — effectively "last processed wins" on visible values.
-
-**Impact:** Nondeterministic-feeling outcome; a shared/typo'd email silently blends two people or moves someone to the wrong school.
-
-**Expected behavior:** Detect duplicate emails within an Airtable pull and handle deterministically — skip + warn, or pick a documented winner. Surface a count of collisions.
-
-**Acceptance criteria:**
-- [ ] Duplicate emails detected and logged with both record IDs.
-- [ ] Outcome deterministic and documented.
-
----
-
-## ISSUE-8 — Contact reassignment to an un-synced school silently unlinks [LOW]
-
-**Location:** `src/schools/sync_contacts.py:60-68`
-
-**Current behavior:** When a contact's `Sch` link points to a school not yet in Supabase, `school_id` resolves to NULL and the contact becomes "unlinked" — rather than retaining its previous school. Counted in `contacts_unlinked` but not surfaced as an error.
-
-**Impact:** A reassignment (e.g. Annie Wright → Hampton) done before the target school is synced drops the contact to no school. Mostly mitigated by school-before-contact ordering, but silent when it happens.
-
-**Expected behavior:** Either retain prior `school_id` when the new target can't be resolved, or surface unresolved links prominently. Document the chosen rule.
-
-**Acceptance criteria:**
-- [ ] Unresolved `Sch` links are logged per-contact (not just counted).
-- [ ] Chosen retain-vs-unlink policy documented.
-
----
-
-## Cross-cutting notes
-
-- **Verify before fixing:** confirm each behavior at the cited location; line numbers may have shifted.
-- **Idempotency:** all fixes must keep syncs safe to re-run.
-- **Partial-fetch safety:** any deletion/deactivation logic (ISSUE-1, ISSUE-3) MUST guard against Airtable returning empty/partial data on API failure.
-- **`super_admin`:** must never be revoked or altered by any sync path.
+- **Idempotency:** syncs are safe to re-run; per-record failures are isolated (savepoints) and don't abort the batch.
+- **Partial-fetch safety:** deactivation is skipped when the Airtable pull looks empty/partial (`deactivation_is_safe`).
+- **`super_admin`:** never revoked, deactivated, or demoted by any sync path or the nuke script.
 
 ## Unresolved questions
 
-1. Is "never delete" intentional? (affects ISSUE-1, ISSUE-3)
-2. What is the intended offboarding signal in Airtable — a flag, or record deletion? (ISSUE-1)
+1. Turn on live revocation: flip `SYNC_ENABLE_REVOKE=true` after reviewing first-run log-only output. When?
+2. Deletion policy for schools/cohorts/workshops/webinars (ISSUE-3 non-contacts) — intentional to leave, or implement later?
 3. Which school fields should Airtable own vs. app own? (ISSUE-5)
-4. `airtable_asset_base_id` is configured but unused by any sync — legacy or planned feature?
+4. Nuke script deletes `sales` rows (FK to contacts) — is that acceptable data loss, or should sales be re-keyed/preserved?
+5. `airtable_asset_base_id` is configured but unused by any sync — legacy or planned?
