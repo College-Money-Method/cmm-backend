@@ -30,7 +30,7 @@ def sync_cohorts_from_airtable(db: Session) -> dict:
     by_airtable_id: dict[str, Cohort] = {c.airtable_id: c for c in all_cohorts if c.airtable_id}
     by_name: dict[str, Cohort] = {c.name: c for c in all_cohorts}
 
-    created = skipped = 0
+    created = updated = skipped = 0
 
     for rec in records:
         fields = rec.get("fields", {})
@@ -42,36 +42,46 @@ def sync_cohorts_from_airtable(db: Session) -> dict:
             skipped += 1
             continue
 
-        # Check if already exists by airtable_id or name
-        existing = by_airtable_id.get(airtable_rec_id) or by_name.get(name)
-        if existing:
-            # Backfill airtable_id if missing (silent update, no counter bump)
-            if not existing.airtable_id:
-                existing.airtable_id = airtable_rec_id
-            skipped += 1
-            continue
-
         hide_cal_raw = fields.get("Hide Unavailability Calendar")
         hide_unavailability_calendar: bool = bool(hide_cal_raw) if hide_cal_raw is not None else False
 
+        # ISSUE-6: upsert editable fields on match. `name` stays create-only —
+        # it's the business dedup key, so renames are handled deliberately elsewhere.
+        existing = by_airtable_id.get(airtable_rec_id) or by_name.get(name)
+        if existing:
+            changed = False
+            if not existing.airtable_id:
+                existing.airtable_id = airtable_rec_id
+                changed = True
+            if existing.hide_unavailability_calendar != hide_unavailability_calendar:
+                existing.hide_unavailability_calendar = hide_unavailability_calendar
+                changed = True
+            if changed:
+                updated += 1
+            else:
+                skipped += 1
+            continue
+
         try:
-            cohort = Cohort(
-                name=name,
-                airtable_id=airtable_rec_id,
-                hide_unavailability_calendar=hide_unavailability_calendar,
-            )
-            db.add(cohort)
-            db.flush()  # catch integrity errors per record without rolling back everything
+            # SAVEPOINT: catch integrity errors per record without rolling back
+            # the whole batch (a plain db.rollback() would undo all prior flushes).
+            with db.begin_nested():
+                cohort = Cohort(
+                    name=name,
+                    airtable_id=airtable_rec_id,
+                    hide_unavailability_calendar=hide_unavailability_calendar,
+                )
+                db.add(cohort)
+                db.flush()
             by_name[name] = cohort
             by_airtable_id[airtable_rec_id] = cohort
             created += 1
             logger.info("Created cohort: name=%s airtable_id=%s", name, airtable_rec_id)
         except Exception as exc:
             logger.error("Failed to create cohort %s (%s): %s", name, airtable_rec_id, exc)
-            db.rollback()
             skipped += 1
 
     db.commit()
     synced_at = datetime.now(timezone.utc)
-    logger.info("Cohort sync complete: created=%d skipped=%d", created, skipped)
-    return {"created": created, "skipped": skipped, "synced_at": synced_at}
+    logger.info("Cohort sync complete: created=%d updated=%d skipped=%d", created, updated, skipped)
+    return {"created": created, "updated": updated, "skipped": skipped, "synced_at": synced_at}

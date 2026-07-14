@@ -23,6 +23,8 @@ class ContactSummary(BaseModel):
     email: str | None = None
     role: str | None = None
     receive_comms: bool = True
+    # False when the contact was removed from Airtable (soft-deactivated).
+    is_active: bool = True
 
 
 class GradeSetRef(BaseModel):
@@ -186,10 +188,16 @@ class CounselorPublicOut(BaseModel):
 class SchoolSyncResult(BaseModel):
     schools_created: int
     schools_updated: int = 0
+    cohorts_unresolved: int = 0
     contacts_created: int
     contacts_updated: int = 0
     contacts_unlinked: int = 0
+    contacts_deactivated: int = 0
+    contacts_reactivated: int = 0
+    email_collisions: int = 0
     counselors_created: int
     school_roles_updated: int = 0
+    counselors_revoked: int = 0
+    drift_relinked: int = 0
     skipped: int
     synced_at: datetime
