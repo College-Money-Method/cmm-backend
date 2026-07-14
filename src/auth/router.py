@@ -309,6 +309,12 @@ def create_contact(
 
     # Check if a role record already exists for this user
     existing_role = db.query(UserRole).filter(UserRole.user_id == uuid.UUID(new_user.id)).first()
+    if existing_role and existing_role.role == "super_admin":
+        # Don't demote a platform admin into a school counselor/director.
+        raise HTTPException(
+            status_code=409,
+            detail=f"{body.email} is an admin account and can't be added as a counselor.",
+        )
     if existing_role:
         existing_role.role = body.role
         existing_role.school_id = school_id
