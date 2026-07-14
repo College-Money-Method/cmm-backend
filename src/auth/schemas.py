@@ -73,6 +73,5 @@ class CounselorSyncResult(BaseModel):
     counselors_created: int
     school_roles_updated: int
     counselors_revoked: int = 0
-    drift_relinked: int = 0
     skipped: int
     synced_at: str

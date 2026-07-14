@@ -50,7 +50,6 @@ def sync_schools_contacts_from_airtable(db: Session, supabase: object) -> dict:
         "counselors_created": provision_result["counselors_created"],
         "school_roles_updated": provision_result["school_roles_updated"],
         "counselors_revoked": provision_result["counselors_revoked"],
-        "drift_relinked": provision_result["drift_relinked"],
         "skipped": schools_result["skipped"] + contacts_result["skipped"] + provision_result["skipped"],
         "synced_at": datetime.now(timezone.utc),
     }
@@ -69,7 +68,6 @@ def sync_counselors_from_airtable(db: Session, supabase: object) -> dict:
         "counselors_created": provision_result["counselors_created"],
         "school_roles_updated": provision_result["school_roles_updated"],
         "counselors_revoked": provision_result["counselors_revoked"],
-        "drift_relinked": provision_result["drift_relinked"],
         "skipped": contacts_result["skipped"] + provision_result["skipped"],
         "synced_at": datetime.now(timezone.utc).isoformat(),
     }
