@@ -45,14 +45,18 @@ class CounselorUpdate(BaseModel):
 
 
 class CounselorOut(BaseModel):
-    user_id: uuid.UUID
-    email: str
+    # Counselors are sourced from the contacts table. A contact may not have a
+    # provisioned login yet (no school → no auth user/role), so user_id/role are
+    # optional; `id` is the stable contact id used by the UI.
+    id: uuid.UUID | None = None
+    user_id: uuid.UUID | None = None
+    email: str | None = None
     first_name: str | None
     last_name: str | None
     full_name: str | None
-    role: str
-    school_id: uuid.UUID | None
-    school_name: str | None
+    role: str | None = None
+    school_id: uuid.UUID | None = None
+    school_name: str | None = None
     title: str | None = None
     school_role: str | None = None
 

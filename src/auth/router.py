@@ -24,7 +24,7 @@ from src.auth.schemas import (
 )
 from src.db.client import get_supabase
 from src.db.deps import DbDep
-from src.schools.models import School
+from src.schools.models import Contact, School
 
 router = APIRouter(tags=["auth"])
 
@@ -70,6 +70,29 @@ def _counselor_out(
     )
 
 
+def _contact_counselor_out(
+    contact: Contact, role_record: UserRole | None, school: School | None
+) -> CounselorOut:
+    """Build a counselor row from a contact (+ its optional login role/school).
+
+    Contacts without a school have no provisioned login yet, so user_id/role are
+    None; the row still appears (e.g. under the "No School" filter) for assignment.
+    """
+    return CounselorOut(
+        id=contact.id,
+        user_id=contact.user_id,
+        email=contact.email,
+        first_name=contact.first_name,
+        last_name=contact.last_name,
+        full_name=contact.full_name,
+        role=role_record.role if role_record else None,
+        school_id=contact.school_id,
+        school_name=school.name if school else None,
+        title=role_record.title if role_record else None,
+        school_role=contact.role,
+    )
+
+
 def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut:
     """Build from a Supabase auth response dict (single-user endpoints)."""
     meta = auth_user.get("user_metadata", {})
@@ -108,12 +131,13 @@ def list_counselors(
     search: str | None = Query(default=None),
     school_id: uuid.UUID | None = Query(default=None),
     no_school: bool = Query(default=False),
-    role: Literal["hub_admin", "hub_user", "viewer"] | None = Query(default=None),
     school_role: str | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> CounselorListResponse:
-    """List counselor/viewer accounts with pagination, search, and filters.
+    """List counselors, sourced from the contacts table (Airtable is source of
+    truth), left-joined to their login role + school. Includes contacts without
+    a school (no login yet) so admins can find + assign them ("No School" filter).
     Super admins see all; counselors/viewers are scoped to their own school.
     """
     # Counselors and viewers may only query their own school
@@ -123,49 +147,41 @@ def list_counselors(
         elif school_id != user.school_id:
             raise HTTPException(status_code=403, detail="Access restricted to your own school")
 
-    # Single indexed join: user_roles → profiles (email/name) → schools (name).
-    # Search, filter, count, and pagination all happen in SQL — no Supabase
-    # directory enumeration. Profiles are kept fresh on every create/update.
     q = (
-        db.query(UserRole, Profile)
-        .join(Profile, Profile.user_id == UserRole.user_id)
-        .outerjoin(School, School.id == UserRole.school_id)
-        .options(contains_eager(UserRole.school))
-        .filter(UserRole.role.in_(["hub_admin", "hub_user", "viewer"]))
+        db.query(Contact, UserRole, School)
+        .outerjoin(UserRole, UserRole.user_id == Contact.user_id)
+        .outerjoin(School, School.id == Contact.school_id)
+        .filter(Contact.deleted_at.is_(None))
     )
 
     if no_school and user.role == "super_admin":
-        q = q.filter(UserRole.school_id.is_(None))
+        q = q.filter(Contact.school_id.is_(None))
     elif school_id:
-        q = q.filter(UserRole.school_id == school_id)
-    if role:
-        q = q.filter(UserRole.role == role)
+        q = q.filter(Contact.school_id == school_id)
     if school_role:
-        q = q.filter(UserRole.school_role == school_role)
+        q = q.filter(Contact.role == school_role)
 
     if search:
         like = f"%{search}%"
-        full_name = func.concat(
-            func.coalesce(Profile.first_name, ""), " ", func.coalesce(Profile.last_name, "")
-        )
         q = q.filter(
             or_(
-                Profile.email.ilike(like),
-                Profile.first_name.ilike(like),
-                Profile.last_name.ilike(like),
-                full_name.ilike(like),
+                Contact.email.ilike(like),
+                Contact.first_name.ilike(like),
+                Contact.last_name.ilike(like),
+                Contact.full_name.ilike(like),
                 School.name.ilike(like),
             )
         )
 
     total = q.count()
-    rows = q.order_by(UserRole.created_at).offset(skip).limit(limit).all()
+    rows = (
+        q.order_by(Contact.full_name.nulls_last(), Contact.id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
-    items = [
-        _counselor_out(role, profile.email, profile.first_name, profile.last_name)
-        for role, profile in rows
-    ]
-
+    items = [_contact_counselor_out(c, ur, s) for c, ur, s in rows]
     return CounselorListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
