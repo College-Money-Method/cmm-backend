@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session
 from src.config import settings
 from src.integrations.airtable import get_contacts_records
 from src.schools.models import Contact, School
-from src.schools.sync_utils import deactivation_is_safe, detect_email_collisions, parse_bool
+from src.schools.sync_utils import (
+    deactivation_is_safe,
+    detect_email_collisions,
+    parse_bool,
+    pick_collision_skip_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +50,15 @@ def sync_contacts_from_airtable(db: Session) -> dict:
     """
     at_contacts = get_contacts_records()
 
-    # ISSUE-7: detect duplicate emails in this pull; process first occurrence only.
+    # ISSUE-7: duplicate emails in this pull — keep the SCHOOL-LINKED record
+    # (the actual counselor), skip the rest. Falls back to first if none linked.
     email_collisions = detect_email_collisions(at_contacts)
+    collision_skip_ids = pick_collision_skip_ids(at_contacts, email_collisions)
     for email, ids in email_collisions.items():
         logger.warning(
-            "Duplicate email in Airtable pull: %s across records %s — processing first only",
+            "Duplicate email in Airtable pull: %s across records %s — keeping school-linked one",
             email, ids,
         )
-    seen_collision_emails: set[str] = set()
 
     all_schools: list[School] = db.execute(select(School)).scalars().all()
     school_by_airtable_id: dict[str, School] = {s.airtable_id: s for s in all_schools if s.airtable_id}
@@ -80,17 +86,11 @@ def sync_contacts_from_airtable(db: Session) -> dict:
         pulled_airtable_ids.add(contact_airtable_id)
         email: str | None = (cfields.get("Email") or "").strip() or None
 
-        # ISSUE-7: skip later records that share a colliding email
-        if email:
-            el = email.lower()
-            if el in email_collisions:
-                if el in seen_collision_emails:
-                    logger.warning(
-                        "Skipping duplicate-email contact %s (%s)", email, contact_airtable_id
-                    )
-                    collisions_skipped += 1
-                    continue
-                seen_collision_emails.add(el)
+        # ISSUE-7: skip the non-winning records of a colliding email
+        if contact_airtable_id in collision_skip_ids:
+            logger.warning("Skipping duplicate-email contact %s (%s)", email, contact_airtable_id)
+            collisions_skipped += 1
+            continue
 
         # First school wins — contacts never belong to two schools
         school: School | None = None

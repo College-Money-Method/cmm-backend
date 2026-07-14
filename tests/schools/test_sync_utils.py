@@ -3,6 +3,7 @@
 from src.schools.sync_utils import (
     deactivation_is_safe,
     detect_email_collisions,
+    pick_collision_skip_ids,
     should_revoke_access,
 )
 
@@ -24,6 +25,25 @@ class TestDetectEmailCollisions:
     def test_ignores_blank_and_missing_email(self):
         records = [_rec("r1", ""), _rec("r2", None), _rec("r3", "  ")]
         assert detect_email_collisions(records) == {}
+
+
+class TestPickCollisionSkipIds:
+    def test_prefers_school_linked(self):
+        records = [
+            {"id": "a", "fields": {"Email": "e@x.com"}},               # no school
+            {"id": "b", "fields": {"Email": "e@x.com", "Sch": ["recS"]}},  # school-linked
+        ]
+        assert pick_collision_skip_ids(records, {"e@x.com": ["a", "b"]}) == {"a"}
+
+    def test_fallback_to_first_when_none_linked(self):
+        records = [
+            {"id": "a", "fields": {"Email": "e@x.com"}},
+            {"id": "b", "fields": {"Email": "e@x.com"}},
+        ]
+        assert pick_collision_skip_ids(records, {"e@x.com": ["a", "b"]}) == {"b"}
+
+    def test_no_collisions(self):
+        assert pick_collision_skip_ids([], {}) == set()
 
 
 class TestDeactivationIsSafe:

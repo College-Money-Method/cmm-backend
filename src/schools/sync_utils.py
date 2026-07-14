@@ -37,6 +37,21 @@ def detect_email_collisions(records: list[dict]) -> dict[str, list[str]]:
     return {email: ids for email, ids in by_email.items() if len(ids) > 1}
 
 
+def pick_collision_skip_ids(records: list[dict], collisions: dict[str, list[str]]) -> set[str]:
+    """For each colliding email, KEEP the record that has a school link ("Sch"),
+    else the first; return the set of the OTHER record ids to skip.
+
+    A shared email where only one record carries the school should resolve to the
+    school-linked one (which is the counselor), not whichever happened to be first.
+    """
+    by_id = {r.get("id"): r for r in records}
+    skip: set[str] = set()
+    for ids in collisions.values():
+        winner = next((i for i in ids if (by_id.get(i, {}).get("fields", {}).get("Sch"))), ids[0])
+        skip.update(i for i in ids if i != winner)
+    return skip
+
+
 def deactivation_is_safe(
     pulled_airtable_ids: set[str],
     known_airtable_ids: set[str],
