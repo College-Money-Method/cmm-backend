@@ -132,8 +132,16 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
             continue
         email_lower = email.lower()
 
-        school_role = contact.role or "Counselor"
+        # Director/Counselor label straight from Airtable (None when unset).
+        school_role = contact.role or None
         system_role = "hub_admin" if school_role == "Director" else "hub_user"
+
+        # A contact with no role gets NO hub access. When it has never been
+        # provisioned (no linked auth user), skip entirely — don't even create a
+        # Supabase auth user for it.
+        if not school_role and not contact.user_id:
+            skipped += 1
+            continue
 
         # ── Resolve auth user (existing link → email match → create) ──
         user_id_str: str | None = str(contact.user_id) if contact.user_id else None
@@ -185,19 +193,21 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
         if user_id_str:
             upsert_profile(db, user_id_str, email, contact.first_name, contact.last_name)
 
-        # ── Upsert UserRole (contact.role is source of truth) ──
+        # ── Upsert UserRole ──
+        # contact.role is the source of truth for the DISPLAY label (school_role)
+        # only. The hub PERMISSION (UserRole.role) is derived from the role solely
+        # on first creation (below); once the row exists it is decoupled and never
+        # re-derived from Airtable, so manual permission changes survive re-syncs.
         existing_role = role_by_user_id.get(user_id_str)
         if existing_role:
-            changed = False
             if existing_role.school_role != school_role:
                 existing_role.school_role = school_role
-                changed = True
-            if existing_role.role != "super_admin" and existing_role.role != system_role:
-                logger.info("Updated role for %s: %s → %s", email, existing_role.role, system_role)
-                existing_role.role = system_role
-                changed = True
-            if changed:
                 school_roles_updated += 1
+            continue
+
+        # No existing role and no Airtable role → no hub access, don't provision.
+        if not school_role:
+            skipped += 1
             continue
 
         try:

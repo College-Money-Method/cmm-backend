@@ -20,6 +20,8 @@ from src.auth.schemas import (
     ContactOut,
     ContactSyncResult,
     ContactUpdate,
+    HubPasswordResetOut,
+    HubPasswordResetRequest,
     UserRoleOut,
 )
 from src.db.client import get_supabase
@@ -43,10 +45,6 @@ def get_me(user: CurrentUserDep) -> UserRoleOut:
 # ──────────────────────────────────────────────
 # Contact management (admin only)
 # ──────────────────────────────────────────────
-
-
-# Airtable-style display label derived from the access role.
-_SCHOOL_ROLE_BY_ROLE = {"hub_admin": "Director", "hub_user": "Counselor"}
 
 
 def _contact_out_from_role(
@@ -259,8 +257,10 @@ def create_contact(
     # Name defaults to the email handle so directors can supply just an email
     first_name = body.first_name or body.email.split("@", 1)[0]
     last_name = body.last_name or ""
-    # Airtable-style display label follows the access role
-    school_role = _SCHOOL_ROLE_BY_ROLE.get(body.role)
+    # Director/Counselor label is decoupled from hub permission — it is sourced
+    # from Airtable on sync, never derived from the access role. Leave it unset
+    # here; the next Airtable sync populates it (only when still empty).
+    school_role = None
 
     # Create user in Supabase
     create_params = {
@@ -420,18 +420,36 @@ def update_contact(
     if not role_record:
         raise HTTPException(status_code=404, detail="Contact not found")
 
-    if user.role != "super_admin":
-        # Scope: may only edit counselors at their own school
+    if user.role == "super_admin":
+        # Super admins can update all fields. Use exclude_unset so explicitly-passed
+        # null (e.g. school_id=null) is honoured, while omitted fields are ignored.
+        update_data = body.model_dump(exclude_unset=True)
+    elif user.role == "hub_admin":
+        # Directors manage teammates at their own school: name, title, and access role
+        # (limited to Director/Counselor). They cannot reassign schools.
         if role_record.school_id != user.school_id:
             raise HTTPException(status_code=403, detail="Access restricted to your own school")
-        # Field whitelist: only title is allowed
+        update_data = {}
+        if body.first_name is not None:
+            update_data["first_name"] = body.first_name
+        if body.last_name is not None:
+            update_data["last_name"] = body.last_name
+        if body.title is not None:
+            update_data["title"] = body.title
+        if body.role is not None:
+            if body.role not in ("hub_admin", "hub_user"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Directors may only assign counselor or director roles",
+                )
+            update_data["role"] = body.role
+    else:
+        # Counselors/viewers may only update the title of teammates at their own school.
+        if role_record.school_id != user.school_id:
+            raise HTTPException(status_code=403, detail="Access restricted to your own school")
         update_data = {}
         if body.title is not None:
             update_data["title"] = body.title
-    else:
-        # Use exclude_unset so explicitly-passed null (e.g. school_id=null) is honoured,
-        # while omitted fields are ignored.
-        update_data = body.model_dump(exclude_unset=True)
 
     if "school_id" in update_data and update_data["school_id"] is not None:
         school = db.query(School).filter(School.id == update_data["school_id"]).first()
@@ -442,13 +460,8 @@ def update_contact(
         if hasattr(role_record, field):
             setattr(role_record, field, value)
 
-    # Changing the access role (hub_admin/hub_user) is the hub access change; keep
-    # the cosmetic Director/Counselor label (school_role) in step with it.
-    new_school_role = None
-    if "role" in update_data and update_data["role"] is not None:
-        new_school_role = _SCHOOL_ROLE_BY_ROLE.get(update_data["role"])
-        if new_school_role is not None:
-            role_record.school_role = new_school_role
+    # Hub permission (role) is decoupled from the Director/Counselor label
+    # (school_role): changing access no longer relabels the business role.
 
     # Mirror school assignment + name changes onto the contacts row so the
     # school contact list (sourced from the contacts table) stays coherent.
@@ -456,22 +469,20 @@ def update_contact(
     if contact is not None:
         if "school_id" in update_data:
             contact.school_id = update_data["school_id"]
-        if new_school_role is not None:
-            contact.role = new_school_role
-        if body.first_name is not None:
-            contact.first_name = body.first_name
-        if body.last_name is not None:
-            contact.last_name = body.last_name
+        if "first_name" in update_data:
+            contact.first_name = update_data["first_name"]
+        if "last_name" in update_data:
+            contact.last_name = update_data["last_name"]
 
     db.commit()
     db.refresh(role_record)
 
     # Update Supabase user metadata if name fields changed
     meta_update = {}
-    if body.first_name is not None:
-        meta_update["first_name"] = body.first_name
-    if body.last_name is not None:
-        meta_update["last_name"] = body.last_name
+    if "first_name" in update_data:
+        meta_update["first_name"] = update_data["first_name"]
+    if "last_name" in update_data:
+        meta_update["last_name"] = update_data["last_name"]
     if meta_update:
         try:
             supabase.auth.admin.update_user_by_id(str(user_id), {"user_metadata": meta_update})
@@ -521,3 +532,49 @@ def delete_contact(
     db.delete(role_record)
     delete_profile(db, user_id)
     db.commit()
+
+
+@router.post(
+    "/api/v1/contacts/{user_id}/reset-hub-password", response_model=HubPasswordResetOut
+)
+def reset_hub_password(
+    user_id: uuid.UUID,
+    _admin: AdminDep,
+    db: DbDep,
+    body: HubPasswordResetRequest = HubPasswordResetRequest(),
+    supabase=Depends(get_supabase),
+) -> HubPasswordResetOut:
+    """Reset a contact's hub login password.
+
+    When `body.password` is provided it becomes the new password; otherwise it resets
+    to the deterministic default (email handle + the school's resource-center password,
+    just the handle when the school has none). Returns the new password so the admin
+    can share it.
+    """
+    role_record = (
+        db.query(UserRole)
+        .options(joinedload(UserRole.school))
+        .filter(UserRole.user_id == user_id)
+        .first()
+    )
+    if not role_record:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    custom = (body.password or "").strip()
+    if custom:
+        new_password = custom
+    else:
+        resp = supabase.auth.admin.get_user_by_id(str(user_id))
+        email = resp.user.email if resp and resp.user else None
+        if not email:
+            raise HTTPException(status_code=404, detail="Auth user not found")
+        rc_password = role_record.school.cmm_website_password if role_record.school else None
+        new_password = default_hub_password(email, rc_password)
+
+    try:
+        supabase.auth.admin.update_user_by_id(str(user_id), {"password": new_password})
+    except Exception as exc:
+        logger.error("Failed to reset hub password for %s: %s", email, exc)
+        raise HTTPException(status_code=502, detail="Failed to reset password")
+
+    return HubPasswordResetOut(password=new_password)

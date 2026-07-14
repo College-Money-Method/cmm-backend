@@ -4,7 +4,9 @@
 
 **Direction:** Airtable → Supabase, one-way. For **counselors** the sync now mirrors Airtable closely, including removals (add / update / deactivate / revoke). For **schools, cohorts, workshops, webinars** it is still *"add new + overwrite some fields"* — no deletion.
 
-**Access rule (enforced):** a contact has counselor-hub access ⟺ `email IS NOT NULL AND school_id IS NOT NULL AND deleted_at IS NULL` (`sync_provisioning.py:88-99`). Airtable is source-of-truth. Revocation is *soft* — deletes `UserRole` + `profiles`, KEEPS the Supabase auth user (reversible). `super_admin` never touched.
+**Access rule (enforced):** to be *provisioned* a contact needs `email IS NOT NULL AND school_id IS NOT NULL AND deleted_at IS NULL` (`sync_provisioning.py:88-99`) **AND a role** (`contact.role`) — a contact with no role that was never provisioned is skipped entirely (no auth user created; `:139-144`, `:209-211`). Airtable is source-of-truth for existence + the label. Revocation is *soft* — deletes `UserRole` + `profiles`, KEEPS the Supabase auth user (reversible). `super_admin` never touched.
+
+**Role vs. hub permission are DECOUPLED (`sync_provisioning.py:196-206`):** `contact.role` (Airtable) is the source of truth for the **display label** (`UserRole.school_role`, e.g. "Director"/"Counselor") only. The **hub permission** (`UserRole.role` = `hub_admin` / `hub_user`) is derived from the role **only when the role row is first created** (`Director → hub_admin`, else `hub_user`). Once the row exists the permission is never re-derived from Airtable — so **manual permission changes in the app survive re-syncs**. Re-syncs only update the label.
 
 **Access signal note:** `softr_access` is the *legacy* Softr flag, NOT the new-hub access signal — do not use it for offboarding. Whether a contact has access is signalled by `contacts.user_id` being set (there is no `hub_access` DB column).
 
