@@ -179,9 +179,7 @@ def list_schools_public(
 @router.get("/slug/{slug}", response_model=SchoolPublic)
 def get_school_by_slug(slug: str, db: DbDep) -> SchoolPublic:
     """Get a school by slug (no auth required). Returns safe public fields only."""
-    school = db.query(School).filter(or_(School.slug == slug, School.airtable_slug == slug)).first()
-    if not school:
-        raise HTTPException(status_code=404, detail="School not found")
+    school = _find_public_school(db, slug=slug)
     return SchoolPublic.model_validate(school)
 
 
