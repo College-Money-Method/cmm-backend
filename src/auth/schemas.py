@@ -22,7 +22,7 @@ class CurrentUser(BaseModel):
     school_role: str | None = None  # cosmetic Airtable title, e.g. "Director"
 
 
-class CounselorCreate(BaseModel):
+class ContactCreate(BaseModel):
     email: EmailStr
     # Optional: directors can "just add the email" — name defaults to the email handle
     first_name: str | None = None
@@ -36,7 +36,7 @@ class CounselorCreate(BaseModel):
     password: str | None = None
 
 
-class CounselorUpdate(BaseModel):
+class ContactUpdate(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     school_id: uuid.UUID | None = None
@@ -44,27 +44,31 @@ class CounselorUpdate(BaseModel):
     title: str | None = None
 
 
-class CounselorOut(BaseModel):
-    user_id: uuid.UUID
-    email: str
+class ContactOut(BaseModel):
+    # Contacts are sourced from the contacts table. A contact may not have a
+    # provisioned login yet (no school → no auth user/role), so user_id/role are
+    # optional; `id` is the stable contact id used by the UI.
+    id: uuid.UUID | None = None
+    user_id: uuid.UUID | None = None
+    email: str | None = None
     first_name: str | None
     last_name: str | None
     full_name: str | None
-    role: str
-    school_id: uuid.UUID | None
-    school_name: str | None
+    role: str | None = None
+    school_id: uuid.UUID | None = None
+    school_name: str | None = None
     title: str | None = None
     school_role: str | None = None
 
 
-class CounselorListResponse(BaseModel):
-    items: list[CounselorOut]
+class ContactListResponse(BaseModel):
+    items: list[ContactOut]
     total: int
     skip: int
     limit: int
 
 
-class CounselorSyncResult(BaseModel):
+class ContactSyncResult(BaseModel):
     contacts_created: int = 0
     contacts_updated: int = 0
     contacts_deactivated: int = 0
@@ -73,6 +77,5 @@ class CounselorSyncResult(BaseModel):
     counselors_created: int
     school_roles_updated: int
     counselors_revoked: int = 0
-    drift_relinked: int = 0
     skipped: int
     synced_at: str

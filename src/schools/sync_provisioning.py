@@ -112,11 +112,6 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
         logger.error("Failed to fetch Supabase users: %s", exc)
         raise
 
-    # Reverse map (auth user id → email) for detecting drifted contact links.
-    auth_email_by_id: dict[str, str] = {
-        u.id: (u.email or "").lower() for u in supabase_users_by_email.values()
-    }
-
     # contacts.user_id is UNIQUE — a duplicate-email contact can't share a user.
     # Seed from ALL contacts (not just the provisioning target) so a user_id
     # already owned by an unlinked/deactivated contact is still protected;
@@ -128,7 +123,7 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
         ).all()
     }
 
-    counselors_created = school_roles_updated = skipped = drift_relinked = 0
+    counselors_created = school_roles_updated = skipped = 0
 
     for contact in contacts:
         email = (contact.email or "").strip()
@@ -142,20 +137,6 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
 
         # ── Resolve auth user (existing link → email match → create) ──
         user_id_str: str | None = str(contact.user_id) if contact.user_id else None
-        # Self-heal drift: if the linked login's email no longer matches the
-        # contact's email (Airtable email changed / record reused), drop the
-        # stale link so it re-resolves to the correct login below. This prevents
-        # the contact↔auth cross-wiring from recurring.
-        if user_id_str:
-            linked_email = auth_email_by_id.get(user_id_str)
-            if linked_email is not None and linked_email != email_lower:
-                logger.warning(
-                    "Relinking contact %s: linked login email '%s' != contact email",
-                    email, linked_email,
-                )
-                contact.user_id = None
-                user_id_str = None
-                drift_relinked += 1
         if not user_id_str:
             auth_user = supabase_users_by_email.get(email_lower)
             if auth_user is None:
@@ -247,14 +228,12 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
 
     db.commit()
     logger.info(
-        "Counselor provisioning complete: created=%d roles_updated=%d revoked=%d "
-        "drift_relinked=%d skipped=%d",
-        counselors_created, school_roles_updated, counselors_revoked, drift_relinked, skipped,
+        "Counselor provisioning complete: created=%d roles_updated=%d revoked=%d skipped=%d",
+        counselors_created, school_roles_updated, counselors_revoked, skipped,
     )
     return {
         "counselors_created": counselors_created,
         "school_roles_updated": school_roles_updated,
         "counselors_revoked": counselors_revoked,
-        "drift_relinked": drift_relinked,
         "skipped": skipped,
     }
