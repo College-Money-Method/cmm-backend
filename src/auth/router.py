@@ -1,4 +1,4 @@
-"""Auth and counselor management endpoints."""
+"""Auth and contact management endpoints."""
 
 import logging
 import uuid
@@ -15,11 +15,11 @@ from src.auth.hub_password import default_hub_password
 from src.auth.models import Profile, UserRole
 from src.auth.profile_sync import delete_profile, upsert_profile
 from src.auth.schemas import (
-    CounselorCreate,
-    CounselorListResponse,
-    CounselorOut,
-    CounselorSyncResult,
-    CounselorUpdate,
+    ContactCreate,
+    ContactListResponse,
+    ContactOut,
+    ContactSyncResult,
+    ContactUpdate,
     UserRoleOut,
 )
 from src.db.client import get_supabase
@@ -41,7 +41,7 @@ def get_me(user: CurrentUserDep) -> UserRoleOut:
 
 
 # ──────────────────────────────────────────────
-# Counselor management (admin only)
+# Contact management (admin only)
 # ──────────────────────────────────────────────
 
 
@@ -49,14 +49,14 @@ def get_me(user: CurrentUserDep) -> UserRoleOut:
 _SCHOOL_ROLE_BY_ROLE = {"hub_admin": "Director", "hub_user": "Counselor"}
 
 
-def _counselor_out(
+def _contact_out_from_role(
     role_record: UserRole, email: str, first: str, last: str
-) -> CounselorOut:
+) -> ContactOut:
     first = first or ""
     last = last or ""
     full = f"{first} {last}".strip() or None
     school_name = role_record.school.name if role_record.school else None
-    return CounselorOut(
+    return ContactOut(
         user_id=role_record.user_id,
         email=email or "",
         first_name=first or None,
@@ -70,15 +70,15 @@ def _counselor_out(
     )
 
 
-def _contact_counselor_out(
+def _contact_out(
     contact: Contact, role_record: UserRole | None, school: School | None
-) -> CounselorOut:
-    """Build a counselor row from a contact (+ its optional login role/school).
+) -> ContactOut:
+    """Build a contact row from a contact (+ its optional login role/school).
 
     Contacts without a school have no provisioned login yet, so user_id/role are
     None; the row still appears (e.g. under the "No School" filter) for assignment.
     """
-    return CounselorOut(
+    return ContactOut(
         id=contact.id,
         user_id=contact.user_id,
         email=contact.email,
@@ -93,10 +93,10 @@ def _contact_counselor_out(
     )
 
 
-def _build_counselor_out(role_record: UserRole, auth_user: dict) -> CounselorOut:
+def _build_contact_out(role_record: UserRole, auth_user: dict) -> ContactOut:
     """Build from a Supabase auth response dict (single-user endpoints)."""
     meta = auth_user.get("user_metadata", {})
-    return _counselor_out(
+    return _contact_out_from_role(
         role_record,
         auth_user.get("email", ""),
         meta.get("first_name") or "",
@@ -116,16 +116,16 @@ def _sync_profile_from_auth(db: Session, user_id, auth_user: dict) -> None:
     )
 
 
-@router.post("/api/v1/counselors/sync-airtable", response_model=CounselorSyncResult)
-def sync_counselors_airtable(_admin: AdminDep, db: DbDep, supabase=Depends(get_supabase)) -> CounselorSyncResult:
+@router.post("/api/v1/contacts/sync-airtable", response_model=ContactSyncResult)
+def sync_contacts_airtable(_admin: AdminDep, db: DbDep, supabase=Depends(get_supabase)) -> ContactSyncResult:
     """Provision missing counselor accounts from Airtable contacts."""
     from src.schools.sync import sync_counselors_from_airtable
     result = sync_counselors_from_airtable(db, supabase)
-    return CounselorSyncResult(**result)
+    return ContactSyncResult(**result)
 
 
-@router.get("/api/v1/counselors", response_model=CounselorListResponse)
-def list_counselors(
+@router.get("/api/v1/contacts", response_model=ContactListResponse)
+def list_contacts(
     user: CurrentUserDep,
     db: DbDep,
     search: str | None = Query(default=None),
@@ -134,10 +134,10 @@ def list_counselors(
     school_role: str | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
-) -> CounselorListResponse:
-    """List counselors, sourced from the contacts table (Airtable is source of
-    truth), left-joined to their login role + school. Includes contacts without
-    a school (no login yet) so admins can find + assign them ("No School" filter).
+) -> ContactListResponse:
+    """List contacts (Airtable is source of truth), left-joined to their login
+    role + school. Includes contacts without a school (no login yet) so admins
+    can find + assign them ("No School" filter).
     Super admins see all; counselors/viewers are scoped to their own school.
     """
     # Counselors and viewers may only query their own school
@@ -181,17 +181,17 @@ def list_counselors(
         .all()
     )
 
-    items = [_contact_counselor_out(c, ur, s) for c, ur, s in rows]
-    return CounselorListResponse(items=items, total=total, skip=skip, limit=limit)
+    items = [_contact_out(c, ur, s) for c, ur, s in rows]
+    return ContactListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
-@router.post("/api/v1/counselors", response_model=CounselorOut, status_code=status.HTTP_201_CREATED)
-def create_counselor(
-    body: CounselorCreate,
+@router.post("/api/v1/contacts", response_model=ContactOut, status_code=status.HTTP_201_CREATED)
+def create_contact(
+    body: ContactCreate,
     current: CurrentUserDep,
     db: DbDep,
     supabase=Depends(get_supabase),
-) -> CounselorOut:
+) -> ContactOut:
     """Create a Supabase Auth user and assign them a counselor/director role.
 
     Super admins may create for any school with any role. Directors (hub_admin)
@@ -295,7 +295,7 @@ def create_counselor(
         }
         _sync_profile_from_auth(db, new_user.id, auth_user)
         db.commit()
-        return _build_counselor_out(role_record, auth_user)
+        return _build_contact_out(role_record, auth_user)
 
     # Create role record
     role_record = UserRole(
@@ -323,17 +323,17 @@ def create_counselor(
     }
     _sync_profile_from_auth(db, new_user.id, auth_user)
     db.commit()
-    return _build_counselor_out(role_record, auth_user)
+    return _build_contact_out(role_record, auth_user)
 
 
-@router.get("/api/v1/counselors/{user_id}", response_model=CounselorOut)
-def get_counselor(
+@router.get("/api/v1/contacts/{user_id}", response_model=ContactOut)
+def get_contact(
     user_id: uuid.UUID,
     _admin: AdminDep,
     db: DbDep,
     supabase=Depends(get_supabase),
-) -> CounselorOut:
-    """Fetch a single counselor/viewer by user_id."""
+) -> ContactOut:
+    """Fetch a single contact (counselor/viewer) by user_id."""
     role_record = (
         db.query(UserRole)
         .options(joinedload(UserRole.school))
@@ -341,7 +341,7 @@ def get_counselor(
         .first()
     )
     if not role_record:
-        raise HTTPException(status_code=404, detail="Counselor not found")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     resp = supabase.auth.admin.get_user_by_id(str(user_id))
     if not resp or not resp.user:
@@ -350,18 +350,18 @@ def get_counselor(
         "email": resp.user.email or "",
         "user_metadata": resp.user.user_metadata or {},
     }
-    return _build_counselor_out(role_record, auth_user)
+    return _build_contact_out(role_record, auth_user)
 
 
-@router.patch("/api/v1/counselors/{user_id}", response_model=CounselorOut)
-def update_counselor(
+@router.patch("/api/v1/contacts/{user_id}", response_model=ContactOut)
+def update_contact(
     user_id: uuid.UUID,
-    body: CounselorUpdate,
+    body: ContactUpdate,
     user: CurrentUserDep,
     db: DbDep,
     supabase=Depends(get_supabase),
-) -> CounselorOut:
-    """Update a counselor's profile. Super admins can update all fields.
+) -> ContactOut:
+    """Update a contact's profile. Super admins can update all fields.
     Counselors/viewers may only update the title of teammates at their own school.
     """
     role_record = (
@@ -371,7 +371,7 @@ def update_counselor(
         .first()
     )
     if not role_record:
-        raise HTTPException(status_code=404, detail="Counselor not found")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     if user.role != "super_admin":
         # Scope: may only edit counselors at their own school
@@ -424,20 +424,20 @@ def update_counselor(
     )
     _sync_profile_from_auth(db, user_id, auth_user)
     db.commit()
-    return _build_counselor_out(role_record, auth_user)
+    return _build_contact_out(role_record, auth_user)
 
 
-@router.delete("/api/v1/counselors/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_counselor(
+@router.delete("/api/v1/contacts/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_contact(
     user_id: uuid.UUID,
     _admin: AdminDep,
     db: DbDep,
     supabase=Depends(get_supabase),
 ) -> None:
-    """Disable a counselor account (deletes Supabase user and role record)."""
+    """Disable a contact's account (deletes Supabase user and role record)."""
     role_record = db.query(UserRole).filter(UserRole.user_id == user_id).first()
     if not role_record:
-        raise HTTPException(status_code=404, detail="Counselor not found")
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # Delete from Supabase
     try:
