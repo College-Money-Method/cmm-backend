@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
@@ -241,6 +242,137 @@ def get_search(
 
 # ── New hub endpoints ─────────────────────────────────────────────────────────
 
+
+def _unpack_workshops_detail_ph(cached: dict) -> tuple[SiteTotals, dict, dict, dict]:
+    """Rebuild the (site_totals, rec, detail, res) tuple from a cached payload."""
+    site = SiteTotals(**cached["site"])
+    rec = {
+        k: (int(v[0]), (float(v[1]) if v[1] is not None else None))
+        for k, v in cached["rec"].items()
+    }
+    return site, rec, dict(cached["detail"]), dict(cached["res"])
+
+
+def _query_workshops_detail_ph(
+    api_key: str,
+    project_id: str,
+    db,
+    sid: str,
+    date_from: str,
+    date_to: str | None,
+    cycle_name: str | None,
+) -> tuple[SiteTotals, dict, dict, dict]:
+    """Fetch the four PostHog aggregates powering workshops-detail:
+    website-wide site totals + per-webinar recording / detail-view / resource maps.
+
+    The four HogQL queries are independent, so they run CONCURRENTLY (each is a
+    blocking HTTP round trip) instead of sequentially — this alone cuts the cold
+    latency from ~4×round-trip to ~1×. Results are stored in the durable query
+    cache (stale-on-error), so repeat loads of the Overview / Live Workshops tabs
+    return instantly rather than re-hitting PostHog (the ~8s bug).
+    """
+    cache_key = ph._key(fn="workshops_detail_ph", school_id=sid, df=date_from, dt=date_to, cyc=cycle_name)
+    if (cached := ph._db_get(db, cache_key, sid)) is not None:
+        return _unpack_workshops_detail_ph(cached)
+
+    date_clause = ph._hogql_date_clause(date_from, date_to)
+    school_clause = ph._hogql_school_clause(sid)
+    cycle_clause = ph._hogql_cycle_clause(cycle_name)
+
+    # Website-wide content totals for the summary tiles — NOT restricted to
+    # workshops (still scoped by this school + selected period).
+    site_hogql = (
+        "SELECT "
+        "countIf(event = '$pageview') AS visits, "
+        "countIf(event = 'video_session_end') AS video_views, "
+        "countIf(event = 'resource_viewed') AS resource_views "
+        "FROM events "
+        f"WHERE {date_clause}{school_clause}{cycle_clause} "
+        "AND event IN ('$pageview', 'video_session_end', 'resource_viewed')"
+    )
+    # Recording views + avg % watched per webinar_id (video_session_end).
+    hogql_rec = (
+        "SELECT properties.webinar_id, count(), avg(toFloat(ifNull(properties.percent_watched, '0'))) "
+        "FROM events "
+        f"WHERE event = 'video_session_end' AND {date_clause}{school_clause}{cycle_clause} "
+        "AND isNotNull(properties.webinar_id) "
+        "GROUP BY properties.webinar_id"
+    )
+    # Detail views per webinar_id (workshop_detail_view).
+    hogql_detail = (
+        "SELECT properties.webinar_id, count() "
+        "FROM events "
+        f"WHERE event = 'workshop_detail_view' AND {date_clause}{school_clause}{cycle_clause} "
+        "AND isNotNull(properties.webinar_id) "
+        "GROUP BY properties.webinar_id"
+    )
+    # Resource views per webinar_id (resource_viewed WHERE via='workshop'); the
+    # origin webinar is carried in properties.from.
+    hogql_res = (
+        "SELECT properties.from, count() "
+        "FROM events "
+        f"WHERE event = 'resource_viewed' AND {date_clause}{school_clause}{cycle_clause} "
+        "AND properties.via = 'workshop' "
+        "AND isNotNull(properties.from) "
+        "GROUP BY properties.from"
+    )
+
+    def _run(q: str):
+        try:
+            return ph.get_hogql_query(api_key, project_id, q)
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        site_rows, rec_rows, detail_rows, res_rows = ex.map(
+            _run, [site_hogql, hogql_rec, hogql_detail, hogql_res]
+        )
+
+    # Total PostHog outage → serve stale if we have it; never cache the empties.
+    if site_rows is None and rec_rows is None and detail_rows is None and res_rows is None:
+        stale = ph._db_get_stale(db, cache_key)
+        if stale is not None:
+            return _unpack_workshops_detail_ph(stale)
+        return SiteTotals(), {}, {}, {}
+
+    # Parse each result defensively — a malformed row must degrade to empty for
+    # that metric, not fail the whole request (mirrors the original per-query guards).
+    site_totals = SiteTotals()
+    try:
+        if site_rows:
+            r0 = site_rows[0]
+            site_totals = SiteTotals(visits=int(r0[0]), video_views=int(r0[1]), resource_views=int(r0[2]))
+    except Exception:
+        pass
+    try:
+        ph_map = {
+            str(r[0]): (int(r[1]), float(r[2]) if r[2] is not None else None)
+            for r in (rec_rows or []) if r[0]
+        }
+    except Exception:
+        ph_map = {}
+    try:
+        detail_map = {str(r[0]): int(r[1]) for r in (detail_rows or []) if r[0]}
+    except Exception:
+        detail_map = {}
+    try:
+        res_map = {str(r[0]): int(r[1]) for r in (res_rows or []) if r[0]}
+    except Exception:
+        res_map = {}
+
+    ph._db_set(db, cache_key, {
+        "site": {
+            "visits": site_totals.visits,
+            "video_views": site_totals.video_views,
+            "resource_views": site_totals.resource_views,
+        },
+        "rec": {k: [v[0], v[1]] for k, v in ph_map.items()},
+        "detail": detail_map,
+        "res": res_map,
+    })
+    return site_totals, ph_map, detail_map, res_map
+
+
 @router.get("/workshops-detail", response_model=WorkshopsDetailData)
 def get_workshops_detail(
     current_user: CounselorDep,
@@ -261,82 +393,13 @@ def get_workshops_detail(
     # outside the cycle's calendar dates); date range is the fallback
     rows = get_webinars_for_school_in_range(db, school_uuid, date_from, date_to, cycle_id=cycle_id)
 
-    date_clause = ph._hogql_date_clause(date_from, date_to)
-    school_clause = ph._hogql_school_clause(sid)
-    cycle_clause = ph._hogql_cycle_clause(cycle_name)
-
-    # Website-wide content totals for the summary cards — one round trip, NOT
-    # restricted to workshops (still scoped by this school + selected period).
-    site_totals = SiteTotals()
-    try:
-        site_hogql = (
-            "SELECT "
-            "countIf(event = '$pageview') AS visits, "
-            "countIf(event = 'video_session_end') AS video_views, "
-            "countIf(event = 'resource_viewed') AS resource_views "
-            "FROM events "
-            f"WHERE {date_clause}{school_clause}{cycle_clause} "
-            "AND event IN ('$pageview', 'video_session_end', 'resource_viewed')"
-        )
-        site_rows = ph.get_hogql_query(api_key, project_id, site_hogql)
-        if site_rows:
-            r0 = site_rows[0]
-            site_totals = SiteTotals(visits=int(r0[0]), video_views=int(r0[1]), resource_views=int(r0[2]))
-    except Exception:
-        pass
+    # Site totals + per-webinar PostHog maps — the four HogQL queries run in
+    # parallel and are cached (see helper), so this is the fast path on repeat loads.
+    site_totals, ph_map, detail_map, res_map = _query_workshops_detail_ph(
+        api_key, project_id, db, sid, date_from, date_to, cycle_name
+    )
 
     if rows:
-        # Query 1: recording views + avg % watched per webinar_id (video_session_end)
-        hogql_rec = (
-            "SELECT properties.webinar_id, count(), avg(toFloat(ifNull(properties.percent_watched, '0'))) "
-            "FROM events "
-            f"WHERE event = 'video_session_end' AND {date_clause}{school_clause}{cycle_clause} "
-            "AND isNotNull(properties.webinar_id) "
-            "GROUP BY properties.webinar_id"
-        )
-        # Query 2: detail views per webinar_id (workshop_detail_view)
-        hogql_detail = (
-            "SELECT properties.webinar_id, count() "
-            "FROM events "
-            f"WHERE event = 'workshop_detail_view' AND {date_clause}{school_clause}{cycle_clause} "
-            "AND isNotNull(properties.webinar_id) "
-            "GROUP BY properties.webinar_id"
-        )
-        # Query 3: resource views per webinar_id (resource_viewed WHERE via='workshop')
-        # properties.from holds the webinar_id for resources opened from a workshop detail page
-        hogql_res = (
-            "SELECT properties.from, count() "
-            "FROM events "
-            f"WHERE event = 'resource_viewed' AND {date_clause}{school_clause}{cycle_clause} "
-            "AND properties.via = 'workshop' "
-            "AND isNotNull(properties.from) "
-            "GROUP BY properties.from"
-        )
-        # ph_map: webinar_id → (recording_views, avg_percent_watched)
-        ph_map: dict[str, tuple[int, float | None]] = {}
-        # detail_map: webinar_id → detail_views count
-        detail_map: dict[str, int] = {}
-        # res_map: webinar_id → resource_views count
-        res_map: dict[str, int] = {}
-        try:
-            rec_rows = ph.get_hogql_query(api_key, project_id, hogql_rec)
-            ph_map = {
-                str(r[0]): (int(r[1]), float(r[2]) if r[2] is not None else None)
-                for r in rec_rows if r[0]
-            }
-        except Exception:
-            pass
-        try:
-            detail_rows = ph.get_hogql_query(api_key, project_id, hogql_detail)
-            detail_map = {str(r[0]): int(r[1]) for r in detail_rows if r[0]}
-        except Exception:
-            pass
-        try:
-            res_rows = ph.get_hogql_query(api_key, project_id, hogql_res)
-            res_map = {str(r[0]): int(r[1]) for r in res_rows if r[0]}
-        except Exception:
-            pass
-
         for row in rows:
             vid = row["webinar_id"]
             if vid in ph_map:
@@ -514,13 +577,71 @@ def get_workshop_timeline(
         },
     ]
 
-    try:
-        raw = phb.get_windowed_trends_by_webinar(api_key, project_id, webinar_windows, event_specs, sid, db)
-    except Exception as exc:
+    ws_date = window_start.isoformat()
+    we_date = window_end.isoformat()
+
+    # Video aggregate stats (powers the "Video engagement" card).
+    video_hogql = (
+        "SELECT "
+        "  count() AS total_plays, "
+        "  round(sum(toFloat(ifNull(properties.total_watch_seconds, '0'))) / 60) AS total_minutes_watched, "
+        "  avg(toFloat(ifNull(properties.percent_watched, '0'))) AS avg_percent_watched "
+        "FROM events "
+        f"WHERE event = 'video_session_end' "
+        f"  AND properties.webinar_id = '{webinar_id}' "
+        f"  AND timestamp >= toDate('{ws_date}') "
+        f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
+    )
+    # Resources-used breakdown (powers the "Resources used" card).
+    resources_hogql = (
+        "SELECT "
+        "  properties.asset_name AS resource_name, "
+        "  count() AS cnt "
+        "FROM events "
+        f"WHERE event = 'resource_viewed' "
+        f"  AND properties.via = 'workshop' "
+        f"  AND properties.from = '{webinar_id}' "
+        f"  AND timestamp >= toDate('{ws_date}') "
+        f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY "
+        "  AND properties.asset_name IS NOT NULL "
+        "  AND properties.asset_name != '' "
+        "GROUP BY resource_name "
+        "ORDER BY cnt DESC "
+        "LIMIT 20"
+    )
+
+    # The three PostHog reads — windowed trends (chart) + video stats + resources
+    # (cards) — are independent HTTP round trips and none touch the DB session, so
+    # run them CONCURRENTLY. First-load latency drops from ~3 sequential round
+    # trips to ~1; the whole result is cached above, so repeat loads are instant.
+    def _windowed():
+        try:
+            return phb.get_windowed_trends_by_webinar(
+                api_key, project_id, webinar_windows, event_specs, sid, None
+            )
+        except Exception:
+            return None
+
+    def _run(query: str):
+        try:
+            return ph.get_hogql_query(api_key, project_id, query)
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_raw = ex.submit(_windowed)
+        f_video = ex.submit(_run, video_hogql)
+        f_res = ex.submit(_run, resources_hogql)
+        raw = f_raw.result()
+        video_rows = f_video.result()
+        resource_rows = f_res.result()
+
+    # Windowed trends power the chart — a total outage there serves stale / 503.
+    if raw is None:
         stale = ph._db_get_stale(db, cache_key)
         if stale:
             return WorkshopTimelineTrends.model_validate(stale)
-        raise HTTPException(status_code=503, detail="PostHog unavailable") from exc
+        raise HTTPException(status_code=503, detail="PostHog unavailable")
 
     # Build each TrendMetric with zero-fill
     def _trend(event_key: str) -> TrendMetric:
@@ -531,24 +652,9 @@ def get_workshop_timeline(
         data = [float(day_count.get(d, 0)) for d in days]
         return TrendMetric(total=int(sum(data)), data=data, days=days)
 
-    ws_date = window_start.isoformat()
-    we_date = window_end.isoformat()
-
-    # -- Video aggregate stats (video_session_end filtered by webinar_id) ---------
+    # -- Video aggregate stats — degrade gracefully to zeros on parse failure. --
     video_stats = WorkshopVideoStats(total_plays=0, total_minutes_watched=0, avg_percent_watched=None)
     try:
-        video_hogql = (
-            "SELECT "
-            "  count() AS total_plays, "
-            "  round(sum(toFloat(ifNull(properties.total_watch_seconds, '0'))) / 60) AS total_minutes_watched, "
-            "  avg(toFloat(ifNull(properties.percent_watched, '0'))) AS avg_percent_watched "
-            "FROM events "
-            f"WHERE event = 'video_session_end' "
-            f"  AND properties.webinar_id = '{webinar_id}' "
-            f"  AND timestamp >= toDate('{ws_date}') "
-            f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
-        )
-        video_rows = ph.get_hogql_query(api_key, project_id, video_hogql)
         if video_rows:
             r = video_rows[0]
             total_plays = int(r[0]) if r[0] is not None else 0
@@ -560,35 +666,18 @@ def get_workshop_timeline(
                 avg_percent_watched=avg_pct,
             )
     except Exception:
-        pass  # degrade gracefully — zeros/None already set above
+        pass
 
-    # -- Resources-used breakdown (resource_viewed via=workshop, from=webinar_id) --
+    # -- Resources-used breakdown — degrade gracefully to empty on parse failure. --
     resources_used: list[ResourceUsedRow] = []
     try:
-        resources_hogql = (
-            "SELECT "
-            "  properties.asset_name AS resource_name, "
-            "  count() AS cnt "
-            "FROM events "
-            f"WHERE event = 'resource_viewed' "
-            f"  AND properties.via = 'workshop' "
-            f"  AND properties.from = '{webinar_id}' "
-            f"  AND timestamp >= toDate('{ws_date}') "
-            f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY "
-            "  AND properties.asset_name IS NOT NULL "
-            "  AND properties.asset_name != '' "
-            "GROUP BY resource_name "
-            "ORDER BY cnt DESC "
-            "LIMIT 20"
-        )
-        resource_rows = ph.get_hogql_query(api_key, project_id, resources_hogql)
         resources_used = [
             ResourceUsedRow(resource_name=str(r[0]), count=int(r[1]))
-            for r in resource_rows
+            for r in (resource_rows or [])
             if r[0]
         ]
     except Exception:
-        pass  # degrade gracefully — empty list already set above
+        pass
 
     result = WorkshopTimelineTrends(
         webinar_id=webinar_id,

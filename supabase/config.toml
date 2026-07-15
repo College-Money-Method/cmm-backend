@@ -12,6 +12,17 @@ port = 54321
 # Postgres: connect on port 54322 (default) for direct SQL
 # Database name is "postgres" by default; use cmm_dev for testing if you create it
 
+[db.pooler]
+enabled = true
+# Port to use for the local connection pooler.
+port = 54329
+# Configure one of the supported pooler modes: `transaction`, `session`.
+pool_mode = "transaction"
+# How many server connections to allow per user/database pair.
+default_pool_size = 20
+# Maximum number of client connections allowed.
+max_client_conn = 100
+
 [studio]
 # Supabase Studio UI (default port 54323)
 enabled = true
@@ -20,6 +31,14 @@ enabled = true
 enabled = true
 site_url = "http://localhost:5173"
 additional_redirect_urls = ["http://localhost:5173/auth/callback", "http://localhost:8000"]
+
+[auth.sessions]
+# Require re-login after 30 days without activity (no token refresh). Active users
+# who keep using the app stay signed in. Duration is a Go duration string — days
+# aren't a unit, so 30 days = 720h.
+# NOTE: On hosted (production) Supabase this is a Pro-plan feature and must ALSO be
+# set in Dashboard → Authentication → Sessions. This config.toml only affects local.
+inactivity_timeout = "720h"
 
 [auth.email]
 enable_signup = true
