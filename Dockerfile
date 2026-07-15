@@ -33,4 +33,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 EXPOSE 8000
 
+# Worker count is NOT hardcoded here — it must differ per environment (dev is
+# 256 CPU / 512 MB and fits only 1 worker; prod is 1024/2048). uvicorn reads the
+# WEB_CONCURRENCY env var for worker count (defaults to 1 when unset), so set
+# WEB_CONCURRENCY per environment in the ECS task definition (Terraform).
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
