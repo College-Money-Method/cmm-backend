@@ -3,7 +3,7 @@
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class UserRoleOut(BaseModel):
@@ -78,6 +78,13 @@ class HubPasswordResetOut(BaseModel):
     """Result of resetting a contact's hub login password."""
 
     password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """Change the current user's own hub password (verifies the current password)."""
+
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
 
 
 class ContactSyncResult(BaseModel):

@@ -15,6 +15,7 @@ from src.auth.hub_password import default_hub_password
 from src.auth.models import Profile, UserRole
 from src.auth.profile_sync import delete_profile, upsert_profile
 from src.auth.schemas import (
+    ChangePasswordRequest,
     ContactCreate,
     ContactListResponse,
     ContactOut,
@@ -24,6 +25,9 @@ from src.auth.schemas import (
     HubPasswordResetRequest,
     UserRoleOut,
 )
+from supabase import create_client
+
+from src.config import settings
 from src.db.client import get_supabase
 from src.db.deps import DbDep
 from src.schools.models import Contact, School
@@ -40,6 +44,52 @@ def get_me(user: CurrentUserDep) -> UserRoleOut:
         school_id=user.school_id,
         school_role=user.school_role,
     )
+
+
+@router.post("/api/v1/auth/change-password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    body: ChangePasswordRequest,
+    user: CurrentUserDep,
+    supabase=Depends(get_supabase),
+) -> None:
+    """Change the signed-in user's own hub password.
+
+    Verifies the current password server-side (via a password sign-in), then updates
+    it with the Supabase admin API. Using the admin API sidesteps the browser
+    `updateUser` path, which can be silently blocked by the project's "Secure
+    password change" (reauthentication-nonce) setting.
+    """
+    # Resolve the caller's email from their auth record.
+    resp = supabase.auth.admin.get_user_by_id(str(user.user_id))
+    email = resp.user.email if resp and resp.user else None
+    if not email:
+        raise HTTPException(status_code=404, detail="Auth user not found")
+
+    # Verify the current password with a throwaway anon client so we never mutate
+    # the admin client's session state.
+    anon_key = settings.supabase_key or settings.supabase_service_role_key
+    verifier = create_client(settings.supabase_url, anon_key)
+    try:
+        signin = verifier.auth.sign_in_with_password(
+            {"email": email, "password": body.current_password}
+        )
+        if not signin or not signin.user:
+            raise ValueError("no session")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    finally:
+        try:
+            verifier.auth.sign_out()
+        except Exception:
+            pass
+
+    try:
+        supabase.auth.admin.update_user_by_id(
+            str(user.user_id), {"password": body.new_password}
+        )
+    except Exception as exc:
+        logger.error("Failed to change password for %s: %s", email, exc)
+        raise HTTPException(status_code=502, detail="Failed to update password")
 
 
 # ──────────────────────────────────────────────
@@ -278,6 +328,10 @@ def create_contact(
     )
 
     logger.info("Creating Supabase user: email=%s school_id=%s role=%s", body.email, school_id, body.role)
+    # Track whether we created the auth user fresh (password already applied) vs.
+    # reused a pre-existing one (e.g. from a prior OAuth login) that still has no
+    # usable password — the latter must have the password set explicitly below.
+    user_pre_existed = False
     try:
         resp = supabase.auth.admin.create_user(create_params)
         if not resp or not resp.user:
@@ -304,6 +358,7 @@ def create_contact(
             if not existing:
                 raise HTTPException(status_code=400, detail=str(exc))
             new_user = existing
+            user_pre_existed = True
         else:
             raise HTTPException(status_code=400, detail=str(exc))
 
@@ -315,6 +370,20 @@ def create_contact(
             status_code=409,
             detail=f"{body.email} is an admin account and can't be added as a counselor.",
         )
+
+    # A pre-existing auth user (created via OAuth, or previously without a password)
+    # would have no usable email/password credential — set it so the counselor can
+    # log in with the email + default/explicit password. Skipped for freshly created
+    # users, whose password was already applied at create time.
+    if user_pre_existed:
+        try:
+            supabase.auth.admin.update_user_by_id(
+                new_user.id, {"password": create_params["password"]}
+            )
+            logger.info("Set password on pre-existing auth user: id=%s", new_user.id)
+        except Exception as exc:
+            logger.error("Failed to set password on existing user %s: %s", body.email, exc)
+            raise HTTPException(status_code=502, detail="Failed to set account password")
     if existing_role:
         existing_role.role = body.role
         existing_role.school_id = school_id

@@ -530,6 +530,9 @@ def update_portal_mapping_override(
 ) -> dict:
     """Counselor: shallow-merge override fields into portal_mapping.school_override.
     Only updates the keys present in the request body; other keys are preserved.
+    A field sent as null is treated as "reset to default": the key is REMOVED from
+    the override so `_to_item` falls back to the CMM-provided workshop default
+    (leaving the key with a null value would instead pin the field to blank).
     Verifies the mapping belongs to the counselor's own school.
     """
     mapping = db.get(PortalMapping, portal_mapping_id)
@@ -540,7 +543,10 @@ def update_portal_mapping_override(
 
     override = dict(mapping.school_override or {})
     for field, value in body.model_dump(exclude_unset=True).items():
-        override[field] = value
+        if value is None:
+            override.pop(field, None)
+        else:
+            override[field] = value
     mapping.school_override = override
     flag_modified(mapping, "school_override")
     db.commit()
