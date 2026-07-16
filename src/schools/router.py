@@ -25,6 +25,7 @@ from src.schools.schemas import (
     SchoolGradeSetUpdate,
     SchoolListItem,
     SchoolListResponse,
+    SchoolListVersion,
     SchoolPasswordUpdate,
     SchoolPasswordVerify,
     SchoolPublic,
@@ -121,6 +122,24 @@ def sync_schools_airtable(_admin: AdminDep, db: DbDep, supabase=Depends(get_supa
     """Admin: create new schools, contacts, and counselor auth accounts from Airtable."""
     from src.schools.sync import sync_schools_contacts_from_airtable
     return sync_schools_contacts_from_airtable(db, supabase)
+
+
+@router.get("/list-version", response_model=SchoolListVersion)
+def get_school_list_version(db: DbDep, user: CurrentUserDep) -> SchoolListVersion:
+    """Cheap fingerprint of the whole school list for client cache invalidation.
+
+    Combines row count (covers create/delete) with the newest modification
+    timestamp (covers edits via ``onupdate``). The frontend caches the list plus
+    this version and refetches only when the version changes.
+    """
+    count, last_modified = db.execute(
+        select(
+            func.count(School.id),
+            func.max(func.coalesce(School.updated_at, School.created_at)),
+        )
+    ).one()
+    stamp = int(last_modified.timestamp()) if last_modified else 0
+    return SchoolListVersion(version=f"{count}:{stamp}")
 
 
 @router.get("/states", response_model=list[str])
