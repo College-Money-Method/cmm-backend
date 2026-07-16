@@ -31,6 +31,7 @@ from src.analytics.schemas import (
     VideoBreakdownRow,
     WebinarDetail,
     WorkshopData,
+    WorkshopEngagementCards,
     WorkshopsDetailData,
     WorkshopsDetailTotals,
     WorkshopTimelineTrends,
@@ -505,6 +506,35 @@ def get_peak_usage(
     return result
 
 
+def _resolve_webinar_window(
+    db, webinar_id: str, weeks_before: int, weeks_after: int
+) -> tuple[dict, "datetime", date, date]:
+    """Validate webinar_id, load the webinar, and compute its ±weeks window.
+
+    Shared by the split workshop-timeline (chart) and workshop-engagement (cards)
+    endpoints so both scope events to the identical window. Raises HTTPException
+    on bad id / missing webinar / missing start_datetime.
+    """
+    try:
+        webinar_uuid = uuid.UUID(webinar_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"webinar_id must be a valid UUID: {webinar_id!r}")
+    phb._validate_webinar_id(webinar_id)  # belt-and-suspenders: rejects non-UUID chars
+
+    webinar = get_webinar_by_id(db, webinar_uuid)
+    if webinar is None:
+        raise HTTPException(status_code=404, detail=f"Webinar {webinar_id!r} not found")
+    if webinar["start_datetime"] is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Webinar {webinar_id!r} has no start_datetime; cannot compute timeline window",
+        )
+    start_dt = webinar["start_datetime"]
+    window_start = (start_dt - timedelta(days=weeks_before * 7)).date()
+    window_end = (start_dt + timedelta(days=weeks_after * 7)).date()
+    return webinar, start_dt, window_start, window_end
+
+
 @router.get("/workshop-timeline", response_model=WorkshopTimelineTrends)
 def get_workshop_timeline(
     current_user: CounselorDep,
@@ -514,19 +544,14 @@ def get_workshop_timeline(
     weeks_before: int = Query(default=4, ge=0, le=52),
     weeks_after: int = Query(default=4, ge=0, le=52),
 ) -> WorkshopTimelineTrends:
-    """Per-webinar windowed engagement around start_datetime.
+    """Per-webinar windowed engagement CHART — the 4 daily TrendMetric series.
 
     webinar_id = internal webinar UUID (matches PostHog properties.webinar_id).
     Window = [start − weeks_before*7d, start + weeks_after*7d].
-    Returns 4 daily TrendMetric series, video aggregate stats, and resource breakdown.
+    The video/resources summary cards are served separately by /workshop-engagement
+    so the (fast, single-query) chart doesn't wait on them.
     """
     api_key, project_id = _check_configured()
-    # Validate webinar_id as UUID — PostHog properties.webinar_id is the internal UUID
-    try:
-        webinar_uuid = uuid.UUID(webinar_id)
-    except ValueError:
-        raise HTTPException(status_code=422, detail=f"webinar_id must be a valid UUID: {webinar_id!r}")
-    phb._validate_webinar_id(webinar_id)  # belt-and-suspenders: rejects non-UUID chars
     sid = _resolve_school(current_user, school_id)
 
     cache_key = ph._key(
@@ -539,23 +564,10 @@ def get_workshop_timeline(
     if (cached := ph._db_get(db, cache_key, sid)) is not None:
         return WorkshopTimelineTrends.model_validate(cached)
 
-    # Lookup webinar metadata from Postgres by internal UUID
-    webinar = get_webinar_by_id(db, webinar_uuid)
-    if webinar is None:
-        raise HTTPException(status_code=404, detail=f"Webinar {webinar_id!r} not found")
-    if webinar["start_datetime"] is None:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Webinar {webinar_id!r} has no start_datetime; cannot compute timeline window",
-        )
-
-    # Compute window from adjustable weeks_before / weeks_after params
-    start_dt = webinar["start_datetime"]
-    days_before = weeks_before * 7
-    days_after = weeks_after * 7
-    total_days = days_before + days_after + 1  # inclusive of start day
-    window_start: date = (start_dt - timedelta(days=days_before)).date()
-    window_end: date = (start_dt + timedelta(days=days_after)).date()
+    webinar, start_dt, window_start, window_end = _resolve_webinar_window(
+        db, webinar_id, weeks_before, weeks_after
+    )
+    total_days = weeks_before * 7 + weeks_after * 7 + 1  # inclusive of start day
     days = [(window_start + timedelta(days=i)).isoformat() for i in range(total_days)]
 
     webinar_windows: list[phb.WebinarWindow] = [
@@ -577,6 +589,74 @@ def get_workshop_timeline(
         },
     ]
 
+    try:
+        raw = phb.get_windowed_trends_by_webinar(
+            api_key, project_id, webinar_windows, event_specs, sid, None
+        )
+    except Exception as exc:
+        stale = ph._db_get_stale(db, cache_key)
+        if stale:
+            return WorkshopTimelineTrends.model_validate(stale)
+        raise HTTPException(status_code=503, detail="PostHog unavailable") from exc
+
+    # Build each TrendMetric with zero-fill
+    def _trend(event_key: str) -> TrendMetric:
+        pairs = raw.get(event_key, {}).get(webinar_id, [])
+        day_count: dict[str, int] = {}
+        for d, cnt in pairs:
+            day_count[d] = day_count.get(d, 0) + cnt
+        data = [float(day_count.get(d, 0)) for d in days]
+        return TrendMetric(total=int(sum(data)), data=data, days=days)
+
+    result = WorkshopTimelineTrends(
+        webinar_id=webinar_id,
+        workshop_name=webinar["workshop_name"],
+        start_datetime=start_dt.isoformat(),
+        window_start=window_start.isoformat(),
+        window_end=window_end.isoformat(),
+        weeks_before=weeks_before,
+        weeks_after=weeks_after,
+        days=days,
+        registrations=_trend("registrations"),
+        detail_views=_trend("detail_views"),
+        video_watch_count=_trend("video_watch_count"),
+        resource_views=_trend("resource_views"),
+    )
+    ph._db_set(db, cache_key, result.model_dump())
+    return result
+
+
+@router.get("/workshop-engagement", response_model=WorkshopEngagementCards)
+def get_workshop_engagement(
+    current_user: CounselorDep,
+    db: DbDep,
+    webinar_id: str = Query(...),
+    school_id: str | None = Query(default=None),
+    weeks_before: int = Query(default=4, ge=0, le=52),
+    weeks_after: int = Query(default=4, ge=0, le=52),
+) -> WorkshopEngagementCards:
+    """Video-engagement + resources-used summary CARDS for a workshop's window.
+
+    Split from /workshop-timeline so the two PostHog reads here (video stats +
+    resource breakdown) stream to the UI independently of the chart — the client
+    renders whichever payload resolves first. The two reads run concurrently.
+    """
+    api_key, project_id = _check_configured()
+    sid = _resolve_school(current_user, school_id)
+
+    cache_key = ph._key(
+        fn="workshop_engagement",
+        webinar_id=webinar_id,
+        school_id=sid,
+        weeks_before=weeks_before,
+        weeks_after=weeks_after,
+    )
+    if (cached := ph._db_get(db, cache_key, sid)) is not None:
+        return WorkshopEngagementCards.model_validate(cached)
+
+    webinar, _start_dt, window_start, window_end = _resolve_webinar_window(
+        db, webinar_id, weeks_before, weeks_after
+    )
     ws_date = window_start.isoformat()
     we_date = window_end.isoformat()
 
@@ -610,47 +690,30 @@ def get_workshop_timeline(
         "LIMIT 20"
     )
 
-    # The three PostHog reads — windowed trends (chart) + video stats + resources
-    # (cards) — are independent HTTP round trips and none touch the DB session, so
-    # run them CONCURRENTLY. First-load latency drops from ~3 sequential round
-    # trips to ~1; the whole result is cached above, so repeat loads are instant.
-    def _windowed():
-        try:
-            return phb.get_windowed_trends_by_webinar(
-                api_key, project_id, webinar_windows, event_specs, sid, None
-            )
-        except Exception:
-            return None
-
     def _run(query: str):
         try:
             return ph.get_hogql_query(api_key, project_id, query)
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        f_raw = ex.submit(_windowed)
+    with ThreadPoolExecutor(max_workers=2) as ex:
         f_video = ex.submit(_run, video_hogql)
         f_res = ex.submit(_run, resources_hogql)
-        raw = f_raw.result()
         video_rows = f_video.result()
         resource_rows = f_res.result()
 
-    # Windowed trends power the chart — a total outage there serves stale / 503.
-    if raw is None:
+    # Total outage on both reads → serve stale if we have it, else degrade to
+    # empties WITHOUT caching (so a transient failure doesn't poison the cache).
+    if video_rows is None and resource_rows is None:
         stale = ph._db_get_stale(db, cache_key)
         if stale:
-            return WorkshopTimelineTrends.model_validate(stale)
-        raise HTTPException(status_code=503, detail="PostHog unavailable")
-
-    # Build each TrendMetric with zero-fill
-    def _trend(event_key: str) -> TrendMetric:
-        pairs = raw.get(event_key, {}).get(webinar_id, [])
-        day_count: dict[str, int] = {}
-        for d, cnt in pairs:
-            day_count[d] = day_count.get(d, 0) + cnt
-        data = [float(day_count.get(d, 0)) for d in days]
-        return TrendMetric(total=int(sum(data)), data=data, days=days)
+            return WorkshopEngagementCards.model_validate(stale)
+        return WorkshopEngagementCards(
+            webinar_id=webinar_id,
+            workshop_name=webinar["workshop_name"],
+            video=WorkshopVideoStats(total_plays=0, total_minutes_watched=0, avg_percent_watched=None),
+            resources_used=[],
+        )
 
     # -- Video aggregate stats — degrade gracefully to zeros on parse failure. --
     video_stats = WorkshopVideoStats(total_plays=0, total_minutes_watched=0, avg_percent_watched=None)
@@ -679,19 +742,9 @@ def get_workshop_timeline(
     except Exception:
         pass
 
-    result = WorkshopTimelineTrends(
+    result = WorkshopEngagementCards(
         webinar_id=webinar_id,
         workshop_name=webinar["workshop_name"],
-        start_datetime=start_dt.isoformat(),
-        window_start=ws_date,
-        window_end=we_date,
-        weeks_before=weeks_before,
-        weeks_after=weeks_after,
-        days=days,
-        registrations=_trend("registrations"),
-        detail_views=_trend("detail_views"),
-        video_watch_count=_trend("video_watch_count"),
-        resource_views=_trend("resource_views"),
         video=video_stats,
         resources_used=resources_used,
     )

@@ -239,7 +239,10 @@ class ResourceUsedRow(BaseModel):
 
 
 class WorkshopTimelineTrends(BaseModel):
-    """Per-webinar windowed engagement — adjustable window around start_datetime."""
+    """Per-webinar windowed engagement CHART — adjustable window around
+    start_datetime. Served by GET /workshop-timeline. The video/resources summary
+    cards are a SEPARATE payload (WorkshopEngagementCards) so the two can be
+    fetched + rendered independently ("whatever comes first")."""
     webinar_id: str
     workshop_name: str
     start_datetime: str          # ISO-8601 UTC
@@ -252,5 +255,13 @@ class WorkshopTimelineTrends(BaseModel):
     detail_views: TrendMetric    # workshop_detail_view
     video_watch_count: TrendMetric  # video_session_end
     resource_views: TrendMetric  # resource_viewed via=workshop AND from=<webinar_id>
+
+
+class WorkshopEngagementCards(BaseModel):
+    """Video-engagement + resources-used summary cards for a single workshop
+    within the timeline window. Served by GET /workshop-engagement — split from
+    the chart trends so each streams to the UI on its own."""
+    webinar_id: str
+    workshop_name: str
     video: WorkshopVideoStats    # aggregate video stats within window
     resources_used: list[ResourceUsedRow]  # resource_viewed breakdown by asset_name
