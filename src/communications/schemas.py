@@ -47,7 +47,7 @@ class CommunicationTemplateUpdate(BaseModel):
     sort_order: int | None = None
 
 
-# ── Communications calendar schedule schemas ──────────────────────────────────
+# ── Program calendar schedule schemas ──────────────────────────────────
 
 
 class ScheduleItemCreate(BaseModel):

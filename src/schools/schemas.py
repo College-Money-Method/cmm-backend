@@ -139,6 +139,12 @@ class SchoolListResponse(BaseModel):
     limit: int
 
 
+class SchoolListVersion(BaseModel):
+    # Opaque fingerprint ("{count}:{epoch}") the frontend compares to decide
+    # whether its cached school list is still fresh.
+    version: str
+
+
 # ── Public (no-auth) schemas ────────────────────────────────────────────────
 
 class SchoolGradeSetUpdate(BaseModel):

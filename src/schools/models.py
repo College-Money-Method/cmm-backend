@@ -63,6 +63,11 @@ class School(Base):
     bubble_rec_id: Mapped[str | None] = mapped_column(Text)
     airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    # Bumped on any ORM update (manual edit, Airtable sync). Drives the cheap
+    # list-version signal the frontend uses to invalidate its cached school list.
+    updated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True, onupdate=func.now()
+    )
 
     cohort: Mapped[Cohort | None] = relationship(back_populates="schools")
     grade_set: Mapped[GradeSet | None] = relationship("GradeSet")

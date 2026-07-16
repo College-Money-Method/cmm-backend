@@ -215,6 +215,7 @@ def list_contacts(
     school_id: uuid.UUID | None = Query(default=None),
     no_school: bool = Query(default=False),
     school_role: str | None = Query(default=None),
+    role: str | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> ContactListResponse:
@@ -243,6 +244,13 @@ def list_contacts(
         q = q.filter(Contact.school_id == school_id)
     if school_role:
         q = q.filter(Contact.role == school_role)
+    # Hub permission filter: the access role on the login. "no_access" = contacts
+    # with no provisioned login (user_id is null).
+    if role:
+        if role == "no_access":
+            q = q.filter(Contact.user_id.is_(None))
+        else:
+            q = q.filter(UserRole.role == role)
 
     if search:
         like = f"%{search}%"
@@ -284,6 +292,38 @@ def create_contact(
     # Authorization: super_admin (any school/role) or hub_admin (own school, hub roles)
     if current.role not in ("super_admin", "hub_admin"):
         raise HTTPException(status_code=403, detail="Hub admin access required")
+
+    # "No access": create a contact record only — no Supabase login, no UserRole.
+    # School is optional here (a login-less contact needn't belong to a school).
+    if body.role == "no_access":
+        no_access_school_id = current.school_id if current.role == "hub_admin" else body.school_id
+        if no_access_school_id is not None:
+            if not db.query(School).filter(School.id == no_access_school_id).first():
+                raise HTTPException(status_code=404, detail="School not found")
+        existing = (
+            db.query(Contact)
+            .filter(func.lower(Contact.email) == body.email.lower(), Contact.deleted_at.is_(None))
+            .first()
+        )
+        if existing is not None and existing.user_id is not None:
+            raise HTTPException(status_code=409, detail=f"{body.email} already has hub access.")
+        contact = existing or Contact(email=body.email)
+        if existing is None:
+            db.add(contact)
+        if body.first_name:
+            contact.first_name = body.first_name
+        if body.last_name:
+            contact.last_name = body.last_name
+        contact.school_id = no_access_school_id
+        contact.deleted_at = None
+        db.commit()
+        db.refresh(contact)
+        school = (
+            db.query(School).filter(School.id == no_access_school_id).first()
+            if no_access_school_id
+            else None
+        )
+        return _contact_out(contact, None, school)
 
     if current.role == "hub_admin":
         if not current.school_id:
@@ -442,172 +482,192 @@ def create_contact(
     return _build_contact_out(role_record, auth_user)
 
 
-@router.get("/api/v1/contacts/{user_id}", response_model=ContactOut)
+@router.get("/api/v1/contacts/{contact_id}", response_model=ContactOut)
 def get_contact(
-    user_id: uuid.UUID,
+    contact_id: uuid.UUID,
     _admin: AdminDep,
     db: DbDep,
-    supabase=Depends(get_supabase),
 ) -> ContactOut:
-    """Fetch a single contact (counselor/viewer) by user_id."""
-    role_record = (
-        db.query(UserRole)
-        .options(joinedload(UserRole.school))
-        .filter(UserRole.user_id == user_id)
+    """Fetch a single contact by its contact id (works with or without a login).
+
+    Keyed on the contacts table so login-less contacts (no provisioned auth user)
+    are editable too — the admin detail page uses this for every row.
+    """
+    row = (
+        db.query(Contact, UserRole, School)
+        .outerjoin(UserRole, UserRole.user_id == Contact.user_id)
+        .outerjoin(School, School.id == Contact.school_id)
+        .filter(Contact.id == contact_id, Contact.deleted_at.is_(None))
         .first()
     )
-    if not role_record:
+    if not row:
         raise HTTPException(status_code=404, detail="Contact not found")
-
-    resp = supabase.auth.admin.get_user_by_id(str(user_id))
-    if not resp or not resp.user:
-        raise HTTPException(status_code=404, detail="Auth user not found")
-    auth_user = {
-        "email": resp.user.email or "",
-        "user_metadata": resp.user.user_metadata or {},
-    }
-    return _build_contact_out(role_record, auth_user)
+    contact, role_record, school = row
+    return _contact_out(contact, role_record, school)
 
 
-@router.patch("/api/v1/contacts/{user_id}", response_model=ContactOut)
+@router.patch("/api/v1/contacts/{contact_id}", response_model=ContactOut)
 def update_contact(
-    user_id: uuid.UUID,
+    contact_id: uuid.UUID,
     body: ContactUpdate,
     user: CurrentUserDep,
     db: DbDep,
     supabase=Depends(get_supabase),
 ) -> ContactOut:
-    """Update a contact's profile. Super admins can update all fields.
-    Counselors/viewers may only update the title of teammates at their own school.
+    """Update a contact by its contact id.
+
+    Super admins update any field (name, school — including clearing it to null — and,
+    when a login exists, role/title). Directors (hub_admin) and counselors/viewers may
+    only manage provisioned teammates at their own school (directors: name/title/role
+    limited to counselor/director; others: title only). Login-less contacts are
+    super-admin only.
     """
-    role_record = (
-        db.query(UserRole)
-        .options(joinedload(UserRole.school))
-        .filter(UserRole.user_id == user_id)
+    contact = (
+        db.query(Contact)
+        .filter(Contact.id == contact_id, Contact.deleted_at.is_(None))
         .first()
     )
-    if not role_record:
+    if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
 
+    role_record = None
+    if contact.user_id is not None:
+        role_record = (
+            db.query(UserRole)
+            .options(joinedload(UserRole.school))
+            .filter(UserRole.user_id == contact.user_id)
+            .first()
+        )
+
     if user.role == "super_admin":
-        # Super admins can update all fields. Use exclude_unset so explicitly-passed
-        # null (e.g. school_id=null) is honoured, while omitted fields are ignored.
+        # exclude_unset so an explicit null (e.g. school_id=null) clears the field,
+        # while omitted fields are left untouched.
         update_data = body.model_dump(exclude_unset=True)
-    elif user.role == "hub_admin":
-        # Directors manage teammates at their own school: name, title, and access role
-        # (limited to Director/Counselor). They cannot reassign schools.
-        if role_record.school_id != user.school_id:
-            raise HTTPException(status_code=403, detail="Access restricted to your own school")
-        update_data = {}
-        if body.first_name is not None:
-            update_data["first_name"] = body.first_name
-        if body.last_name is not None:
-            update_data["last_name"] = body.last_name
-        if body.title is not None:
-            update_data["title"] = body.title
-        if body.role is not None:
-            if body.role not in ("hub_admin", "hub_user"):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Directors may only assign counselor or director roles",
-                )
-            update_data["role"] = body.role
     else:
-        # Counselors/viewers may only update the title of teammates at their own school.
+        # Non-admins manage only provisioned teammates at their own school.
+        if role_record is None:
+            raise HTTPException(status_code=403, detail="Hub admin access required")
         if role_record.school_id != user.school_id:
             raise HTTPException(status_code=403, detail="Access restricted to your own school")
         update_data = {}
-        if body.title is not None:
-            update_data["title"] = body.title
+        if user.role == "hub_admin":
+            # Directors: name, title, and access role (limited to counselor/director).
+            if body.first_name is not None:
+                update_data["first_name"] = body.first_name
+            if body.last_name is not None:
+                update_data["last_name"] = body.last_name
+            if body.title is not None:
+                update_data["title"] = body.title
+            if body.role is not None:
+                if body.role not in ("hub_admin", "hub_user"):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Directors may only assign counselor or director roles",
+                    )
+                update_data["role"] = body.role
+        else:
+            # Counselors/viewers may only update the title of teammates.
+            if body.title is not None:
+                update_data["title"] = body.title
 
     if "school_id" in update_data and update_data["school_id"] is not None:
         school = db.query(School).filter(School.id == update_data["school_id"]).first()
         if not school:
             raise HTTPException(status_code=404, detail="School not found")
 
-    for field, value in update_data.items():
-        if hasattr(role_record, field):
-            setattr(role_record, field, value)
-
-    # Hub permission (role) is decoupled from the Director/Counselor label
-    # (school_role): changing access no longer relabels the business role.
-
-    # Mirror school assignment + name changes onto the contacts row so the
-    # school contact list (sourced from the contacts table) stays coherent.
-    contact = db.query(Contact).filter(Contact.user_id == user_id).first()
-    if contact is not None:
-        if "school_id" in update_data:
-            contact.school_id = update_data["school_id"]
-        if "first_name" in update_data:
-            contact.first_name = update_data["first_name"]
-        if "last_name" in update_data:
-            contact.last_name = update_data["last_name"]
-
-    db.commit()
-    db.refresh(role_record)
-
-    # Update Supabase user metadata if name fields changed
-    meta_update = {}
+    # Contacts row: name + school assignment (source of the school contact lists).
     if "first_name" in update_data:
-        meta_update["first_name"] = update_data["first_name"]
+        contact.first_name = update_data["first_name"]
     if "last_name" in update_data:
-        meta_update["last_name"] = update_data["last_name"]
-    if meta_update:
-        try:
-            supabase.auth.admin.update_user_by_id(str(user_id), {"user_metadata": meta_update})
-        except Exception:
-            pass
+        contact.last_name = update_data["last_name"]
+    if "school_id" in update_data:
+        contact.school_id = update_data["school_id"]
 
-    resp = supabase.auth.admin.get_user_by_id(str(user_id))
-    auth_user = {
-        "email": resp.user.email or "" if resp and resp.user else "",
-        "user_metadata": resp.user.user_metadata or {} if resp and resp.user else {},
-    }
+    # Login-backed fields (role/title) live on the UserRole; mirror name to Supabase
+    # + the profiles table. Hub permission (role) is decoupled from the school_role label.
+    if role_record is not None:
+        if update_data.get("role") is not None:
+            role_record.role = update_data["role"]
+        if "title" in update_data:
+            role_record.title = update_data["title"]
+        if "school_id" in update_data:
+            role_record.school_id = update_data["school_id"]
+        meta_update = {}
+        if "first_name" in update_data:
+            meta_update["first_name"] = update_data["first_name"]
+        if "last_name" in update_data:
+            meta_update["last_name"] = update_data["last_name"]
+        if meta_update:
+            try:
+                supabase.auth.admin.update_user_by_id(
+                    str(contact.user_id), {"user_metadata": meta_update}
+                )
+            except Exception:
+                pass
+            _sync_profile_from_auth(
+                db,
+                contact.user_id,
+                {
+                    "email": contact.email or "",
+                    "user_metadata": {
+                        "first_name": contact.first_name or "",
+                        "last_name": contact.last_name or "",
+                    },
+                },
+            )
 
-    role_record = (
-        db.query(UserRole)
-        .options(joinedload(UserRole.school))
-        .filter(UserRole.user_id == user_id)
-        .one()
-    )
-    _sync_profile_from_auth(db, user_id, auth_user)
     db.commit()
-    return _build_contact_out(role_record, auth_user)
+    db.refresh(contact)
+    if role_record is not None:
+        db.refresh(role_record)
+
+    school = (
+        db.query(School).filter(School.id == contact.school_id).first()
+        if contact.school_id
+        else None
+    )
+    return _contact_out(contact, role_record, school)
 
 
-@router.delete("/api/v1/contacts/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/api/v1/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_contact(
-    user_id: uuid.UUID,
+    contact_id: uuid.UUID,
     _admin: AdminDep,
     db: DbDep,
     supabase=Depends(get_supabase),
 ) -> None:
-    """Disable a contact's account (deletes Supabase user and role record)."""
-    role_record = db.query(UserRole).filter(UserRole.user_id == user_id).first()
-    if not role_record:
+    """Revoke a contact's hub login: deletes the Supabase user + role record but keeps
+    the contacts row (the person remains a contact without access)."""
+    contact = (
+        db.query(Contact)
+        .filter(Contact.id == contact_id, Contact.deleted_at.is_(None))
+        .first()
+    )
+    if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
+    if contact.user_id is None:
+        raise HTTPException(status_code=400, detail="Contact has no hub login to revoke")
 
-    # Delete from Supabase
+    user_id = contact.user_id
     try:
         supabase.auth.admin.delete_user(str(user_id))
     except Exception:
         pass
 
-    # Detach the contacts row (keep it — the person remains a contact without access)
-    contact = db.query(Contact).filter(Contact.user_id == user_id).first()
-    if contact is not None:
-        contact.user_id = None
-
-    db.delete(role_record)
+    role_record = db.query(UserRole).filter(UserRole.user_id == user_id).first()
+    # Detach the login but keep the contact — the person remains a contact without access.
+    contact.user_id = None
+    if role_record is not None:
+        db.delete(role_record)
     delete_profile(db, user_id)
     db.commit()
 
 
 @router.post(
-    "/api/v1/contacts/{user_id}/reset-hub-password", response_model=HubPasswordResetOut
+    "/api/v1/contacts/{contact_id}/reset-hub-password", response_model=HubPasswordResetOut
 )
 def reset_hub_password(
-    user_id: uuid.UUID,
+    contact_id: uuid.UUID,
     _admin: AdminDep,
     db: DbDep,
     body: HubPasswordResetRequest = HubPasswordResetRequest(),
@@ -620,6 +680,14 @@ def reset_hub_password(
     just the handle when the school has none). Returns the new password so the admin
     can share it.
     """
+    contact = (
+        db.query(Contact)
+        .filter(Contact.id == contact_id, Contact.deleted_at.is_(None))
+        .first()
+    )
+    if not contact or contact.user_id is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    user_id = contact.user_id
     role_record = (
         db.query(UserRole)
         .options(joinedload(UserRole.school))
@@ -643,7 +711,7 @@ def reset_hub_password(
     try:
         supabase.auth.admin.update_user_by_id(str(user_id), {"password": new_password})
     except Exception as exc:
-        logger.error("Failed to reset hub password for %s: %s", email, exc)
+        logger.error("Failed to reset hub password for %s: %s", user_id, exc)
         raise HTTPException(status_code=502, detail="Failed to reset password")
 
     return HubPasswordResetOut(password=new_password)
