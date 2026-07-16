@@ -29,7 +29,8 @@ class ContactCreate(BaseModel):
     last_name: str | None = None
     # Optional: hub_admin (director) creations are forced to the director's own school
     school_id: uuid.UUID | None = None
-    role: Literal["hub_admin", "hub_user", "viewer"] = "hub_user"
+    # "no_access" creates a contact record only — no Supabase login / UserRole.
+    role: Literal["hub_admin", "hub_user", "viewer", "no_access"] = "hub_user"
     title: str | None = None
     # If provided, used as initial password. Otherwise defaults to the email handle +
     # the school's resource-center password (falls back to Supabase invite if unset).
