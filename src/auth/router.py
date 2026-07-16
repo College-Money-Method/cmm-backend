@@ -215,6 +215,7 @@ def list_contacts(
     school_id: uuid.UUID | None = Query(default=None),
     no_school: bool = Query(default=False),
     school_role: str | None = Query(default=None),
+    role: str | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> ContactListResponse:
@@ -243,6 +244,13 @@ def list_contacts(
         q = q.filter(Contact.school_id == school_id)
     if school_role:
         q = q.filter(Contact.role == school_role)
+    # Hub permission filter: the access role on the login. "no_access" = contacts
+    # with no provisioned login (user_id is null).
+    if role:
+        if role == "no_access":
+            q = q.filter(Contact.user_id.is_(None))
+        else:
+            q = q.filter(UserRole.role == role)
 
     if search:
         like = f"%{search}%"
