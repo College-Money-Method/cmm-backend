@@ -24,6 +24,7 @@ def get_webinars_for_school_in_range(
     date_from: str,
     date_to: str | None,
     cycle_id: uuid.UUID | None = None,
+    range_numbers: bool = False,
 ) -> list[dict]:
     """Return per-webinar registration counts for a school.
 
@@ -32,6 +33,13 @@ def get_webinars_for_school_in_range(
       - It has at least one WorkshopRegistration from the school.
     Scope: when cycle_id is given, filter by webinar.cycle_id (a cycle's webinars
     stay browsable outside its calendar dates); otherwise by start_datetime range.
+
+    range_numbers: when True (used with cycle_id — "all workshops, numbers for
+    the time period selected"), the COUNTS are date-scoped while the rows are
+    not: registrations count only those made within [date_from, date_to]
+    (by registration_time, falling back to created_at), and attendees zero out
+    for webinars whose start_datetime falls outside the range (attendance can
+    only happen at the webinar itself).
     """
     from src.workshops.models import Workshop
 
@@ -80,7 +88,21 @@ def get_webinars_for_school_in_range(
 
     webinar_ids = [row["id"] for row in webinar_rows]
 
-    # Registration counts per webinar for this school
+    # Registration counts per webinar for this school. In range_numbers mode the
+    # registration date (registration_time, falling back to created_at) must sit
+    # inside the selected range.
+    reg_where = [
+        WorkshopRegistration.webinar_id.in_(webinar_ids),
+        WorkshopRegistration.school_id == school_id,
+    ]
+    if range_numbers:
+        df = _parse_date_from(date_from)
+        dt = _parse_date_to(date_to)
+        reg_where.append(
+            func.coalesce(
+                WorkshopRegistration.registration_time, WorkshopRegistration.created_at
+            ).between(df, dt)
+        )
     reg_stmt = (
         select(
             WorkshopRegistration.webinar_id,
@@ -89,12 +111,7 @@ def get_webinars_for_school_in_range(
                 func.cast(WorkshopRegistration.attended, Integer_type())
             ).label("attended_live"),
         )
-        .where(
-            and_(
-                WorkshopRegistration.webinar_id.in_(webinar_ids),
-                WorkshopRegistration.school_id == school_id,
-            )
-        )
+        .where(and_(*reg_where))
         .group_by(WorkshopRegistration.webinar_id)
     )
     reg_counts = {
@@ -102,12 +119,21 @@ def get_webinars_for_school_in_range(
         for row in db.execute(reg_stmt).mappings().all()
     }
 
+    # range_numbers: attendance happens AT the webinar, so attendees zero out
+    # when the webinar's start_datetime falls outside the selected range.
+    range_df = _parse_date_from(date_from) if range_numbers else None
+    range_dt = _parse_date_to(date_to) if range_numbers else None
+
     result = []
     for row in webinar_rows:
         wid = row["id"]
         reg = reg_counts.get(wid)
         registered = reg["registered"] if reg else 0
         attended_live = int(reg["attended_live"] or 0) if reg else 0
+        if range_numbers and range_df is not None and range_dt is not None:
+            start = row["start_datetime"]
+            if start is None or not (range_df <= start <= range_dt):
+                attended_live = 0
         result.append({
             # Always use internal UUID — matches PostHog properties.webinar_id
             "webinar_id": str(wid),

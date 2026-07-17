@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 from src.analytics import posthog as ph
@@ -383,7 +383,12 @@ def get_workshops_detail(
     date_to: str | None = Query(default=None),
     cycle_name: str | None = Query(default=None),
     cycle_id: uuid.UUID | None = Query(default=None),
+    range_numbers: bool = Query(default=False),
 ) -> WorkshopsDetailData:
+    """range_numbers=true (with cycle_id + a date range): keep ALL cycle
+    webinars as rows but scope the NUMBERS to the range — registrations by
+    registration date, attendees zeroed for webinars outside the range, and the
+    PostHog engagement metrics already follow date_from/date_to."""
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
     if not sid:
@@ -392,7 +397,9 @@ def get_workshops_detail(
     school_uuid = uuid.UUID(sid)
     # cycle_id filters webinars by their cycle (families browse cycle content
     # outside the cycle's calendar dates); date range is the fallback
-    rows = get_webinars_for_school_in_range(db, school_uuid, date_from, date_to, cycle_id=cycle_id)
+    rows = get_webinars_for_school_in_range(
+        db, school_uuid, date_from, date_to, cycle_id=cycle_id, range_numbers=range_numbers
+    )
 
     # Site totals + per-webinar PostHog maps — the four HogQL queries run in
     # parallel and are cached (see helper), so this is the fast path on repeat loads.
@@ -506,14 +513,27 @@ def get_peak_usage(
     return result
 
 
-def _resolve_webinar_window(
-    db, webinar_id: str, weeks_before: int, weeks_after: int
-) -> tuple[dict, "datetime", date, date]:
-    """Validate webinar_id, load the webinar, and compute its ±weeks window.
+# Hard cap on a custom workshop window (~15 months) — bounds the zero-filled
+# daily series and keeps the PostHog scan cheap.
+_MAX_WINDOW_DAYS = 460
 
-    Shared by the split workshop-timeline (chart) and workshop-engagement (cards)
-    endpoints so both scope events to the identical window. Raises HTTPException
-    on bad id / missing webinar / missing start_datetime.
+
+def _resolve_webinar_window(
+    db,
+    webinar_id: str,
+    weeks_before: int,
+    weeks_after: int,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> tuple[dict, datetime, date, date]:
+    """Validate webinar_id, load the webinar, and compute its analysis window.
+
+    An explicit date_from/date_to pair (YYYY-MM-DD, from the UI's calendar range
+    picker) takes precedence; otherwise the window falls back to ±weeks around
+    start_datetime. Shared by the split workshop-timeline (chart) and
+    workshop-engagement (cards) endpoints so both scope events to the identical
+    window. Raises HTTPException on bad id / missing webinar / missing
+    start_datetime / malformed dates.
     """
     try:
         webinar_uuid = uuid.UUID(webinar_id)
@@ -530,8 +550,20 @@ def _resolve_webinar_window(
             detail=f"Webinar {webinar_id!r} has no start_datetime; cannot compute timeline window",
         )
     start_dt = webinar["start_datetime"]
-    window_start = (start_dt - timedelta(days=weeks_before * 7)).date()
-    window_end = (start_dt + timedelta(days=weeks_after * 7)).date()
+
+    if date_from and date_to:
+        try:
+            window_start = date.fromisoformat(date_from)
+            window_end = date.fromisoformat(date_to)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="date_from/date_to must be YYYY-MM-DD")
+        if window_end < window_start:
+            raise HTTPException(status_code=422, detail="date_to must be on or after date_from")
+        if (window_end - window_start).days + 1 > _MAX_WINDOW_DAYS:
+            raise HTTPException(status_code=422, detail=f"window too large (max {_MAX_WINDOW_DAYS} days)")
+    else:
+        window_start = (start_dt - timedelta(days=weeks_before * 7)).date()
+        window_end = (start_dt + timedelta(days=weeks_after * 7)).date()
     return webinar, start_dt, window_start, window_end
 
 
@@ -543,13 +575,16 @@ def get_workshop_timeline(
     school_id: str | None = Query(default=None),
     weeks_before: int = Query(default=4, ge=0, le=52),
     weeks_after: int = Query(default=4, ge=0, le=52),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
 ) -> WorkshopTimelineTrends:
     """Per-webinar windowed engagement CHART — the 4 daily TrendMetric series.
 
     webinar_id = internal webinar UUID (matches PostHog properties.webinar_id).
-    Window = [start − weeks_before*7d, start + weeks_after*7d].
-    The video/resources summary cards are served separately by /workshop-engagement
-    so the (fast, single-query) chart doesn't wait on them.
+    Window = explicit [date_from, date_to] (YYYY-MM-DD, from the UI's calendar
+    range picker) when both are given; else [start − weeks_before*7d, start +
+    weeks_after*7d]. The video/resources summary cards are served separately by
+    /workshop-engagement so the (fast, single-query) chart doesn't wait on them.
     """
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
@@ -560,14 +595,16 @@ def get_workshop_timeline(
         school_id=sid,
         weeks_before=weeks_before,
         weeks_after=weeks_after,
+        date_from=date_from,
+        date_to=date_to,
     )
     if (cached := ph._db_get(db, cache_key, sid)) is not None:
         return WorkshopTimelineTrends.model_validate(cached)
 
     webinar, start_dt, window_start, window_end = _resolve_webinar_window(
-        db, webinar_id, weeks_before, weeks_after
+        db, webinar_id, weeks_before, weeks_after, date_from, date_to
     )
-    total_days = weeks_before * 7 + weeks_after * 7 + 1  # inclusive of start day
+    total_days = (window_end - window_start).days + 1  # inclusive of both ends
     days = [(window_start + timedelta(days=i)).isoformat() for i in range(total_days)]
 
     webinar_windows: list[phb.WebinarWindow] = [
@@ -634,12 +671,15 @@ def get_workshop_engagement(
     school_id: str | None = Query(default=None),
     weeks_before: int = Query(default=4, ge=0, le=52),
     weeks_after: int = Query(default=4, ge=0, le=52),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
 ) -> WorkshopEngagementCards:
     """Video-engagement + resources-used summary CARDS for a workshop's window.
 
-    Split from /workshop-timeline so the two PostHog reads here (video stats +
-    resource breakdown) stream to the UI independently of the chart — the client
-    renders whichever payload resolves first. The two reads run concurrently.
+    Window resolution mirrors /workshop-timeline (explicit date range wins over
+    ±weeks). Split from it so the two PostHog reads here (video stats + resource
+    breakdown) stream to the UI independently of the chart — the client renders
+    whichever payload resolves first. The two reads run concurrently.
     """
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
@@ -650,12 +690,14 @@ def get_workshop_engagement(
         school_id=sid,
         weeks_before=weeks_before,
         weeks_after=weeks_after,
+        date_from=date_from,
+        date_to=date_to,
     )
     if (cached := ph._db_get(db, cache_key, sid)) is not None:
         return WorkshopEngagementCards.model_validate(cached)
 
     webinar, _start_dt, window_start, window_end = _resolve_webinar_window(
-        db, webinar_id, weeks_before, weeks_after
+        db, webinar_id, weeks_before, weeks_after, date_from, date_to
     )
     ws_date = window_start.isoformat()
     we_date = window_end.isoformat()
