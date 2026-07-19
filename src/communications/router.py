@@ -143,6 +143,7 @@ def get_schedule(
                 webinar_id=w.id,
                 webinar_name=w.webinar_name,
                 workshop_name=w.workshop.name if w.workshop else None,
+                sequence_number=w.workshop.sequence_number if w.workshop else None,
                 start_datetime=w.start_datetime,
                 end_datetime=w.end_datetime,
                 cycle_id=w.cycle_id,

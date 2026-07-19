@@ -87,6 +87,9 @@ class WebinarCalendarItem(BaseModel):
     webinar_id: uuid.UUID
     webinar_name: str | None
     workshop_name: str | None
+    # Workshop sequence number ("#5") so the frontend can render display names
+    # like "Workshop #5 Announcement". Nullable: not all workshops are numbered.
+    sequence_number: int | None = None
     start_datetime: datetime | None
     end_datetime: datetime | None
     cycle_id: uuid.UUID | None
