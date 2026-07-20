@@ -8,7 +8,7 @@ from datetime import datetime
 from pydantic import BaseModel, field_validator
 
 
-_PAGE_TYPES = {"resource", "topic", "workshop", "hub_resource", "general"}
+_PAGE_TYPES = {"resource", "topic", "workshop", "general", "hub_general"}
 _TRIGGER_TYPES = {"engagement", "time", "clicks", "registration"}
 _QUESTION_TYPES = {"thumbs", "stars", "text"}
 
