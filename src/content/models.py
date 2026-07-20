@@ -139,6 +139,10 @@ class ContentAsset(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, default="draft", server_default="draft")
     wp_post_id: Mapped[str | None] = mapped_column(Text)
     wp_synced_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    wp_source_url: Mapped[str | None] = mapped_column(Text)
+    # Original collegemoneymethod.com post/page URL (crawlable HTML) this asset was
+    # migrated from. Never a wp-content file URL or external link — NULL for assets
+    # that never had a WP page. `link` gets repointed during migration; this doesn't.
     search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
