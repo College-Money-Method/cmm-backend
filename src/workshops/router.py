@@ -754,10 +754,11 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
     for mapping in mappings:
         webinar = mapping.webinar
         is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
-        # Skip webinars from non-current cycles (upcoming and past alike).
-        # Webinars with no cycle assigned are always included.
+        # Only show webinars from the current cycle (upcoming and past alike).
+        # Webinars with no cycle assigned are excluded so stray/test webinars
+        # don't leak into a school's portal list.
         cycle = webinar.cycle
-        if cycle is not None and not cycle.is_current:
+        if cycle is None or not cycle.is_current:
             continue
 
         if is_upcoming:
