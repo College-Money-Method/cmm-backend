@@ -17,6 +17,7 @@ from src.analytics import posthog_batched as phb
 from src.analytics.schemas import (
     ContentBreakdownPage,
     ContentData,
+    ContentEngagementTotals,
     LibraryCoverageData,
     OverviewData,
     PeakUsageCell,
@@ -42,6 +43,7 @@ from src.analytics.postgres_queries import (
     get_reach_benchmark,
     get_reach_data,
     get_webinar_by_id,
+    get_webinar_windowed_registrations,
     get_webinars_for_school_in_range,
     get_workshops_detail_totals,
 )
@@ -154,10 +156,37 @@ def get_content(
         VideoBreakdownRow(name=r.label, view_count=int(r.count), avg_percent_watched=pct_by_name.get(r.label))
         for r in breakdowns["video_views"]
     ]
+
+    # Aggregate totals for the "Content Engagement" summary tiles — the TRUE
+    # totals across all rows (the breakdowns above are truncated to top-N).
+    # One extra lightweight round trip: a single count-by-event aggregate.
+    totals_hogql = (
+        "SELECT "
+        "countIf(event = 'topic_viewed') AS topic_engagement, "
+        "countIf(event = 'resource_viewed') AS resources_used, "
+        "countIf(event = 'video_session_end') AS video_views "
+        "FROM events "
+        f"WHERE {ph._hogql_date_clause(date_from, date_to)}{ph._hogql_school_clause(sid)}{ph._hogql_cycle_clause(cycle_name)} "
+        "AND event IN ('topic_viewed', 'resource_viewed', 'video_session_end')"
+    )
+    totals = ContentEngagementTotals()
+    try:
+        rows = ph.get_hogql_query(api_key, project_id, totals_hogql)
+        if rows:
+            r0 = rows[0]
+            totals = ContentEngagementTotals(
+                topic_engagement=int(r0[0] or 0),
+                resources_used=int(r0[1] or 0),
+                video_views=int(r0[2] or 0),
+            )
+    except Exception:
+        logger.warning("PostHog error computing content totals", exc_info=True)
+
     return ContentData(
         videos=videos,
         resources=breakdowns["resources"],
         topics=breakdowns["topics"],
+        totals=totals,
     )
 
 
@@ -589,8 +618,10 @@ def get_workshop_timeline(
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
 
+    # v2: registrations + attendees now come from the DB (registration_time),
+    # not PostHog events — bump the cache fn so stale event-based entries are ignored.
     cache_key = ph._key(
-        fn="workshop_timeline",
+        fn="workshop_timeline_v2",
         webinar_id=webinar_id,
         school_id=sid,
         weeks_before=weeks_before,
@@ -611,11 +642,12 @@ def get_workshop_timeline(
         {"webinar_id": webinar_id, "window_start": window_start, "window_end": window_end}
     ]
 
+    # Registrations come from the DB (below), NOT PostHog. The remaining three
+    # series are PostHog engagement events.
     # resource_viewed carries the origin workshop in properties.from (its
     # webinar_id is empty), so match on `from` and add only the via='workshop'
     # filter — the windowed helper matches from=<webinar_id> per window.
     event_specs: list[phb.EventSpec] = [
-        {"key": "registrations", "event": "workshop_registration_complete"},
         {"key": "detail_views", "event": "workshop_detail_view"},
         {"key": "video_watch_count", "event": "video_session_end"},
         {
@@ -636,7 +668,7 @@ def get_workshop_timeline(
             return WorkshopTimelineTrends.model_validate(stale)
         raise HTTPException(status_code=503, detail="PostHog unavailable") from exc
 
-    # Build each TrendMetric with zero-fill
+    # Build each PostHog TrendMetric with zero-fill
     def _trend(event_key: str) -> TrendMetric:
         pairs = raw.get(event_key, {}).get(webinar_id, [])
         day_count: dict[str, int] = {}
@@ -644,6 +676,16 @@ def get_workshop_timeline(
             day_count[d] = day_count.get(d, 0) + cnt
         data = [float(day_count.get(d, 0)) for d in days]
         return TrendMetric(total=int(sum(data)), data=data, days=days)
+
+    # Registrations + attendees from the DB (authoritative), windowed by
+    # registration_time. Scoped to the school when one is resolved (counselor
+    # view); super_admin viewing all schools passes school_id=None.
+    sid_uuid = uuid.UUID(sid) if sid else None
+    reg_by_day, attendees = get_webinar_windowed_registrations(
+        db, uuid.UUID(webinar_id), sid_uuid, window_start, window_end, start_dt
+    )
+    reg_data = [float(reg_by_day.get(d, 0)) for d in days]
+    registrations = TrendMetric(total=int(sum(reg_data)), data=reg_data, days=days)
 
     result = WorkshopTimelineTrends(
         webinar_id=webinar_id,
@@ -654,7 +696,8 @@ def get_workshop_timeline(
         weeks_before=weeks_before,
         weeks_after=weeks_after,
         days=days,
-        registrations=_trend("registrations"),
+        registrations=registrations,
+        attendees=attendees,
         detail_views=_trend("detail_views"),
         video_watch_count=_trend("video_watch_count"),
         resource_views=_trend("resource_views"),

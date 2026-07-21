@@ -163,7 +163,9 @@ def test_workshop_milestone_dropoff_empty_when_no_data(mock_posthog_configured):
 
 def test_content_endpoint_shape(mock_posthog_configured):
     # Number-only content page: videos (views + avg % watched), resources, topics.
-    with patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=fake_breakdowns()):
+    # The Content Engagement tiles read the aggregate totals (one extra query).
+    with patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=fake_breakdowns()), \
+         patch("src.analytics.posthog.get_hogql_query", return_value=[[12, 34, 56]]):
         resp = admin_client().get("/api/v1/analytics/content")
 
     assert resp.status_code == 200
@@ -175,6 +177,8 @@ def test_content_endpoint_shape(mock_posthog_configured):
     assert body["videos"][0]["avg_percent_watched"] == 30
     assert body["resources"][0]["label"] == "FAFSA"
     assert body["topics"][0]["label"] == "FAFSA"
+    # Content Engagement summary tiles: topic_engagement, resources_used, video_views.
+    assert body["totals"] == {"topic_engagement": 12, "resources_used": 34, "video_views": 56}
 
 
 def test_content_breakdown_paginates(mock_posthog_configured):

@@ -322,6 +322,47 @@ class TestSchoolsHealthEndpoint:
         assert "declining_schools" in body
 
 
+# ── /workshop-timeline — DB-sourced registrations + attendees ────────────────
+
+class TestWorkshopTimeline:
+    """Registrations + attendees are DB-authoritative (by registration_time),
+    windowed server-side; PostHog only supplies the engagement/video/resource
+    series. Guards against regressing back to PostHog-based registrations."""
+
+    def test_registrations_and_attendees_from_db(self, configured):
+        wid = uuid.uuid4()
+        webinar = {
+            "webinar_id": str(wid),
+            "workshop_name": "FAFSA 101",
+            "start_datetime": datetime(2026, 6, 1, 18, 0, tzinfo=timezone.utc),
+        }
+        # DB registrations by day (both inside the window) + windowed attendees.
+        reg_by_day = {"2026-05-26": 3, "2026-06-01": 5}
+        with patch("src.analytics.router.get_webinar_by_id", return_value=webinar), \
+             patch(
+                 "src.analytics.router.get_webinar_windowed_registrations",
+                 return_value=(reg_by_day, 30),
+             ) as mock_reg, \
+             patch(
+                 "src.analytics.posthog_batched.get_windowed_trends_by_webinar",
+                 return_value={},
+             ):
+            client = _hub_client()
+            resp = client.get(
+                f"/api/v1/analytics/workshop-timeline?webinar_id={wid}"
+                "&date_from=2026-05-25&date_to=2026-06-08"
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        # Registrations series is DB-sourced: total = sum of the per-day counts.
+        assert body["registrations"]["total"] == 8
+        assert body["attendees"] == 30
+        # Engagement series still zero-filled from the (empty) PostHog result.
+        assert body["detail_views"]["total"] == 0
+        assert mock_reg.called
+
+
 # ── Smoke: app imports cleanly with admin router mounted ─────────────────────
 
 def test_app_imports_and_has_admin_routes():

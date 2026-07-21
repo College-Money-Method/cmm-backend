@@ -7,7 +7,7 @@ No PostHog calls here — pure DB.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, select, and_, distinct, cast, Float
 from sqlalchemy.orm import Session
@@ -152,6 +152,60 @@ def get_webinars_for_school_in_range(
             "_webinar_id_raw": wid,  # internal UUID (same as webinar_id now, kept for compatibility)
         })
     return result
+
+
+def get_webinar_windowed_registrations(
+    db: Session,
+    webinar_id: uuid.UUID,
+    school_id: uuid.UUID | None,
+    window_start: date,
+    window_end: date,
+    workshop_start: datetime | None,
+) -> tuple[dict[str, int], int]:
+    """Per-day registration counts + windowed attendee count for one webinar.
+
+    Registrations are the authoritative DB records (WorkshopRegistration),
+    counted by registration_time (falling back to created_at) — PostHog
+    workshop_registration_complete events miss CSV-imported registrations and
+    registrations frequently precede the workshop date, so the DB is the source
+    of truth for "registrations in this window".
+
+    Returns ({day_iso: count} within [window_start, window_end], attendees).
+    Attendance happens AT the live event, so attendees are zeroed when the
+    workshop's start_datetime falls outside the selected window.
+    """
+    reg_day = func.date(
+        func.coalesce(WorkshopRegistration.registration_time, WorkshopRegistration.created_at)
+    )
+    where = [
+        WorkshopRegistration.webinar_id == webinar_id,
+        reg_day >= window_start,
+        reg_day <= window_end,
+    ]
+    if school_id is not None:
+        where.append(WorkshopRegistration.school_id == school_id)
+    rows = (
+        db.execute(
+            select(reg_day.label("day"), func.count().label("c"))
+            .where(and_(*where))
+            .group_by(reg_day)
+        )
+        .mappings()
+        .all()
+    )
+    by_day = {r["day"].isoformat(): int(r["c"]) for r in rows}
+
+    attendees = 0
+    workshop_day = workshop_start.date() if workshop_start else None
+    if workshop_day is not None and window_start <= workshop_day <= window_end:
+        att_where = [
+            WorkshopRegistration.webinar_id == webinar_id,
+            WorkshopRegistration.attended.is_(True),
+        ]
+        if school_id is not None:
+            att_where.append(WorkshopRegistration.school_id == school_id)
+        attendees = int(db.execute(select(func.count()).where(and_(*att_where))).scalar() or 0)
+    return by_day, attendees
 
 
 def get_webinar_by_id(db: Session, webinar_id: uuid.UUID) -> dict | None:
