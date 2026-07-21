@@ -82,6 +82,18 @@ def sync_schools_from_airtable(db: Session) -> dict:
             )
         is_customer = parse_bool(fields.get("Current Customer"))
 
+        # Parse mutable fields once — applied to both create and update paths
+        street_address = fields.get("Street Address") or None
+        city = fields.get("City") or None
+        state = fields.get("State") or None
+        zip_code = str(fields.get("Zip Code")).strip() if fields.get("Zip Code") else None
+        enrollment_9_12 = parse_int(fields.get("Enrollment (9-12)"))
+        cmm_website_password = fields.get("CMM Website Password") or None
+        school_resource_center_url = fields.get("School Resource Center URL") or None
+        appointlet_link = fields.get("Appointlet Link") or None
+        calendar_link = fields.get("Calendar Link") or None
+        new_cohort_id = cohort.id if cohort else None
+
         existing = (
             school_by_airtable_id.get(airtable_rec_id)
             or (school_by_slug.get(at_slug) if at_slug else None)
@@ -92,9 +104,28 @@ def sync_schools_from_airtable(db: Session) -> dict:
             if not existing.airtable_id:
                 existing.airtable_id = airtable_rec_id
                 school_by_airtable_id[airtable_rec_id] = existing
+            if existing.name != name:
+                existing.name = name
+            if existing.street_address != street_address:
+                existing.street_address = street_address
+            if existing.city != city:
+                existing.city = city
+            if existing.state != state:
+                existing.state = state
+            if existing.zip_code != zip_code:
+                existing.zip_code = zip_code
+            if existing.enrollment_9_12 != enrollment_9_12:
+                existing.enrollment_9_12 = enrollment_9_12
+            if existing.cmm_website_password != cmm_website_password:
+                existing.cmm_website_password = cmm_website_password
+            if existing.school_resource_center_url != school_resource_center_url:
+                existing.school_resource_center_url = school_resource_center_url
+            if existing.appointlet_link != appointlet_link:
+                existing.appointlet_link = appointlet_link
+            if existing.calendar_link != calendar_link:
+                existing.calendar_link = calendar_link
             if existing.is_current_customer != is_customer:
                 existing.is_current_customer = is_customer
-            new_cohort_id = cohort.id if cohort else None
             if existing.cohort_id != new_cohort_id:
                 existing.cohort_id = new_cohort_id
             if existing.airtable_slug != at_slug:
@@ -107,19 +138,19 @@ def sync_schools_from_airtable(db: Session) -> dict:
             school = School(
                 name=name,
                 airtable_id=airtable_rec_id,
-                street_address=fields.get("Street Address") or None,
-                city=fields.get("City") or None,
-                state=fields.get("State") or None,
-                zip_code=str(fields.get("Zip Code")).strip() if fields.get("Zip Code") else None,
-                enrollment_9_12=parse_int(fields.get("Enrollment (9-12)")),
-                cmm_website_password=fields.get("CMM Website Password") or None,
-                school_resource_center_url=fields.get("School Resource Center URL") or None,
-                appointlet_link=fields.get("Appointlet Link") or None,
-                calendar_link=fields.get("Calendar Link") or None,
+                street_address=street_address,
+                city=city,
+                state=state,
+                zip_code=zip_code,
+                enrollment_9_12=enrollment_9_12,
+                cmm_website_password=cmm_website_password,
+                school_resource_center_url=school_resource_center_url,
+                appointlet_link=appointlet_link,
+                calendar_link=calendar_link,
                 slug=new_slug,
                 airtable_slug=at_slug,
                 is_current_customer=is_customer,
-                cohort_id=cohort.id if cohort else None,
+                cohort_id=new_cohort_id,
             )
             db.add(school)
             db.flush()
