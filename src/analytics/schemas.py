@@ -7,7 +7,7 @@ New hub + admin schemas are appended below.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ── Shared primitives ─────────────────────────────────────────────────────────
@@ -52,12 +52,22 @@ class VideoBreakdownRow(BaseModel):
     avg_percent_watched: float | None = None
 
 
+class ContentEngagementTotals(BaseModel):
+    """Website-wide content-engagement totals for the Content-tab summary tiles —
+    the true totals across ALL rows (not just the truncated top-N breakdowns)."""
+    topic_engagement: int = 0   # topic_viewed count (visits to Topic pages)
+    resources_used: int = 0     # resource_viewed count (all resources)
+    video_views: int = 0        # video_session_end count (all videos)
+
+
 class ContentData(BaseModel):
     """Number-only content breakdowns (no time-series charts) — kept lightweight:
     top videos (views + avg % watched), resources (views), topics (views)."""
     videos: list[VideoBreakdownRow] = []   # video_session_end by workshop_name
     resources: list[TopBreakdown] = []     # resource_viewed by asset_name
     topics: list[TopBreakdown] = []        # topic_viewed by topic_title
+    # Aggregate totals for the "Content Engagement" summary tiles above the cards.
+    totals: ContentEngagementTotals = Field(default_factory=ContentEngagementTotals)
 
 
 class ContentBreakdownPage(BaseModel):
@@ -251,7 +261,8 @@ class WorkshopTimelineTrends(BaseModel):
     weeks_before: int            # applied window weeks before start
     weeks_after: int             # applied window weeks after start
     days: list[str]              # YYYY-MM-DD strings across full window
-    registrations: TrendMetric   # workshop_registration_complete
+    registrations: TrendMetric   # DB WorkshopRegistration by registration_time (window)
+    attendees: int = 0           # DB attended count (0 when workshop is outside window)
     detail_views: TrendMetric    # workshop_detail_view
     video_watch_count: TrendMetric  # video_session_end
     resource_views: TrendMetric  # resource_viewed via=workshop AND from=<webinar_id>
