@@ -37,3 +37,4 @@ scripts/output/
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/vibe-coding/
+.agentkit
