@@ -76,10 +76,49 @@ def submit_survey(
     return row
 
 
+def _apply_response_filters(
+    stmt,
+    *,
+    page_type: str | None,
+    question_type: str | None,
+    school_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+):
+    """Apply the shared admin filters to a SurveyResponse select statement."""
+    if page_type:
+        stmt = stmt.where(SurveyResponse.page_type == page_type)
+    if question_type:
+        stmt = stmt.where(SurveyResponse.question_type == question_type)
+    if school_id:
+        stmt = stmt.where(SurveyResponse.school_id == school_id)
+    if date_from:
+        stmt = stmt.where(SurveyResponse.created_at >= date_from)
+    if date_to:
+        stmt = stmt.where(SurveyResponse.created_at <= date_to)
+    return stmt
+
+
 @router.get("/summary", response_model=SurveySummaryResponse)
-def get_surveys_summary(_admin: AdminDep, db: DbDep):
-    """Admin: aggregated stats per page_type for the admin dashboard."""
-    rows: list[SurveyResponse] = db.scalars(select(SurveyResponse)).all()
+def get_surveys_summary(
+    _admin: AdminDep,
+    db: DbDep,
+    page_type: str | None = Query(None),
+    question_type: str | None = Query(None),
+    school_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+):
+    """Admin: aggregated stats per page_type. Respects the same filters as the list endpoint."""
+    stmt = _apply_response_filters(
+        select(SurveyResponse),
+        page_type=page_type,
+        question_type=question_type,
+        school_id=school_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    rows: list[SurveyResponse] = db.scalars(stmt).all()
 
     total = len(rows)
     by_type: dict[str, list[SurveyResponse]] = {}
@@ -120,18 +159,14 @@ def list_surveys(
     limit: int = Query(50, ge=1, le=200),
 ):
     """Admin: list survey responses with optional filters and pagination."""
-    stmt = select(SurveyResponse).order_by(SurveyResponse.created_at.desc())
-
-    if page_type:
-        stmt = stmt.where(SurveyResponse.page_type == page_type)
-    if question_type:
-        stmt = stmt.where(SurveyResponse.question_type == question_type)
-    if school_id:
-        stmt = stmt.where(SurveyResponse.school_id == school_id)
-    if date_from:
-        stmt = stmt.where(SurveyResponse.created_at >= date_from)
-    if date_to:
-        stmt = stmt.where(SurveyResponse.created_at <= date_to)
+    stmt = _apply_response_filters(
+        select(SurveyResponse).order_by(SurveyResponse.created_at.desc()),
+        page_type=page_type,
+        question_type=question_type,
+        school_id=school_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     items = db.scalars(stmt.offset(skip).limit(limit)).all()
