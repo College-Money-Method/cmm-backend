@@ -5,11 +5,15 @@ Finds every hub_admin/hub_user role whose Supabase auth user has no password set
 email handle + the school's resource-center password (``cmm_website_password``),
 or just the email handle when the school has none. Never sends an invite email.
 
-Users who already have a password are left untouched.
+By default, users who already have a password are left untouched. Pass
+``--reset-all`` to force EVERY counselor/director password back to the default,
+including accounts whose password was changed (e.g. by testers before launch).
 
 Usage:
     uv run python scripts/backfill_counselor_default_passwords.py
     uv run python scripts/backfill_counselor_default_passwords.py --dry-run
+    uv run python scripts/backfill_counselor_default_passwords.py --reset-all --dry-run
+    uv run python scripts/backfill_counselor_default_passwords.py --reset-all
 """
 
 from __future__ import annotations
@@ -45,12 +49,22 @@ import src.workshops.models  # noqa: F401
 COUNSELOR_ROLES = ("hub_admin", "hub_user")
 
 
-def get_passwordless_auth_users(db: Session, user_ids: list[str]) -> dict[str, str]:
-    """Return {user_id: email} for auth users with no password set.
+def get_auth_user_emails(
+    db: Session, user_ids: list[str], *, only_passwordless: bool
+) -> dict[str, str]:
+    """Return {user_id: email} for the given auth users.
 
     Reads auth.users directly — the only reliable source for whether a password
-    hash exists. Batched to avoid a huge IN clause blowing up for large tenants.
+    hash exists. When ``only_passwordless`` is True, restricts to users with no
+    password set (``encrypted_password`` NULL/empty); otherwise returns every
+    matching auth user regardless of password state. Batched to avoid a huge IN
+    clause blowing up for large tenants.
     """
+    passwordless_clause = (
+        " AND (encrypted_password IS NULL OR encrypted_password = '')"
+        if only_passwordless
+        else ""
+    )
     result: dict[str, str] = {}
     batch_size = 500
     for i in range(0, len(user_ids), batch_size):
@@ -58,8 +72,7 @@ def get_passwordless_auth_users(db: Session, user_ids: list[str]) -> dict[str, s
         rows = db.execute(
             text(
                 "SELECT id::text, email FROM auth.users "
-                "WHERE id::text = ANY(:ids) "
-                "AND (encrypted_password IS NULL OR encrypted_password = '')"
+                "WHERE id::text = ANY(:ids)" + passwordless_clause
             ),
             {"ids": batch},
         ).all()
@@ -73,6 +86,11 @@ def main() -> None:
         description="Backfill default passwords for counselors/directors without one"
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    parser.add_argument(
+        "--reset-all",
+        action="store_true",
+        help="Reset EVERY counselor/director password to default, even if one is already set",
+    )
     args = parser.parse_args()
 
     supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
@@ -81,7 +99,8 @@ def main() -> None:
     db = next(db_gen)
 
     prefix = "[DRY RUN] " if args.dry_run else ""
-    print(f"{prefix}Backfilling default passwords for counselors without one...\n")
+    scope = "ALL counselors (reset)" if args.reset_all else "counselors without one"
+    print(f"{prefix}Backfilling default passwords for {scope}...\n")
 
     # Load counselor/director roles with their school (for the resource-center password)
     role_records = (
@@ -93,12 +112,17 @@ def main() -> None:
     print(f"Found {len(role_records)} counselor/director role records.")
 
     role_by_user_id = {str(r.user_id): r for r in role_records}
-    passwordless = get_passwordless_auth_users(db, list(role_by_user_id.keys()))
-    print(f"Of those, {len(passwordless)} have no password set.\n")
+    targets = get_auth_user_emails(
+        db, list(role_by_user_id.keys()), only_passwordless=not args.reset_all
+    )
+    if args.reset_all:
+        print(f"Resetting passwords for all {len(targets)} of them.\n")
+    else:
+        print(f"Of those, {len(targets)} have no password set.\n")
 
     updated = skipped_no_email = errors = 0
 
-    for user_id, email in passwordless.items():
+    for user_id, email in targets.items():
         record = role_by_user_id[user_id]
         school = record.school
         school_name = school.name if school else "(no school)"

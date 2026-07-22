@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from spellchecker import SpellChecker
 from sqlalchemy import func, select, or_
 
+from src.auth.deps import AdminDep
 from src.content.models import ContentAsset, Topic
 from src.db.deps import DbDep
 from src.schools.models import School
@@ -62,6 +63,61 @@ class GlobalSearchResponse(BaseModel):
     topics: list[SearchResult]
     workshops: list[SearchResult]
     content_assets: list[SearchResult]
+
+
+# ── Internal-link search (admin) ────────────────────────────────────────────
+# Powers the rich-text editor's "Internal" link picker. Unlike global_search
+# this is title-only (not full-text over bodies), admin-only, and returns items
+# of every status (draft/published/archived) so authors can link to unpublished
+# content they're actively working on.
+
+
+class TopicLink(BaseModel):
+    slug: str
+    title: str
+    status: str
+
+
+class ResourceLink(BaseModel):
+    id: uuid.UUID
+    name: str
+    status: str
+
+
+class ContentLinkSearchResponse(BaseModel):
+    topics: list[TopicLink]
+    resources: list[ResourceLink]
+
+
+@router.get("/content-links", response_model=ContentLinkSearchResponse)
+def search_content_links(
+    q: Annotated[str, Query(min_length=1)],
+    _admin: AdminDep,
+    db: DbDep,
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> ContentLinkSearchResponse:
+    """Admin: title-only search across topics + resources for internal linking."""
+    # Escape LIKE wildcards in user input so `%`/`_` match literally.
+    safe = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{safe}%"
+
+    topic_rows = db.execute(
+        select(Topic.slug, Topic.title, Topic.status)
+        .where(Topic.title.ilike(pattern, escape="\\"))
+        .order_by(Topic.title.asc())
+        .limit(limit)
+    ).all()
+    asset_rows = db.execute(
+        select(ContentAsset.id, ContentAsset.name, ContentAsset.status)
+        .where(ContentAsset.name.ilike(pattern, escape="\\"))
+        .order_by(ContentAsset.name.asc())
+        .limit(limit)
+    ).all()
+
+    return ContentLinkSearchResponse(
+        topics=[TopicLink(slug=r.slug, title=r.title, status=r.status) for r in topic_rows],
+        resources=[ResourceLink(id=r.id, name=r.name, status=r.status) for r in asset_rows],
+    )
 
 
 # Stored vectors use setweight: title/name=A, description=B, body=D.
