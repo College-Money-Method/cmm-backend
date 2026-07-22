@@ -28,6 +28,11 @@ class AppConfig(Base):
     welcome_video_title: Mapped[str | None] = mapped_column(Text)
     welcome_video_caption: Mapped[str | None] = mapped_column(Text)
 
+    # Global "topic overview" video shown on the school topics/journey page.
+    # A plain video URL (e.g. Vimeo/YouTube link). Null = no video configured
+    # (the "Watch video overview" button is hidden).
+    topic_overview_video_url: Mapped[str | None] = mapped_column(Text)
+
     # Feature flags
     survey_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
 
