@@ -11,10 +11,10 @@ the accounts were provisioned with in Supabase Auth via
     password = <email handle> + <school.cmm_website_password>
 
 (the same derivation used by scripts/seed/seed_counselors_from_contacts.py).
-Contacts without an email, without a school, deactivated (deleted_at set), or
-whose school has no cmm_website_password are skipped — the last case matches the
-seed script, which never provisioned a usable password for those. Duplicate
-emails are emitted once.
+Contacts without an email, without a school, or deactivated (deleted_at set) are
+skipped. Schools with no cmm_website_password ARE included — their counselor
+password is just the email handle (no suffix), matching how those accounts were
+provisioned. Duplicate emails are emitted once.
 
 Target DB: PROD by default — these are the real credentials customers will use
 to log in, so they must reflect production. Override with --env dev or an
@@ -48,7 +48,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 
 # Every current-customer counselor plus the pieces needed to rebuild the login
-# password. Joining on schools guarantees a school + its website password.
+# password. Schools with a NULL/empty cmm_website_password are kept — their
+# password becomes just the email handle (default_hub_password handles this).
 QUERY = text(
     """
     SELECT c.first_name, c.email, s.name AS school_name, s.cmm_website_password
@@ -57,7 +58,6 @@ QUERY = text(
     WHERE s.is_current_customer = true
       AND c.deleted_at IS NULL
       AND c.email IS NOT NULL AND c.email <> ''
-      AND s.cmm_website_password IS NOT NULL AND s.cmm_website_password <> ''
     ORDER BY s.name, c.first_name
     """
 )
