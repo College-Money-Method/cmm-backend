@@ -374,6 +374,39 @@ def get_topic_by_slug_public(slug: str, db: DbDep):
     return topic
 
 
+@router.get("/topics/canonical/slug/{slug}", response_model=TopicDetail)
+def get_topic_canonical_by_slug(slug: str, db: DbDep):
+    """Canonical (school-agnostic) topic page.
+
+    Topics have no public flag yet, so the body is always stripped here:
+    the school-agnostic URL returns metadata only (title/description/image),
+    and the frontend shows an identifier card directing the user into a
+    school resource center. (When public topics are introduced, gate this on
+    the new flag like resources.)
+    """
+    stmt = (
+        select(Topic)
+        .where(Topic.slug == slug, Topic.status == "published")
+        .options(
+            selectinload(Topic.goal),
+            selectinload(Topic.faqs),
+            selectinload(Topic.resources).selectinload(ContentAsset.asset_type),
+        )
+    )
+    topic = db.scalar(stmt)
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    detail = TopicDetail.model_validate(topic)
+    detail.content = None
+    detail.summary = None
+    detail.summary_items = []
+    detail.action_items = []
+    detail.video_embed_code = None
+    detail.faqs = []
+    detail.resources = []
+    return detail
+
+
 @router.get("/topics/{topic_id}", response_model=TopicDetail)
 def get_topic(topic_id: uuid.UUID, _admin: AdminDep, db: DbDep):
     return _load_topic_detail(db, topic_id)
@@ -1026,6 +1059,37 @@ def get_asset_public(asset_id: uuid.UUID, db: DbDep):
         raise HTTPException(status_code=404, detail="Content asset not found")
     asset.resources = _resolve_resources(db, asset)
     return asset
+
+
+@router.get("/assets/{asset_id}/canonical", response_model=ContentAssetDetail)
+def get_asset_canonical(asset_id: uuid.UUID, db: DbDep):
+    """Canonical (school-agnostic) resource page.
+
+    - `is_public` published asset → full detail (rendered publicly).
+    - Published but NOT public → metadata-only (name/description/image/type);
+      the body and related items are stripped server-side so gated content is
+      never exposed at the school-agnostic URL. Frontend shows an identifier
+      card and directs the user into a school resource center.
+    """
+    asset = _load_asset_detail(db, asset_id)
+    if asset.status != "published":
+        raise HTTPException(status_code=404, detail="Content asset not found")
+    asset.resources = _resolve_resources(db, asset)
+    detail = ContentAssetDetail.model_validate(asset)
+    if not detail.is_public:
+        detail.content = None
+        detail.link = None
+        detail.embed_code = None
+        detail.summary = None
+        detail.why_important = None
+        detail.how_to_use = None
+        detail.action_items = []
+        detail.faqs = []
+        detail.resources = []
+        detail.objectives = []
+        detail.workshops = []
+        detail.cohorts = []
+    return detail
 
 
 @router.get("/assets/{asset_id}", response_model=ContentAssetDetail)

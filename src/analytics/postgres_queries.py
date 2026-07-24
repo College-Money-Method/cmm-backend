@@ -28,9 +28,12 @@ def get_webinars_for_school_in_range(
 ) -> list[dict]:
     """Return per-webinar registration counts for a school.
 
-    A webinar is included if:
-      - It has a PortalMapping to the school, OR
-      - It has at least one WorkshopRegistration from the school.
+    A webinar is included ONLY if it has a PortalMapping to the school — i.e. it
+    is actually linked to the school in the portal (matches the "Past Workshops"
+    list). Webinars a school was unlinked from (e.g. removed from the Airtable
+    junction) are NOT pulled in via leftover registrations, even if historical
+    WorkshopRegistration rows remain. Registration counts are still computed
+    per webinar below, but they no longer widen the row set.
     Scope: when cycle_id is given, filter by webinar.cycle_id (a cycle's webinars
     stay browsable outside its calendar dates); otherwise by start_datetime range.
 
@@ -43,15 +46,9 @@ def get_webinars_for_school_in_range(
     """
     from src.workshops.models import Workshop
 
-    # Webinar IDs via PortalMapping
+    # Webinar IDs via PortalMapping — the school-linked webinars (source of truth
+    # for which workshops belong to a school, same as the "Past Workshops" list).
     mapped_ids_q = select(PortalMapping.webinar_id).where(PortalMapping.school_id == school_id)
-
-    # Webinar IDs via registrations
-    reg_ids_q = (
-        select(WorkshopRegistration.webinar_id)
-        .where(WorkshopRegistration.school_id == school_id)
-        .distinct()
-    )
 
     if cycle_id is not None:
         scope_clause = Webinar.cycle_id == cycle_id
@@ -74,7 +71,7 @@ def get_webinars_for_school_in_range(
         .join(Workshop, Webinar.workshop_id == Workshop.id)
         .where(
             and_(
-                Webinar.id.in_(mapped_ids_q.union(reg_ids_q)),
+                Webinar.id.in_(mapped_ids_q),
                 scope_clause,
             )
         )
