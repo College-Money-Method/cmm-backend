@@ -47,7 +47,7 @@ from sqlalchemy import text
 
 from src.db.base import get_engine
 
-DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-6"
+DEFAULT_MODEL = "global.anthropic.claude-sonnet-4-6"
 DEFAULT_REGION = "us-east-1"
 DEFAULT_GUIDELINES = (
     Path.home()

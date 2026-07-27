@@ -2,6 +2,21 @@
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Supported translation locales: code → full language name used in the prompt.
+# Not a secret — safe to define at module level.
+SUPPORTED_LOCALES: dict[str, str] = {
+    "es": "Spanish",
+    "zh": "Chinese (Simplified)",
+    "fr": "French",
+    "de": "German",
+    "pt": "Portuguese",
+    "vi": "Vietnamese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "hi": "Hindi",
+    "ar": "Arabic",
+}
+
 
 class Settings(BaseSettings):
     """Settings loaded from environment (e.g. .env)."""
@@ -32,6 +47,21 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
     s3_bucket_name: str = ""
+
+    # AWS Bedrock — translation pipeline
+    # Region for Bedrock API calls; defaults to the same region as S3/general AWS.
+    bedrock_region: str = "us-east-1"
+    # Claude Haiku via the classic AnthropicBedrock (InvokeModel) client.
+    # Must be a cross-region INFERENCE-PROFILE id — Haiku 4.5 rejects bare
+    # on-demand model ids. "us." keeps routing within US regions; "global."
+    # (global.anthropic.claude-haiku-4-5-20251001-v1:0) routes worldwide.
+    # Override via env var BEDROCK_HAIKU_MODEL_ID.
+    # IAM: needs bedrock:InvokeModel(+WithResponseStream) — AmazonBedrockFullAccess covers it.
+    bedrock_haiku_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # Haiku 4.5 pricing (USD per 1M tokens) — used to compute cost_usd on each
+    # recorded translation invocation. Override if AWS pricing changes.
+    bedrock_haiku_input_usd_per_mtok: float = 1.0
+    bedrock_haiku_output_usd_per_mtok: float = 5.0
 
     # WordPress (for media migration script)
     wordpress_application_password: str = ""

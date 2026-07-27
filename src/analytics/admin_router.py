@@ -36,10 +36,12 @@ from src.analytics.schemas import (
     StalledSchool,
     QuietSchool,
     TopBreakdown,
+    TranslationAnalytics,
     TrendMetric,
     UpcomingWebinar,
     WhatsWorkingData,
 )
+from src.analytics.translation_usage_queries import get_translation_analytics
 from src.auth.deps import AdminDep
 from src.config import settings
 from src.db.deps import DbDep
@@ -57,6 +59,20 @@ def _check_configured() -> tuple[str, str]:
 
 
 # ── /pulse ────────────────────────────────────────────────────────────────────
+
+@router.get("/translation", response_model=TranslationAnalytics)
+def get_translation_analytics_endpoint(
+    current_user: AdminDep,
+    db: DbDep,
+    days: int = Query(30, ge=1, le=365, description="Trend window in days"),
+) -> TranslationAnalytics:
+    """Bedrock translation spend/usage: totals, by-locale, by-context, daily trend.
+
+    Sourced from the translation_usage ledger (cache misses only) — cache hits
+    cost nothing and aren't recorded, so these figures are true translation spend.
+    """
+    return TranslationAnalytics(**get_translation_analytics(db, days))
+
 
 @router.get("/pulse", response_model=PulseData)
 def get_pulse(
