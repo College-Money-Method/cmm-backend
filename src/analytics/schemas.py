@@ -276,3 +276,41 @@ class WorkshopEngagementCards(BaseModel):
     workshop_name: str
     video: WorkshopVideoStats    # aggregate video stats within window
     resources_used: list[ResourceUsedRow]  # resource_viewed breakdown by asset_name
+
+
+# ── Translation analytics (admin) ───────────────────────────────────────────
+
+class TranslationTotals(BaseModel):
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    invocations: int
+    cached_strings: int
+
+
+class TranslationLocaleStat(BaseModel):
+    locale: str
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    invocations: int
+
+
+class TranslationContextStat(BaseModel):
+    context: str
+    cost_usd: float
+    invocations: int
+
+
+class TranslationDailyPoint(BaseModel):
+    day: str  # ISO date (YYYY-MM-DD)
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+
+
+class TranslationAnalytics(BaseModel):
+    totals: TranslationTotals
+    by_locale: list[TranslationLocaleStat]
+    by_context: list[TranslationContextStat]
+    daily: list[TranslationDailyPoint]

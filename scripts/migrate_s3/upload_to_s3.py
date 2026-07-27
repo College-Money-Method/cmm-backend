@@ -88,6 +88,10 @@ def upload_url(source: str, s3_client, bucket: str) -> dict[str, str]:
     print(f"  Uploading original to s3://{bucket}/{original_key}", file=sys.stderr)
     results["original"] = _put_object(s3_client, bucket, original_key, data, mime)
 
+    # Non-image assets (e.g. PDFs) have no resized variants — upload the original only.
+    if not mime.startswith("image/"):
+        return results
+
     # Resize and upload each size
     image = Image.open(io.BytesIO(data))
     for size in RESIZE_SIZES:

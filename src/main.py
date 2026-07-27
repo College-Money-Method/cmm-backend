@@ -28,6 +28,7 @@ import src.surveys.models  # noqa: F401
 import src.communications.models  # noqa: F401
 import src.communications.schedule_model  # noqa: F401
 import src.communications.template_default_date_model  # noqa: F401
+import src.content.translation_models  # noqa: F401
 
 from src.auth.router import router as auth_router
 from src.config import settings
@@ -48,6 +49,7 @@ from src.communications.router import router as communications_router
 from src.surveys.router import router as surveys_router
 from src.surveys.config_router import router as survey_configs_router
 from src.zoom.webhook_router import router as zoom_webhook_router
+from src.content.translation_router import router as translation_router
 
 
 @asynccontextmanager
@@ -90,6 +92,7 @@ app.include_router(communications_router)
 app.include_router(surveys_router)
 app.include_router(survey_configs_router)
 app.include_router(zoom_webhook_router)
+app.include_router(translation_router)
 
 
 @app.get("/health")

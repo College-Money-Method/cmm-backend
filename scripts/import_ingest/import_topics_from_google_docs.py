@@ -1597,9 +1597,9 @@ def _default_model(provider: str) -> str:
         return "claude-3-7-sonnet-latest"
     if provider == "bedrock":
         # Bedrock model IDs differ from the direct API. Override with --model to
-        # match a model you've enabled; region-scoped inference profiles are often
-        # required (e.g. "us.anthropic.claude-3-7-sonnet-20250219-v1:0").
-        return "anthropic.claude-3-7-sonnet-20250219-v1:0"
+        # match a model you've enabled; cross-region inference profiles are often
+        # required (e.g. "global.anthropic.claude-sonnet-4-6").
+        return "global.anthropic.claude-sonnet-4-6"
     return "none"
 
 
