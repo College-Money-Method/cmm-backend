@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -184,6 +184,16 @@ class ContentAsset(Base):
     tags: Mapped[list[Tag]] = relationship(secondary="content_asset_tags", viewonly=True)
     workshops = relationship("Workshop", secondary="workshop_resources", back_populates="content_assets")
     cohorts = relationship("Cohort", secondary="content_asset_cohorts", back_populates="content_assets")
+    # Additional visibility dimensions (additive with cohorts): an asset with any
+    # restriction rows is shown to a school if it matches ANY dimension (cohort,
+    # state, or school). No rows across all dimensions => visible to everyone.
+    schools = relationship("School", secondary="content_asset_schools", viewonly=True)
+    state_rows = relationship("ContentAssetState", viewonly=True)
+
+    @property
+    def states(self) -> list[str]:
+        """Two-letter state codes this asset is restricted to (empty = unrestricted)."""
+        return [r.state for r in self.state_rows]
     faqs: Mapped[list[Faq]] = relationship(
         secondary="content_asset_faqs",
         order_by="ContentAssetFaq.sort_order",
@@ -274,6 +284,28 @@ class ContentAssetCohort(Base):
     )
     cohort_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("cohorts.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class ContentAssetState(Base):
+    """Restricts an asset to schools in the given 2-letter state code."""
+    __tablename__ = "content_asset_states"
+
+    content_asset_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("content_assets.id", ondelete="CASCADE"), primary_key=True
+    )
+    state: Mapped[str] = mapped_column(String(2), primary_key=True)
+
+
+class ContentAssetSchool(Base):
+    """Restricts an asset to a specific school."""
+    __tablename__ = "content_asset_schools"
+
+    content_asset_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("content_assets.id", ondelete="CASCADE"), primary_key=True
+    )
+    school_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("schools.id", ondelete="CASCADE"), primary_key=True
     )
 
 
