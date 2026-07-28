@@ -359,8 +359,14 @@ def list_topics_public(db: DbDep):
 
 
 @router.get("/topics/public/slug/{slug}", response_model=TopicDetail)
-def get_topic_by_slug_public(slug: str, db: DbDep):
-    """Public — return a single topic by slug (published only)."""
+def get_topic_by_slug_public(
+    slug: str,
+    db: DbDep,
+    school_id: Annotated[uuid.UUID | None, Query()] = None,
+):
+    """Public — return a single topic by slug (published only). When `school_id`
+    is given, the topic's resources are additionally filtered by visibility
+    (cohort/state/school) so restricted resources don't leak on topic pages."""
     stmt = (
         select(Topic)
         .where(Topic.slug == slug, Topic.status == "published")
@@ -368,12 +374,20 @@ def get_topic_by_slug_public(slug: str, db: DbDep):
             selectinload(Topic.goal),
             selectinload(Topic.faqs),
             selectinload(Topic.resources).selectinload(ContentAsset.asset_type),
+            selectinload(Topic.resources).selectinload(ContentAsset.cohorts),
+            selectinload(Topic.resources).selectinload(ContentAsset.schools),
+            selectinload(Topic.resources).selectinload(ContentAsset.state_rows),
         )
     )
     topic = db.scalar(stmt)
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
     topic.resources = [r for r in topic.resources if r.status == "published"]
+    if school_id is not None:
+        school = db.get(School, school_id)
+        topic.resources = [
+            r for r in topic.resources if _asset_visible_to_school(r, school)
+        ]
     return topic
 
 
