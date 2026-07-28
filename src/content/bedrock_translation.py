@@ -50,6 +50,12 @@ class TranslationError(Exception):
     """Raised when Bedrock translation fails or returns unparseable output."""
 
 
+# Brand / proper-noun terms the model must keep verbatim (never translated),
+# including when embedded inside a larger sentence. Mirror of the frontend list
+# in cmm-frontend/app/lib/i18n/protected-terms.ts — keep the two in sync.
+PROTECTED_TERMS: tuple[str, ...] = ("College Money Method",)
+
+
 @lru_cache(maxsize=1)
 def _get_bedrock_client() -> AnthropicBedrock:
     """Return a cached Bedrock client (one per process)."""
@@ -64,6 +70,7 @@ def _get_bedrock_client() -> AnthropicBedrock:
 
 def _build_system_prompt(target_locale: str) -> str:
     language_name = SUPPORTED_LOCALES.get(target_locale, target_locale)
+    protected = ", ".join(f'"{term}"' for term in PROTECTED_TERMS)
     return (
         f"You are a professional translator and educational content editor. "
         f"Your task is to translate educational financial-aid content into {language_name}.\n\n"
@@ -75,7 +82,9 @@ def _build_system_prompt(target_locale: str) -> str:
         "preserve the entire JSON structure and translate ONLY human-readable text leaf values.\n"
         "5. Do NOT translate: code snippets, URLs, href values, placeholder tokens, or proper nouns "
         "that are brand/product names.\n"
-        "6. Return ONLY a valid JSON object with the SAME keys as the input and translated values. "
+        f"6. Keep these exact brand names verbatim in English wherever they appear, including "
+        f"inside a sentence — never translate or transliterate them: {protected}.\n"
+        "7. Return ONLY a valid JSON object with the SAME keys as the input and translated values. "
         "No explanation, no markdown, no code fences."
     )
 

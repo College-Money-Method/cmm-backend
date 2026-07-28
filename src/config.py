@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 SUPPORTED_LOCALES: dict[str, str] = {
     "es": "Spanish",
     "zh": "Chinese (Simplified)",
+    "zh-Hant": "Chinese (Traditional)",
     "fr": "French",
     "de": "German",
     "pt": "Portuguese",
