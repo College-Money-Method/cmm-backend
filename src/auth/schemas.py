@@ -60,6 +60,13 @@ class ContactOut(BaseModel):
     school_name: str | None = None
     title: str | None = None
     school_role: str | None = None
+    # The email on the Supabase auth user — i.e. what the person actually types to
+    # log in. Only resolved by the single-contact detail endpoint (one admin API
+    # call per contact); always None on list rows. Diverges from `email` when
+    # Airtable renamed the contact after provisioning: the sync updates
+    # contacts.email but never auth.users.email, so login keeps using the old
+    # address. The detail UI surfaces the mismatch + a "match auth email" action.
+    auth_email: str | None = None
 
 
 class ContactListResponse(BaseModel):
@@ -79,6 +86,17 @@ class HubPasswordResetOut(BaseModel):
     """Result of resetting a contact's hub login password."""
 
     password: str
+
+
+class AuthEmailSyncOut(BaseModel):
+    """Result of pointing a contact's Supabase auth user at the contact's email."""
+
+    # False when the two were already identical (nothing was written).
+    updated: bool
+    # The email the auth user had before the call (None when it had none).
+    previous_email: str | None = None
+    # The auth user's email after the call — matches the contact email on success.
+    auth_email: str
 
 
 class ChangePasswordRequest(BaseModel):

@@ -15,6 +15,7 @@ from src.auth.hub_password import default_hub_password
 from src.auth.models import Profile, UserRole
 from src.auth.profile_sync import delete_profile, upsert_profile
 from src.auth.schemas import (
+    AuthEmailSyncOut,
     ChangePasswordRequest,
     ContactCreate,
     ContactListResponse,
@@ -119,12 +120,16 @@ def _contact_out_from_role(
 
 
 def _contact_out(
-    contact: Contact, role_record: UserRole | None, school: School | None
+    contact: Contact,
+    role_record: UserRole | None,
+    school: School | None,
+    auth_email: str | None = None,
 ) -> ContactOut:
     """Build a contact row from a contact (+ its optional login role/school).
 
     Contacts without a school have no provisioned login yet, so user_id/role are
     None; the row still appears (e.g. under the "No School" filter) for assignment.
+    `auth_email` is only passed by the detail endpoint (see ContactOut).
     """
     return ContactOut(
         id=contact.id,
@@ -138,7 +143,27 @@ def _contact_out(
         school_name=school.name if school else None,
         title=role_record.title if role_record else None,
         school_role=contact.role,
+        auth_email=auth_email,
     )
+
+
+def _fetch_auth_email(supabase, user_id) -> str | None:
+    """Return the Supabase auth user's current email, or None if unavailable.
+
+    Never raises: a Supabase hiccup must not break the contact detail page — the
+    caller just loses the mismatch check for that render.
+    """
+    try:
+        resp = supabase.auth.admin.get_user_by_id(str(user_id))
+        return resp.user.email if resp and resp.user else None
+    except Exception as exc:
+        logger.warning("Could not fetch auth email for user_id=%s: %s", user_id, exc)
+        return None
+
+
+def _emails_match(a: str | None, b: str | None) -> bool:
+    """Case-insensitive email comparison (Supabase lowercases; Airtable may not)."""
+    return (a or "").strip().lower() == (b or "").strip().lower()
 
 
 def _build_contact_out(role_record: UserRole, auth_user: dict) -> ContactOut:
@@ -487,11 +512,15 @@ def get_contact(
     contact_id: uuid.UUID,
     _admin: AdminDep,
     db: DbDep,
+    supabase=Depends(get_supabase),
 ) -> ContactOut:
     """Fetch a single contact by its contact id (works with or without a login).
 
     Keyed on the contacts table so login-less contacts (no provisioned auth user)
     are editable too — the admin detail page uses this for every row.
+
+    Also resolves the auth user's own email so the UI can flag the case where an
+    Airtable rename left the login on the old address (see ContactOut.auth_email).
     """
     row = (
         db.query(Contact, UserRole, School)
@@ -503,7 +532,8 @@ def get_contact(
     if not row:
         raise HTTPException(status_code=404, detail="Contact not found")
     contact, role_record, school = row
-    return _contact_out(contact, role_record, school)
+    auth_email = _fetch_auth_email(supabase, contact.user_id) if contact.user_id else None
+    return _contact_out(contact, role_record, school, auth_email=auth_email)
 
 
 @router.patch("/api/v1/contacts/{contact_id}", response_model=ContactOut)
@@ -715,3 +745,95 @@ def reset_hub_password(
         raise HTTPException(status_code=502, detail="Failed to reset password")
 
     return HubPasswordResetOut(password=new_password)
+
+
+@router.post(
+    "/api/v1/contacts/{contact_id}/sync-auth-email", response_model=AuthEmailSyncOut
+)
+def sync_auth_email(
+    contact_id: uuid.UUID,
+    _admin: AdminDep,
+    db: DbDep,
+    supabase=Depends(get_supabase),
+) -> AuthEmailSyncOut:
+    """Point the contact's Supabase auth user at the contact's current email.
+
+    Fixes the Airtable-rename case: `sync_contacts_from_airtable` updates
+    contacts.email but nothing propagates to auth.users, so the person can only log
+    in with their old address. Renaming the existing auth user (rather than creating
+    a new one) preserves user_id, so the UserRole, school link and password all
+    survive — and the old address stops working, which a new user wouldn't achieve.
+    """
+    contact = (
+        db.query(Contact)
+        .filter(Contact.id == contact_id, Contact.deleted_at.is_(None))
+        .first()
+    )
+    if not contact or contact.user_id is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    new_email = (contact.email or "").strip()
+    if not new_email:
+        raise HTTPException(status_code=400, detail="Contact has no email to sync")
+
+    # Read the auth user directly (not _fetch_auth_email): here a Supabase failure
+    # must abort rather than be swallowed, or we'd report a bogus result.
+    try:
+        resp = supabase.auth.admin.get_user_by_id(str(contact.user_id))
+    except Exception as exc:
+        logger.error("Failed to fetch auth user %s: %s", contact.user_id, exc)
+        raise HTTPException(status_code=502, detail="Could not reach Supabase Auth")
+    auth_user = resp.user if resp else None
+    if not auth_user:
+        raise HTTPException(status_code=404, detail="Auth user not found")
+
+    previous_email = auth_user.email
+    if _emails_match(previous_email, new_email):
+        # Already in sync — no write, so the UI can just clear its warning.
+        return AuthEmailSyncOut(
+            updated=False, previous_email=previous_email, auth_email=previous_email or new_email
+        )
+
+    # Another contact already owning this email means duplicate data upstream;
+    # renaming would create two logins for one address. Bail out with a clear reason.
+    conflict = (
+        db.query(Contact)
+        .filter(
+            func.lower(Contact.email) == new_email.lower(),
+            Contact.id != contact.id,
+            Contact.user_id.isnot(None),
+            Contact.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if conflict is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{new_email} already belongs to another contact with hub access.",
+        )
+
+    try:
+        # email_confirm keeps the account usable immediately — no confirmation email,
+        # matching how provisioning creates these accounts in the first place.
+        supabase.auth.admin.update_user_by_id(
+            str(contact.user_id), {"email": new_email, "email_confirm": True}
+        )
+    except Exception as exc:
+        logger.error(
+            "Failed to sync auth email for %s (%s → %s): %s",
+            contact.user_id, previous_email, new_email, exc,
+        )
+        # Most likely cause: the address is already registered to a different auth
+        # user (one with no contact row, so the check above missed it).
+        raise HTTPException(
+            status_code=409,
+            detail=f"Could not set the login email to {new_email}. It may already be registered.",
+        )
+
+    # Keep the local mirror consistent with what we just wrote.
+    upsert_profile(db, contact.user_id, new_email, contact.first_name, contact.last_name)
+    db.commit()
+    logger.info(
+        "Synced auth email for contact %s: %s → %s", contact.id, previous_email, new_email
+    )
+    return AuthEmailSyncOut(updated=True, previous_email=previous_email, auth_email=new_email)
