@@ -331,6 +331,8 @@ class ContentAssetDetail(BaseModel):
     topics: list[TopicListItem]
     workshops: list[WorkshopRef]
     cohorts: list[CohortRef]
+    states: list[str] = []
+    schools: list[SchoolRef] = []
     faqs: list[FaqOut]
     resources: list[ContentAssetListItem]
     tags: list[TagOut] = []
@@ -352,6 +354,13 @@ class WorkshopRef(BaseModel):
 
 
 class CohortRef(BaseModel):
+    id: uuid.UUID
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
+class SchoolRef(BaseModel):
     id: uuid.UUID
     name: str
 
@@ -412,6 +421,11 @@ class ContentAssetUpdate(BaseModel):
 
 class RelationshipsUpdate(BaseModel):
     ids: list[uuid.UUID]
+
+
+class StateListUpdate(BaseModel):
+    """Body for updating an asset's state-visibility restrictions (2-letter codes)."""
+    ids: list[str]
 
 
 class ContentAssetListResponse(BaseModel):
