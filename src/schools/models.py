@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Computed, Date, ForeignKey, Index, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, Computed, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -87,6 +87,39 @@ class School(Base):
         Index("idx_schools_cohort_id", "cohort_id"),
         Index("idx_schools_slug", "slug"),
         Index("idx_schools_grade_set_id", "grade_set_id"),
+    )
+
+
+class SchoolEnrollmentCycle(Base):
+    """Per-cycle self-reported enrollment history for a school.
+
+    Holds enrollment for NON-current cycles only. The current cycle's values
+    live directly on ``schools.enrollment_grade_9..12`` (source of truth for the
+    ``enrollment_9_12`` total and the ``enrollment_range`` computed column that
+    powers Hub analytics). See ``update_school`` / the enrollment-cycles router.
+    """
+
+    __tablename__ = "school_enrollment_cycles"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    school_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False
+    )
+    cycle_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("cycles.id", ondelete="CASCADE"), nullable=False
+    )
+    enrollment_grade_9: Mapped[int | None] = mapped_column(Integer)
+    enrollment_grade_10: Mapped[int | None] = mapped_column(Integer)
+    enrollment_grade_11: Mapped[int | None] = mapped_column(Integer)
+    enrollment_grade_12: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True, onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("school_id", "cycle_id", name="uq_school_enrollment_cycles_school_cycle"),
+        Index("idx_school_enrollment_cycles_school_id", "school_id"),
     )
 
 

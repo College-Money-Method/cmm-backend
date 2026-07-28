@@ -31,7 +31,7 @@ class AssetTypeOut(BaseModel):
     is_upload: bool
     is_public: bool = True
     is_tool: bool = False
-    display_bucket: str | None = None  # "tools" | "video" | "guide"
+    display_bucket: str | None = None  # "tools" | "video" | "guide" | "spreadsheet"
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -330,6 +330,7 @@ class ContentAssetDetail(BaseModel):
     objectives: list[ObjectiveOut]
     topics: list[TopicListItem]
     workshops: list[WorkshopRef]
+    resource_categories: list[ResourceCategoryRef] = []
     cohorts: list[CohortRef]
     states: list[str] = []
     schools: list[SchoolRef] = []
@@ -605,6 +606,14 @@ class ReaderQuestionOut(BaseModel):
 class TopicRef(BaseModel):
     id: uuid.UUID
     title: str
+    slug: str
+
+    model_config = {"from_attributes": True}
+
+
+class ResourceCategoryRef(BaseModel):
+    id: uuid.UUID
+    name: str
     slug: str
 
     model_config = {"from_attributes": True}

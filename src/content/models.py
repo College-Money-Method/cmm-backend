@@ -26,7 +26,7 @@ class AssetType(Base):
     is_upload: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     is_tool: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    display_bucket: Mapped[str | None] = mapped_column(Text, nullable=True)  # "tools" | "video" | "guide"
+    display_bucket: Mapped[str | None] = mapped_column(Text, nullable=True)  # "tools" | "video" | "guide" | "spreadsheet"
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
@@ -205,6 +205,12 @@ class ContentAsset(Base):
         primaryjoin="ContentAsset.id == ContentAssetResource.content_asset_id",
         secondaryjoin="ContentAsset.id == ContentAssetResource.resource_id",
         order_by="ContentAssetResource.sort_order",
+        viewonly=True,
+    )
+    # Categories this asset is assigned to directly (no Topic/Workshop needed).
+    resource_categories = relationship(
+        "ResourceCategory",
+        secondary="resource_category_assets",
         viewonly=True,
     )
 
@@ -449,7 +455,11 @@ class ReaderQuestion(Base):
 # ── Resource Categories ──────────────────────────────────────────────────────
 
 class ResourceCategory(Base):
-    """Parent-friendly keyword grouping that maps to internal Topics + Workshops."""
+    """Parent-friendly keyword grouping.
+
+    Resolves to assets three ways (unioned): directly assigned assets, assets of
+    its Topics, and assets of its Workshops.
+    """
     __tablename__ = "resource_categories"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -468,6 +478,12 @@ class ResourceCategory(Base):
     workshops = relationship(
         "Workshop",
         secondary="resource_category_workshops",
+        viewonly=True,
+    )
+    # Assets pinned straight to this category, bypassing Topics/Workshops.
+    assets = relationship(
+        "ContentAsset",
+        secondary="resource_category_assets",
         viewonly=True,
     )
 
@@ -491,6 +507,18 @@ class ResourceCategoryWorkshop(Base):
     )
     workshop_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("workshops.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class ResourceCategoryAsset(Base):
+    """Direct category <-> asset assignment (no Topic or Workshop in between)."""
+    __tablename__ = "resource_category_assets"
+
+    resource_category_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("resource_categories.id", ondelete="CASCADE"), primary_key=True
+    )
+    content_asset_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("content_assets.id", ondelete="CASCADE"), primary_key=True
     )
 
 

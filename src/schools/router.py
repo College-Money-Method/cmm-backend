@@ -14,7 +14,8 @@ from src.auth.models import UserRole
 from src.config import settings
 from src.db.client import get_supabase
 from src.db.deps import DbDep
-from src.schools.models import Contact, School
+from src.cycles.models import Cycle
+from src.schools.models import Contact, School, SchoolEnrollmentCycle
 from src.schools.logo_thumbnail import generate_logo_thumbnail
 from src.schools.slug_utils import unique_slug_db
 from src.storage.s3_client import S3ClientDep
@@ -22,6 +23,8 @@ from src.content.models import GradeSet
 from src.schools.schemas import (
     SchoolCreate,
     SchoolDetail,
+    SchoolEnrollmentCycleOut,
+    SchoolEnrollmentCycleUpdate,
     SchoolGradeSetUpdate,
     SchoolListItem,
     SchoolListResponse,
@@ -438,6 +441,123 @@ def update_school(
     # Keep PostHog "school" group props in sync (fire-and-forget)
     identify_school_group(school)
     return SchoolDetail.model_validate(school)
+
+
+def _enrollment_total(grades: list[int | None]) -> int | None:
+    """Sum of the reported per-grade values; None when none are reported."""
+    present = [g for g in grades if g is not None]
+    return sum(present) if present else None
+
+
+def _enrollment_cycle_out(
+    cycle: Cycle, grades: list[int | None]
+) -> SchoolEnrollmentCycleOut:
+    return SchoolEnrollmentCycleOut(
+        cycle_id=cycle.id,
+        cycle_name=cycle.name,
+        is_current=cycle.is_current,
+        beginning_date=cycle.beginning_date,
+        end_date=cycle.end_date,
+        enrollment_grade_9=grades[0],
+        enrollment_grade_10=grades[1],
+        enrollment_grade_11=grades[2],
+        enrollment_grade_12=grades[3],
+        enrollment_9_12=_enrollment_total(grades),
+    )
+
+
+@router.get("/{school_id}/enrollment-cycles", response_model=list[SchoolEnrollmentCycleOut])
+def list_school_enrollment_cycles(
+    school_id: uuid.UUID,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> list[SchoolEnrollmentCycleOut]:
+    """Per-cycle enrollment for a school, newest cycle first.
+
+    Current cycle values come from the schools columns; all other cycles from
+    school_enrollment_cycles (null grades where nothing has been reported).
+    """
+    _check_school_access(school_id, user)
+    school = db.query(School).filter(School.id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    cycles = (
+        db.query(Cycle)
+        .order_by(Cycle.beginning_date.desc().nullslast(), Cycle.name.desc())
+        .all()
+    )
+    history = {
+        ec.cycle_id: ec
+        for ec in db.query(SchoolEnrollmentCycle)
+        .filter(SchoolEnrollmentCycle.school_id == school_id)
+        .all()
+    }
+
+    out: list[SchoolEnrollmentCycleOut] = []
+    for cycle in cycles:
+        if cycle.is_current:
+            grades = [getattr(school, f) for f in _ENROLLMENT_GRADE_FIELDS]
+        else:
+            ec = history.get(cycle.id)
+            grades = [getattr(ec, f) if ec else None for f in _ENROLLMENT_GRADE_FIELDS]
+        out.append(_enrollment_cycle_out(cycle, grades))
+    return out
+
+
+@router.put("/{school_id}/enrollment-cycles/{cycle_id}", response_model=SchoolEnrollmentCycleOut)
+def upsert_school_enrollment_cycle(
+    school_id: uuid.UUID,
+    cycle_id: uuid.UUID,
+    body: SchoolEnrollmentCycleUpdate,
+    db: DbDep,
+    user: CurrentUserDep,
+) -> SchoolEnrollmentCycleOut:
+    """Save enrollment for one cycle. Editing the current cycle writes the schools
+    columns directly (keeping enrollment_9_12 / enrollment_range analytics in
+    sync); other cycles are upserted into school_enrollment_cycles."""
+    _check_school_access(school_id, user)
+    if user.role not in ("super_admin", "hub_admin"):
+        raise HTTPException(status_code=403, detail="Hub admin access required to update enrollment")
+
+    school = db.query(School).filter(School.id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    cycle = db.query(Cycle).filter(Cycle.id == cycle_id).first()
+    if not cycle:
+        raise HTTPException(status_code=404, detail="Cycle not found")
+
+    grades = [
+        body.enrollment_grade_9,
+        body.enrollment_grade_10,
+        body.enrollment_grade_11,
+        body.enrollment_grade_12,
+    ]
+
+    if cycle.is_current:
+        for field, value in zip(_ENROLLMENT_GRADE_FIELDS, grades):
+            setattr(school, field, value)
+        # Keep the total in sync — it feeds % reach and the enrollment_range column
+        school.enrollment_9_12 = _enrollment_total(grades)
+        db.commit()
+        identify_school_group(school)
+    else:
+        row = (
+            db.query(SchoolEnrollmentCycle)
+            .filter(
+                SchoolEnrollmentCycle.school_id == school_id,
+                SchoolEnrollmentCycle.cycle_id == cycle_id,
+            )
+            .first()
+        )
+        if row is None:
+            row = SchoolEnrollmentCycle(school_id=school_id, cycle_id=cycle_id)
+            db.add(row)
+        for field, value in zip(_ENROLLMENT_GRADE_FIELDS, grades):
+            setattr(row, field, value)
+        db.commit()
+
+    return _enrollment_cycle_out(cycle, grades)
 
 
 @router.delete("/{school_id}", status_code=status.HTTP_204_NO_CONTENT)

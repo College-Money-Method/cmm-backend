@@ -1,7 +1,7 @@
 """Pydantic schemas for schools — aligned with SQLAlchemy models."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -126,6 +126,32 @@ class SchoolUpdate(BaseModel):
     school_resource_center_url: str | None = None
     appointlet_link: str | None = None
     calendar_link: str | None = None
+
+
+class SchoolEnrollmentCycleOut(BaseModel):
+    """Per-cycle enrollment for one school. For the current cycle the values come
+    from the schools columns; for other cycles from school_enrollment_cycles."""
+
+    cycle_id: uuid.UUID
+    cycle_name: str
+    is_current: bool
+    beginning_date: date | None = None
+    end_date: date | None = None
+    enrollment_grade_9: int | None = None
+    enrollment_grade_10: int | None = None
+    enrollment_grade_11: int | None = None
+    enrollment_grade_12: int | None = None
+    # Sum of the non-null per-grade values; None when none are reported.
+    enrollment_9_12: int | None = None
+
+
+class SchoolEnrollmentCycleUpdate(BaseModel):
+    """Replace semantics — omitted grades are cleared to null."""
+
+    enrollment_grade_9: int | None = None
+    enrollment_grade_10: int | None = None
+    enrollment_grade_11: int | None = None
+    enrollment_grade_12: int | None = None
 
 
 class SchoolPasswordUpdate(BaseModel):

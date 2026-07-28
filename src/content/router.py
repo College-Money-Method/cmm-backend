@@ -32,6 +32,7 @@ from src.content.models import (
     Objective,
     ReaderQuestion,
     ResourceCategory,
+    ResourceCategoryAsset,
     ResourceCategoryTopic,
     ResourceCategoryWorkshop,
     Topic,
@@ -686,6 +687,7 @@ def _load_asset_detail(db: DbDep, asset_id: uuid.UUID) -> ContentAsset:
             selectinload(ContentAsset.objectives),
             selectinload(ContentAsset.topics).selectinload(Topic.goal),
             selectinload(ContentAsset.workshops),
+            selectinload(ContentAsset.resource_categories),
             selectinload(ContentAsset.cohorts),
             selectinload(ContentAsset.schools),
             selectinload(ContentAsset.state_rows),
@@ -872,9 +874,9 @@ def list_assets_public(
     elif asset_type_id:
         stmt = stmt.where(ContentAsset.asset_type_id == asset_type_id)
 
-    # Asset bucket filtering (tools / video / guide)
+    # Asset bucket filtering (tools / video / guide / spreadsheet)
     # "tools" resolves to all asset types with is_tool=True;
-    # "video" and "guide" match display_bucket directly.
+    # every other bucket matches AssetType.display_bucket directly.
     buckets = _parse_csv_strings(asset_buckets)
     if buckets:
         bucket_conditions = []
@@ -952,7 +954,8 @@ def list_assets_public(
             )
         )
 
-    # Category filtering: category → (topics ∪ workshops) → assets
+    # Category filtering: category → (direct assets ∪ topics ∪ workshops) → assets.
+    # Direct assignments let an asset sit in a category with no Topic or Workshop.
     cat_ids = _parse_csv_uuids(category_ids)
     if cat_ids:
         cat_topic_subq = select(ResourceCategoryTopic.topic_id).where(
@@ -961,12 +964,15 @@ def list_assets_public(
         cat_workshop_subq = select(ResourceCategoryWorkshop.workshop_id).where(
             ResourceCategoryWorkshop.resource_category_id.in_(cat_ids)
         )
-        cat_asset_subq = select(TopicResource.content_asset_id).where(
-            TopicResource.topic_id.in_(cat_topic_subq)
+        cat_asset_subq = select(ResourceCategoryAsset.content_asset_id).where(
+            ResourceCategoryAsset.resource_category_id.in_(cat_ids)
         ).union(
+            select(TopicResource.content_asset_id).where(
+                TopicResource.topic_id.in_(cat_topic_subq)
+            ),
             select(WorkshopResource.content_asset_id).where(
                 WorkshopResource.workshop_id.in_(cat_workshop_subq)
-            )
+            ),
         )
         stmt = stmt.where(ContentAsset.id.in_(cat_asset_subq))
 
@@ -1341,6 +1347,21 @@ def update_asset_workshops(asset_id: uuid.UUID, body: RelationshipsUpdate, _admi
     db.query(WorkshopResource).filter_by(content_asset_id=asset_id).delete()
     for wid in body.ids:
         db.add(WorkshopResource(content_asset_id=asset_id, workshop_id=wid))
+    db.commit()
+    return _load_asset_detail(db, asset_id)
+
+
+@router.put("/assets/{asset_id}/resource-categories", response_model=ContentAssetDetail)
+def update_asset_resource_categories(
+    asset_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep
+):
+    """Assign this asset directly to resource categories (no Topic/Workshop needed)."""
+    obj = db.get(ContentAsset, asset_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Content asset not found")
+    db.query(ResourceCategoryAsset).filter_by(content_asset_id=asset_id).delete()
+    for cid in dict.fromkeys(body.ids):
+        db.add(ResourceCategoryAsset(content_asset_id=asset_id, resource_category_id=cid))
     db.commit()
     return _load_asset_detail(db, asset_id)
 
