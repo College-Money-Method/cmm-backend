@@ -1080,12 +1080,43 @@ def list_assets_public(
 
 
 
+def _asset_visible_to_school(asset: ContentAsset, school: School | None) -> bool:
+    """Additive visibility: an asset is visible if it carries no restrictions in
+    any dimension, or it matches the school's cohort, state, or the school itself.
+    Mirrors the filtering in list_assets_public (school_id branch)."""
+    cohort_ids = {c.id for c in asset.cohorts}
+    states = set(asset.states)
+    school_ids = {s.id for s in asset.schools}
+    if not cohort_ids and not states and not school_ids:
+        return True
+    if school is None:
+        return False
+    if school.id in school_ids:
+        return True
+    if school.cohort_id and school.cohort_id in cohort_ids:
+        return True
+    if school.state and school.state in states:
+        return True
+    return False
+
+
 @router.get("/assets/{asset_id}/public", response_model=ContentAssetDetail)
-def get_asset_public(asset_id: uuid.UUID, db: DbDep):
-    """Public endpoint — only returns published assets."""
+def get_asset_public(
+    asset_id: uuid.UUID,
+    db: DbDep,
+    school_id: Annotated[uuid.UUID | None, Query()] = None,
+):
+    """Public endpoint — only returns published assets. When `school_id` is given,
+    the asset must be visible to that school (additive cohort/state/school
+    restrictions) or a 404 is returned, so restricted assets can't be reached by
+    direct URL from a school resource center."""
     asset = _load_asset_detail(db, asset_id)
     if asset.status != "published":
         raise HTTPException(status_code=404, detail="Content asset not found")
+    if school_id is not None:
+        school = db.get(School, school_id)
+        if not _asset_visible_to_school(asset, school):
+            raise HTTPException(status_code=404, detail="Content asset not found")
     asset.resources = _resolve_resources(db, asset)
     return asset
 
