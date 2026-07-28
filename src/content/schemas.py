@@ -330,7 +330,6 @@ class ContentAssetDetail(BaseModel):
     objectives: list[ObjectiveOut]
     topics: list[TopicListItem]
     workshops: list[WorkshopRef]
-    resource_categories: list[ResourceCategoryRef] = []
     cohorts: list[CohortRef]
     states: list[str] = []
     schools: list[SchoolRef] = []
@@ -611,10 +610,10 @@ class TopicRef(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ResourceCategoryRef(BaseModel):
+class ContentAssetRef(BaseModel):
+    """Minimal asset reference — keeps category detail payloads small."""
     id: uuid.UUID
     name: str
-    slug: str
 
     model_config = {"from_attributes": True}
 
@@ -643,6 +642,8 @@ class ResourceCategoryDetail(BaseModel):
     updated_at: datetime | None = None
     topics: list[TopicRef]
     workshops: list[WorkshopRef]
+    # Assets pinned straight to this category, bypassing Topics/Workshops.
+    assets: list[ContentAssetRef] = []
 
     model_config = {"from_attributes": True}
 
