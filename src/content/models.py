@@ -207,12 +207,6 @@ class ContentAsset(Base):
         order_by="ContentAssetResource.sort_order",
         viewonly=True,
     )
-    # Categories this asset is assigned to directly (no Topic/Workshop needed).
-    resource_categories = relationship(
-        "ResourceCategory",
-        secondary="resource_category_assets",
-        viewonly=True,
-    )
 
     __table_args__ = (
         Index("idx_content_assets_asset_type_id", "asset_type_id"),

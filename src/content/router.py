@@ -687,7 +687,6 @@ def _load_asset_detail(db: DbDep, asset_id: uuid.UUID) -> ContentAsset:
             selectinload(ContentAsset.objectives),
             selectinload(ContentAsset.topics).selectinload(Topic.goal),
             selectinload(ContentAsset.workshops),
-            selectinload(ContentAsset.resource_categories),
             selectinload(ContentAsset.cohorts),
             selectinload(ContentAsset.schools),
             selectinload(ContentAsset.state_rows),
@@ -1351,21 +1350,6 @@ def update_asset_workshops(asset_id: uuid.UUID, body: RelationshipsUpdate, _admi
     return _load_asset_detail(db, asset_id)
 
 
-@router.put("/assets/{asset_id}/resource-categories", response_model=ContentAssetDetail)
-def update_asset_resource_categories(
-    asset_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep
-):
-    """Assign this asset directly to resource categories (no Topic/Workshop needed)."""
-    obj = db.get(ContentAsset, asset_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="Content asset not found")
-    db.query(ResourceCategoryAsset).filter_by(content_asset_id=asset_id).delete()
-    for cid in dict.fromkeys(body.ids):
-        db.add(ResourceCategoryAsset(content_asset_id=asset_id, resource_category_id=cid))
-    db.commit()
-    return _load_asset_detail(db, asset_id)
-
-
 @router.put("/assets/{asset_id}/cohorts", response_model=ContentAssetDetail)
 def update_asset_cohorts(asset_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep):
     obj = db.get(ContentAsset, asset_id)
@@ -1926,6 +1910,7 @@ def _load_resource_category_detail(db: DbDep, cat_id: uuid.UUID) -> ResourceCate
         .options(
             selectinload(ResourceCategory.topics),
             selectinload(ResourceCategory.workshops),
+            selectinload(ResourceCategory.assets),
         )
     )
     obj = db.scalar(stmt)
@@ -2016,6 +2001,20 @@ def update_resource_category_workshops(
     db.query(ResourceCategoryWorkshop).filter_by(resource_category_id=cat_id).delete()
     for wid in body.ids:
         db.add(ResourceCategoryWorkshop(resource_category_id=cat_id, workshop_id=wid))
+    db.commit()
+    return _load_resource_category_detail(db, cat_id)
+
+
+@router.put("/resource-categories/{cat_id}/assets", response_model=ResourceCategoryDetail)
+def update_resource_category_assets(
+    cat_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep
+):
+    """Pin assets straight to this category — no Topic or Workshop needed."""
+    if not db.get(ResourceCategory, cat_id):
+        raise HTTPException(status_code=404, detail="Resource category not found")
+    db.query(ResourceCategoryAsset).filter_by(resource_category_id=cat_id).delete()
+    for aid in dict.fromkeys(body.ids):
+        db.add(ResourceCategoryAsset(resource_category_id=cat_id, content_asset_id=aid))
     db.commit()
     return _load_resource_category_detail(db, cat_id)
 
