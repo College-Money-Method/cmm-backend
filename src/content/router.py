@@ -10,7 +10,7 @@ from typing import Annotated
 import boto3
 import requests
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
-from sqlalchemy import case, func, literal, or_, select
+from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.orm import contains_eager, selectinload
 
 from src.auth.deps import AdminDep
@@ -21,6 +21,8 @@ from src.content.models import (
     ContentAssetFaq,
     ContentAssetObjective,
     ContentAssetResource,
+    ContentAssetSchool,
+    ContentAssetState,
     WorkshopResource,
     Faq,
     Goal,
@@ -73,6 +75,7 @@ from src.content.schemas import (
     ReaderQuestionCreate,
     ReaderQuestionOut,
     RelationshipsUpdate,
+    StateListUpdate,
     ResourceCategoryCreate,
     ResourceCategoryDetail,
     ResourceCategoryOut,
@@ -356,8 +359,14 @@ def list_topics_public(db: DbDep):
 
 
 @router.get("/topics/public/slug/{slug}", response_model=TopicDetail)
-def get_topic_by_slug_public(slug: str, db: DbDep):
-    """Public — return a single topic by slug (published only)."""
+def get_topic_by_slug_public(
+    slug: str,
+    db: DbDep,
+    school_id: Annotated[uuid.UUID | None, Query()] = None,
+):
+    """Public — return a single topic by slug (published only). When `school_id`
+    is given, the topic's resources are additionally filtered by visibility
+    (cohort/state/school) so restricted resources don't leak on topic pages."""
     stmt = (
         select(Topic)
         .where(Topic.slug == slug, Topic.status == "published")
@@ -365,12 +374,20 @@ def get_topic_by_slug_public(slug: str, db: DbDep):
             selectinload(Topic.goal),
             selectinload(Topic.faqs),
             selectinload(Topic.resources).selectinload(ContentAsset.asset_type),
+            selectinload(Topic.resources).selectinload(ContentAsset.cohorts),
+            selectinload(Topic.resources).selectinload(ContentAsset.schools),
+            selectinload(Topic.resources).selectinload(ContentAsset.state_rows),
         )
     )
     topic = db.scalar(stmt)
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
     topic.resources = [r for r in topic.resources if r.status == "published"]
+    if school_id is not None:
+        school = db.get(School, school_id)
+        topic.resources = [
+            r for r in topic.resources if _asset_visible_to_school(r, school)
+        ]
     return topic
 
 
@@ -670,6 +687,8 @@ def _load_asset_detail(db: DbDep, asset_id: uuid.UUID) -> ContentAsset:
             selectinload(ContentAsset.topics).selectinload(Topic.goal),
             selectinload(ContentAsset.workshops),
             selectinload(ContentAsset.cohorts),
+            selectinload(ContentAsset.schools),
+            selectinload(ContentAsset.state_rows),
             selectinload(ContentAsset.faqs),
             selectinload(ContentAsset.resources).selectinload(ContentAsset.asset_type),
         )
@@ -978,22 +997,46 @@ def list_assets_public(
         stmt = stmt.where(ContentAsset.id.in_(grade_asset_combined))
 
     if school_id:
-        # Return assets accessible to this school:
-        # published AND (attached to school's cohort OR attached to no cohort at all)
+        # Return assets accessible to this school. Visibility is ADDITIVE across
+        # three dimensions (cohort, state, school): an asset is shown if it is
+        # fully unrestricted (no rows in ANY dimension) OR it matches the school's
+        # cohort OR the school's state OR the school itself.
         school = db.get(School, school_id)
-        if school and school.cohort_id:
+        if school:
             has_cohort_subq = select(ContentAssetCohort.content_asset_id)
-            stmt = stmt.where(
-                or_(
-                    ~ContentAsset.id.in_(has_cohort_subq),
+            has_state_subq = select(ContentAssetState.content_asset_id)
+            has_school_subq = select(ContentAssetSchool.content_asset_id)
+
+            unrestricted = and_(
+                ~ContentAsset.id.in_(has_cohort_subq),
+                ~ContentAsset.id.in_(has_state_subq),
+                ~ContentAsset.id.in_(has_school_subq),
+            )
+            conditions = [
+                unrestricted,
+                ContentAsset.id.in_(
+                    select(ContentAssetSchool.content_asset_id).where(
+                        ContentAssetSchool.school_id == school.id
+                    )
+                ),
+            ]
+            if school.cohort_id:
+                conditions.append(
                     ContentAsset.id.in_(
                         select(ContentAssetCohort.content_asset_id).where(
                             ContentAssetCohort.cohort_id == school.cohort_id
                         )
-                    ),
+                    )
                 )
-            )
-        # If school has no cohort_id, all published assets are accessible (no extra filter)
+            if school.state:
+                conditions.append(
+                    ContentAsset.id.in_(
+                        select(ContentAssetState.content_asset_id).where(
+                            ContentAssetState.state == school.state
+                        )
+                    )
+                )
+            stmt = stmt.where(or_(*conditions))
     elif cohort_id:
         stmt = stmt.where(
             ContentAsset.id.in_(
@@ -1051,12 +1094,43 @@ def list_assets_public(
 
 
 
+def _asset_visible_to_school(asset: ContentAsset, school: School | None) -> bool:
+    """Additive visibility: an asset is visible if it carries no restrictions in
+    any dimension, or it matches the school's cohort, state, or the school itself.
+    Mirrors the filtering in list_assets_public (school_id branch)."""
+    cohort_ids = {c.id for c in asset.cohorts}
+    states = set(asset.states)
+    school_ids = {s.id for s in asset.schools}
+    if not cohort_ids and not states and not school_ids:
+        return True
+    if school is None:
+        return False
+    if school.id in school_ids:
+        return True
+    if school.cohort_id and school.cohort_id in cohort_ids:
+        return True
+    if school.state and school.state in states:
+        return True
+    return False
+
+
 @router.get("/assets/{asset_id}/public", response_model=ContentAssetDetail)
-def get_asset_public(asset_id: uuid.UUID, db: DbDep):
-    """Public endpoint — only returns published assets."""
+def get_asset_public(
+    asset_id: uuid.UUID,
+    db: DbDep,
+    school_id: Annotated[uuid.UUID | None, Query()] = None,
+):
+    """Public endpoint — only returns published assets. When `school_id` is given,
+    the asset must be visible to that school (additive cohort/state/school
+    restrictions) or a 404 is returned, so restricted assets can't be reached by
+    direct URL from a school resource center."""
     asset = _load_asset_detail(db, asset_id)
     if asset.status != "published":
         raise HTTPException(status_code=404, detail="Content asset not found")
+    if school_id is not None:
+        school = db.get(School, school_id)
+        if not _asset_visible_to_school(asset, school):
+            raise HTTPException(status_code=404, detail="Content asset not found")
     asset.resources = _resolve_resources(db, asset)
     return asset
 
@@ -1279,6 +1353,34 @@ def update_asset_cohorts(asset_id: uuid.UUID, body: RelationshipsUpdate, _admin:
     db.query(ContentAssetCohort).filter_by(content_asset_id=asset_id).delete()
     for cid in body.ids:
         db.add(ContentAssetCohort(content_asset_id=asset_id, cohort_id=cid))
+    db.commit()
+    return _load_asset_detail(db, asset_id)
+
+
+@router.put("/assets/{asset_id}/states", response_model=ContentAssetDetail)
+def update_asset_states(asset_id: uuid.UUID, body: StateListUpdate, _admin: AdminDep, db: DbDep):
+    obj = db.get(ContentAsset, asset_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Content asset not found")
+    db.query(ContentAssetState).filter_by(content_asset_id=asset_id).delete()
+    seen: set[str] = set()
+    for raw in body.ids:
+        code = raw.strip().upper()[:2]
+        if code and code not in seen:
+            seen.add(code)
+            db.add(ContentAssetState(content_asset_id=asset_id, state=code))
+    db.commit()
+    return _load_asset_detail(db, asset_id)
+
+
+@router.put("/assets/{asset_id}/schools", response_model=ContentAssetDetail)
+def update_asset_schools(asset_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep):
+    obj = db.get(ContentAsset, asset_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Content asset not found")
+    db.query(ContentAssetSchool).filter_by(content_asset_id=asset_id).delete()
+    for sid in body.ids:
+        db.add(ContentAssetSchool(content_asset_id=asset_id, school_id=sid))
     db.commit()
     return _load_asset_detail(db, asset_id)
 
