@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     # Zoom webhook secret token (from Marketplace app → Event Subscriptions)
     zoom_webhook_secret_token: str = ""
 
+    # Vimeo (personal access token — scopes: public private edit).
+    # Used by the Video CC utility to create/replace text tracks on videos.
+    # Permissions are evaluated against the token owner's team role, not video
+    # ownership, so a team member with edit rights can manage another user's videos.
+    vimeo_access_token: str = ""
+
     # PostHog (analytics queries — server-side only)
     posthog_api_key: str = ""
     posthog_project_id: str = ""
