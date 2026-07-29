@@ -23,10 +23,13 @@ from src.schools.models import School
 
 CUSTOMER_SLUG = "acme-high"
 PROSPECT_SLUG = "boston-university-academy"
+# Prospect an admin has activated the SRC for (preview-link access)
+ACTIVATED_PROSPECT_SLUG = "riverside-prep"
 NOT_FOUND_DETAIL = "We couldn't find your partnered school, contact College Money Method"
 
 CUSTOMER_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 PROSPECT_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+ACTIVATED_PROSPECT_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
 
 
 @pytest.fixture
@@ -46,6 +49,10 @@ def client() -> TestClient:
     seed = SessionLocal()
     seed.add(School(id=CUSTOMER_ID, name="Acme High", slug=CUSTOMER_SLUG, is_current_customer=True))
     seed.add(School(id=PROSPECT_ID, name="Boston University Academy", slug=PROSPECT_SLUG, is_current_customer=False))
+    seed.add(School(
+        id=ACTIVATED_PROSPECT_ID, name="Riverside Prep", slug=ACTIVATED_PROSPECT_SLUG,
+        is_current_customer=False, is_cmm_website_activated=True,
+    ))
     seed.commit()
     seed.close()
 
@@ -97,3 +104,34 @@ def test_missing_school_same_404(client: TestClient):
     resp = client.get("/api/v1/schools/slug/does-not-exist")
     assert resp.status_code == 404
     assert resp.json()["detail"] == NOT_FOUND_DETAIL
+
+
+def test_activated_prospect_reachable_by_slug(client: TestClient):
+    resp = client.get(f"/api/v1/schools/slug/{ACTIVATED_PROSPECT_SLUG}")
+    assert resp.status_code == 200
+    assert resp.json()["slug"] == ACTIVATED_PROSPECT_SLUG
+
+
+def test_activated_prospect_reachable_by_id_public(client: TestClient):
+    resp = client.get(f"/api/v1/schools/{ACTIVATED_PROSPECT_ID}/public")
+    assert resp.status_code == 200
+
+
+def test_activated_prospect_verify_password_passes_gate(client: TestClient):
+    # Past the visibility gate: wrong password is 401 (not the 404 a hidden
+    # school returns), proving the SRC is reachable for an activated prospect.
+    resp = client.post(
+        f"/api/v1/schools/slug/{ACTIVATED_PROSPECT_SLUG}/verify-password",
+        json={"password": "wrong"},
+    )
+    assert resp.status_code == 401
+
+
+def test_activated_prospect_absent_from_public_directory(client: TestClient):
+    # Activated prospects get a private preview link but are NOT advertised in
+    # the public discovery list — that stays current-customers only.
+    resp = client.get("/api/v1/schools/public")
+    assert resp.status_code == 200
+    slugs = {item["slug"] for item in resp.json()["items"]}
+    assert CUSTOMER_SLUG in slugs
+    assert ACTIVATED_PROSPECT_SLUG not in slugs

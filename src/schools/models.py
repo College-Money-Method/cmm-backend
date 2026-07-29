@@ -56,6 +56,11 @@ class School(Base):
     logo_url: Mapped[str | None] = mapped_column(Text)
     logo_thumb_url: Mapped[str | None] = mapped_column(Text)
     is_current_customer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # SRC (School Resource Center) is auto-enabled for current customers. This
+    # flag lets an admin activate the SRC for a prospect so they can be given a
+    # preview link before becoming a customer. Effective public access is
+    # is_current_customer OR is_cmm_website_activated (see _find_public_school).
+    is_cmm_website_activated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     cohort_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("cohorts.id"))
     grade_set_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("grade_sets.id", ondelete="SET NULL"), nullable=True

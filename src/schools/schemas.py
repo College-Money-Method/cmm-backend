@@ -52,6 +52,7 @@ class SchoolListItem(BaseModel):
     enrollment_grade_12: int | None = None
     enrollment_range: str | None = None
     is_current_customer: bool = False
+    is_cmm_website_activated: bool = False
     logo_url: str | None = None
     logo_thumb_url: str | None = None
     slug: str | None = None
@@ -97,6 +98,7 @@ class SchoolCreate(BaseModel):
     cohort_id: uuid.UUID | None = None
     grade_set_id: uuid.UUID | None = None
     is_current_customer: bool = False
+    is_cmm_website_activated: bool = False
     logo_url: str | None = None
     school_resource_center_url: str | None = None
     appointlet_link: str | None = None
@@ -121,6 +123,7 @@ class SchoolUpdate(BaseModel):
     cohort_id: uuid.UUID | None = None
     grade_set_id: uuid.UUID | None = None
     is_current_customer: bool | None = None
+    is_cmm_website_activated: bool | None = None
     logo_url: str | None = None
     cmm_website_password: str | None = None
     school_resource_center_url: str | None = None
