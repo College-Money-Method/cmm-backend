@@ -79,7 +79,11 @@ def _set(key: str, data: Any) -> None:
     _cache[key] = (data, datetime.now(timezone.utc))
 
 
-def _db_get(db: Session | None, key: str, school_id: str | None) -> Any | None:
+def _db_get(db: Session | None, key: str, school_id: str | None, force: bool = False) -> Any | None:
+    # force=True: caller wants fresh data (Refresh button) — treat as a cache
+    # miss so the endpoint re-queries PostHog and overwrites the entry.
+    if force:
+        return None
     if db is None:
         return _get(key)
     from src.analytics.query_cache import db_cache_get

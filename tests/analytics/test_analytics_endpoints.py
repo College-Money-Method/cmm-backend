@@ -107,6 +107,24 @@ def test_overview_admin_with_school_id(mock_posthog_configured):
     assert all(str(c) == str(SCHOOL_A) for c in calls if c)
 
 
+def test_overview_refresh_param_forwards_force_refresh(mock_posthog_configured):
+    """?refresh=true must forward force_refresh=True to the batched helper so the
+    Refresh button bypasses the 60-min cache."""
+    seen = []
+
+    def spy(api_key, project_id, series, **kwargs):
+        seen.append(kwargs.get("force_refresh"))
+        return {s["key"]: SAMPLE_TREND for s in series}
+
+    with patch("src.analytics.posthog_batched.get_batched_trends", side_effect=spy):
+        client = counselor_client()
+        resp_default = client.get("/api/v1/analytics/overview")
+        resp_refresh = client.get("/api/v1/analytics/overview?refresh=true")
+
+    assert resp_default.status_code == 200 and resp_refresh.status_code == 200
+    assert seen == [False, True]
+
+
 def test_overview_counselor_ignores_school_param(mock_posthog_configured):
     """Counselors are always scoped to their own school, never the query param."""
     calls = []

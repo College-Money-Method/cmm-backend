@@ -95,14 +95,16 @@ def get_batched_trends(
     date_to: str | None = None,
     cycle_name: str | None = None,
     db: Session | None = None,
+    force_refresh: bool = False,
 ) -> dict[str, TrendMetric]:
     """All daily trends for an endpoint in ONE HogQL query.
 
     series item: {"key": str, "event": str, "math": "total" | "dau"}
     Returns {key: TrendMetric} with zero-filled aligned days.
+    force_refresh: bypass the cache read (Refresh button) — re-query and overwrite.
     """
     cache_key = ph._key(fn="batched_trends", series=series, school_id=school_id, df=date_from, dt=date_to, cyc=cycle_name)
-    if (cached := ph._db_get(db, cache_key, school_id)) is not None:
+    if (cached := ph._db_get(db, cache_key, school_id, force=force_refresh)) is not None:
         return {k: TrendMetric.model_validate(v) for k, v in cached.items()}
 
     days = _day_range(date_from, date_to)
@@ -152,15 +154,17 @@ def get_batched_breakdowns(
     date_to: str | None = None,
     cycle_name: str | None = None,
     db: Session | None = None,
+    force_refresh: bool = False,
 ) -> dict[str, list[TopBreakdown]]:
     """All breakdowns for an endpoint in ONE HogQL query (UNION ALL + kind col).
 
     spec: {"key": str, "event": str, "prop": str, "math": "count" | "avg",
            "math_prop"?: str, "limit"?: int, "order"?: "desc" | "label_num"}
     order "label_num" keeps numeric-label order (milestone drop-off curves).
+    force_refresh: bypass the cache read (Refresh button) — re-query and overwrite.
     """
     cache_key = ph._key(fn="batched_breakdowns", specs=specs, school_id=school_id, df=date_from, dt=date_to, cyc=cycle_name)
-    if (cached := ph._db_get(db, cache_key, school_id)) is not None:
+    if (cached := ph._db_get(db, cache_key, school_id, force=force_refresh)) is not None:
         return {k: [TopBreakdown.model_validate(r) for r in v] for k, v in cached.items()}
 
     where = _scope_where(date_from, date_to, school_id, cycle_name)
