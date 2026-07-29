@@ -79,10 +79,11 @@ def get_overview(
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
     cycle_name: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
 ) -> OverviewData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
-    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
+    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db, force_refresh=refresh)
     # ONE PostHog round trip for both series (was 2 sequential calls).
     # Note: school scoping is now the event-property super-prop for DAU too
     # (was person-property) — first-visit pageviews before registration are excluded.
@@ -101,10 +102,11 @@ def get_workshop(
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
     cycle_name: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
 ) -> WorkshopData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
-    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
+    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db, force_refresh=refresh)
     # TWO PostHog round trips total (was 6 sequential calls)
     trends = phb.get_batched_trends(api_key, project_id, [
         {"key": "watch_recordings", "event": "workshop_watch_recording"},
@@ -135,10 +137,11 @@ def get_content(
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
     cycle_name: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
 ) -> ContentData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
-    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
+    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db, force_refresh=refresh)
     # Number-only content page — ONE PostHog round trip, no time-series (lightweight).
     # Videos need two aggregations (view count + avg % watched) on the same breakdown;
     # a wider limit on the pct branch ensures every top-viewed video has its avg merged.
@@ -249,10 +252,11 @@ def get_search(
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
     cycle_name: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
 ) -> SearchData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
-    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db)
+    opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db, force_refresh=refresh)
     # TWO PostHog round trips total (was 4 sequential calls)
     trends = phb.get_batched_trends(api_key, project_id, [
         {"key": "searches", "event": "search_query"},
@@ -291,6 +295,7 @@ def _query_workshops_detail_ph(
     date_from: str,
     date_to: str | None,
     cycle_name: str | None,
+    force: bool = False,
 ) -> tuple[SiteTotals, dict, dict, dict]:
     """Fetch the four PostHog aggregates powering workshops-detail:
     website-wide site totals + per-webinar recording / detail-view / resource maps.
@@ -302,7 +307,7 @@ def _query_workshops_detail_ph(
     return instantly rather than re-hitting PostHog (the ~8s bug).
     """
     cache_key = ph._key(fn="workshops_detail_ph", school_id=sid, df=date_from, dt=date_to, cyc=cycle_name)
-    if (cached := ph._db_get(db, cache_key, sid)) is not None:
+    if (cached := ph._db_get(db, cache_key, sid, force=force)) is not None:
         return _unpack_workshops_detail_ph(cached)
 
     date_clause = ph._hogql_date_clause(date_from, date_to)
@@ -358,12 +363,8 @@ def _query_workshops_detail_ph(
             _run, [site_hogql, hogql_rec, hogql_detail, hogql_res]
         )
 
-    # Total PostHog outage → serve stale if we have it; never cache the empties.
-    if site_rows is None and rec_rows is None and detail_rows is None and res_rows is None:
-        stale = ph._db_get_stale(db, cache_key)
-        if stale is not None:
-            return _unpack_workshops_detail_ph(stale)
-        return SiteTotals(), {}, {}, {}
+    # Outage handling is deferred until AFTER parsing (see the guard before
+    # _db_set): a PARTIAL failure must not overwrite a complete cache entry.
 
     # Parse each result defensively — a malformed row must degrade to empty for
     # that metric, not fail the whole request (mirrors the original per-query guards).
@@ -390,6 +391,17 @@ def _query_workshops_detail_ph(
     except Exception:
         res_map = {}
 
+    # Total OR partial PostHog outage: at least one sub-query failed. Never
+    # overwrite a previously-complete entry with partial/zeroed data — critical
+    # on a forced refresh (which bypassed the read and would otherwise clobber
+    # good data for the whole TTL). Prefer the stale-but-complete entry; if none
+    # exists, return the partial result WITHOUT caching it.
+    if site_rows is None or rec_rows is None or detail_rows is None or res_rows is None:
+        stale = ph._db_get_stale(db, cache_key)
+        if stale is not None:
+            return _unpack_workshops_detail_ph(stale)
+        return site_totals, ph_map, detail_map, res_map
+
     ph._db_set(db, cache_key, {
         "site": {
             "visits": site_totals.visits,
@@ -413,6 +425,7 @@ def get_workshops_detail(
     cycle_name: str | None = Query(default=None),
     cycle_id: uuid.UUID | None = Query(default=None),
     range_numbers: bool = Query(default=False),
+    refresh: bool = Query(default=False),
 ) -> WorkshopsDetailData:
     """range_numbers=true (with cycle_id + a date range): keep ALL cycle
     webinars as rows but scope the NUMBERS to the range — registrations by
@@ -433,7 +446,7 @@ def get_workshops_detail(
     # Site totals + per-webinar PostHog maps — the four HogQL queries run in
     # parallel and are cached (see helper), so this is the fast path on repeat loads.
     site_totals, ph_map, detail_map, res_map = _query_workshops_detail_ph(
-        api_key, project_id, db, sid, date_from, date_to, cycle_name
+        api_key, project_id, db, sid, date_from, date_to, cycle_name, force=refresh
     )
 
     if rows:
@@ -510,12 +523,13 @@ def get_peak_usage(
     date_from: str = Query(default="-30d"),
     date_to: str | None = Query(default=None),
     cycle_name: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
 ) -> PeakUsageData:
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
 
     cache_key = ph._key(fn="peak_usage", school_id=sid, df=date_from, dt=date_to, cyc=cycle_name)
-    if (cached := ph._db_get(db, cache_key, sid)) is not None:
+    if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
         return PeakUsageData.model_validate(cached)
 
     date_clause = ph._hogql_date_clause(date_from, date_to)
@@ -606,6 +620,7 @@ def get_workshop_timeline(
     weeks_after: int = Query(default=4, ge=0, le=52),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
 ) -> WorkshopTimelineTrends:
     """Per-webinar windowed engagement CHART — the 4 daily TrendMetric series.
 
@@ -629,7 +644,7 @@ def get_workshop_timeline(
         date_from=date_from,
         date_to=date_to,
     )
-    if (cached := ph._db_get(db, cache_key, sid)) is not None:
+    if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
         return WorkshopTimelineTrends.model_validate(cached)
 
     webinar, start_dt, window_start, window_end = _resolve_webinar_window(
@@ -716,6 +731,7 @@ def get_workshop_engagement(
     weeks_after: int = Query(default=4, ge=0, le=52),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
 ) -> WorkshopEngagementCards:
     """Video-engagement + resources-used summary CARDS for a workshop's window.
 
@@ -736,7 +752,7 @@ def get_workshop_engagement(
         date_from=date_from,
         date_to=date_to,
     )
-    if (cached := ph._db_get(db, cache_key, sid)) is not None:
+    if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
         return WorkshopEngagementCards.model_validate(cached)
 
     webinar, _start_dt, window_start, window_end = _resolve_webinar_window(
@@ -787,18 +803,9 @@ def get_workshop_engagement(
         video_rows = f_video.result()
         resource_rows = f_res.result()
 
-    # Total outage on both reads → serve stale if we have it, else degrade to
-    # empties WITHOUT caching (so a transient failure doesn't poison the cache).
-    if video_rows is None and resource_rows is None:
-        stale = ph._db_get_stale(db, cache_key)
-        if stale:
-            return WorkshopEngagementCards.model_validate(stale)
-        return WorkshopEngagementCards(
-            webinar_id=webinar_id,
-            workshop_name=webinar["workshop_name"],
-            video=WorkshopVideoStats(total_plays=0, total_minutes_watched=0, avg_percent_watched=None),
-            resources_used=[],
-        )
+    # Outage handling is deferred until AFTER parsing (see the guard before
+    # _db_set): a PARTIAL failure (one read ok, one failed) must not overwrite a
+    # complete cache entry — critical on a forced refresh.
 
     # -- Video aggregate stats — degrade gracefully to zeros on parse failure. --
     video_stats = WorkshopVideoStats(total_plays=0, total_minutes_watched=0, avg_percent_watched=None)
@@ -833,6 +840,16 @@ def get_workshop_engagement(
         video=video_stats,
         resources_used=resources_used,
     )
+
+    # Total OR partial outage: at least one read failed. Don't overwrite a
+    # complete entry with partial/zeroed data (esp. on a forced refresh). Prefer
+    # the stale-but-complete entry; else return the partial WITHOUT caching it.
+    if video_rows is None or resource_rows is None:
+        stale = ph._db_get_stale(db, cache_key)
+        if stale:
+            return WorkshopEngagementCards.model_validate(stale)
+        return result
+
     ph._db_set(db, cache_key, result.model_dump())
     return result
 

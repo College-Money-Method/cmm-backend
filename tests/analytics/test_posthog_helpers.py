@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.analytics import posthog as ph
+from src.analytics import posthog_batched as phb
 from src.analytics.schemas import TrendMetric, FunnelStep, TopBreakdown
 
 
@@ -68,6 +69,20 @@ def test_cache_not_expired_at_boundary():
     """Entries just within TTL (29 min old) should still be returned."""
     ph._cache["k3"] = ({"result": "fresh"}, datetime.datetime.now(timezone.utc) - datetime.timedelta(minutes=29))
     assert ph._get("k3") == {"result": "fresh"}
+
+
+# ── _db_get force (Refresh button cache bypass) ────────────────────────────────
+
+def test_db_get_returns_cached_when_not_forced():
+    """db=None path: a warm in-process entry is returned normally."""
+    ph._set("fk", {"v": 1})
+    assert ph._db_get(None, "fk", None) == {"v": 1}
+
+
+def test_db_get_force_bypasses_cache():
+    """force=True must treat a warm entry as a miss so the caller re-queries."""
+    ph._set("fk", {"v": 1})
+    assert ph._db_get(None, "fk", None, force=True) is None
 
 
 # ── _school_filter ────────────────────────────────────────────────────────────
@@ -191,3 +206,29 @@ def test_get_top_breakdown_respects_limit():
     with patch("src.analytics.posthog._query", return_value=many):
         rows = ph.get_top_breakdown("key", "proj", "search_query", "query", limit=5)
     assert len(rows) <= 5
+
+
+# ── Batched helpers: force_refresh bypasses the cache ──────────────────────────
+
+_BATCHED_TREND_ROWS = [["2026-06-10T00:00:00", 5]]
+
+
+def test_batched_trends_uses_cache_then_force_refresh_requeries():
+    series = [{"key": "a", "event": "$pageview"}]
+    with patch("src.analytics.posthog.get_hogql_query", return_value=_BATCHED_TREND_ROWS) as mq:
+        phb.get_batched_trends("k", "p", series, date_from="-1d")  # cold → queries + caches
+        phb.get_batched_trends("k", "p", series, date_from="-1d")  # warm → cache hit
+        assert mq.call_count == 1
+        phb.get_batched_trends("k", "p", series, date_from="-1d", force_refresh=True)  # bypass
+        assert mq.call_count == 2
+
+
+def test_batched_breakdowns_force_refresh_requeries():
+    specs = [{"key": "b", "event": "search_query", "prop": "query"}]
+    rows = [["b", "fafsa", 3.0]]
+    with patch("src.analytics.posthog.get_hogql_query", return_value=rows) as mq:
+        phb.get_batched_breakdowns("k", "p", specs, date_from="-1d")  # cold
+        phb.get_batched_breakdowns("k", "p", specs, date_from="-1d")  # cache hit
+        assert mq.call_count == 1
+        phb.get_batched_breakdowns("k", "p", specs, date_from="-1d", force_refresh=True)
+        assert mq.call_count == 2

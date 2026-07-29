@@ -373,3 +373,46 @@ def test_app_imports_and_has_admin_routes():
     assert any("/api/v1/analytics/admin/big-picture" in r for r in routes)
     assert any("/api/v1/analytics/admin/whats-working" in r for r in routes)
     assert any("/api/v1/analytics/admin/geographic" in r for r in routes)
+
+
+# ── Forced-refresh partial-outage protection (workshops-detail helper) ─────────
+
+def test_workshops_detail_ph_force_partial_outage_keeps_complete_cache():
+    """A forced refresh (force=True) bypasses the cache read and re-queries. If
+    PostHog PARTIALLY fails, the assembled partial result must NOT overwrite a
+    previously-complete cache entry — the stale-but-complete entry is served."""
+    from src.analytics import posthog as ph
+    from src.analytics.router import _query_workshops_detail_ph
+
+    ph._cache.clear()
+    sid = str(SCHOOL_A)
+
+    def all_ok(api_key, project_id, query):
+        if "countIf(event = '$pageview') AS visits" in query:
+            return [[100, 50, 20]]                       # site totals
+        if "GROUP BY properties.webinar_id" in query and "video_session_end" in query:
+            return [["w1", 5, 80.0]]                     # recording views
+        if "workshop_detail_view" in query:
+            return [["w1", 3]]                           # detail views
+        if "properties.via = 'workshop'" in query:
+            return [["w1", 2]]                           # resource views
+        return []
+
+    # 1) Cold call with everything OK → populates the in-process cache (db=None).
+    with patch("src.analytics.posthog.get_hogql_query", side_effect=all_ok):
+        good = _query_workshops_detail_ph("k", "p", None, sid, "-30d", None, None)
+    assert good[2] == {"w1": 3}      # detail_map complete
+    assert len(ph._cache) == 1
+
+    # 2) Forced refresh while the detail-views query is down (partial outage).
+    def partial(api_key, project_id, query):
+        if "workshop_detail_view" in query:
+            raise RuntimeError("posthog down")
+        return all_ok(api_key, project_id, query)
+
+    with patch("src.analytics.posthog.get_hogql_query", side_effect=partial):
+        forced = _query_workshops_detail_ph("k", "p", None, sid, "-30d", None, None, force=True)
+
+    # Stale COMPLETE entry served — detail_map preserved, not clobbered to {}.
+    assert forced[2] == {"w1": 3}
+    assert forced[0] == good[0]      # site totals preserved
