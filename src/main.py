@@ -50,6 +50,7 @@ from src.surveys.router import router as surveys_router
 from src.surveys.config_router import router as survey_configs_router
 from src.zoom.webhook_router import router as zoom_webhook_router
 from src.content.translation_router import router as translation_router
+from src.content.video_cc_router import router as video_cc_router
 
 
 @asynccontextmanager
@@ -93,6 +94,7 @@ app.include_router(surveys_router)
 app.include_router(survey_configs_router)
 app.include_router(zoom_webhook_router)
 app.include_router(translation_router)
+app.include_router(video_cc_router)
 
 
 @app.get("/health")

@@ -164,6 +164,19 @@ def _record_usage(
     )
 
 
+def record_translation_usage(
+    db: Session, context: str, locale: str, out: TranslationOutput, item_count: int
+) -> None:
+    """Public entry point to the translation usage ledger (no commit).
+
+    Lets translation callers outside this module — e.g. the Video CC utility,
+    which translates caption cues rather than content entities — record spend in
+    the same table, so `translation_usage` stays the single source of truth for
+    Bedrock cost and `get_by_context()` picks the new context up automatically.
+    """
+    _record_usage(db, context, locale, out, item_count)
+
+
 # Batch sizing. Per-call Haiku latency grows with batch size (a 50-string batch
 # is far slower than several small batches run in parallel), so we keep batches
 # SMALL and fan them out across the worker pool. Benchmarks on this account:

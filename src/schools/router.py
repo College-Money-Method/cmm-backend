@@ -47,12 +47,19 @@ _SCHOOL_NOT_FOUND_DETAIL = "We couldn't find your partnered school, contact Coll
 
 
 def _find_public_school(db, *, slug: str | None = None, school_id: uuid.UUID | None = None) -> School:
-    """Fetch a current-customer school for a public (no-auth) endpoint.
+    """Fetch a public-accessible school for a public (no-auth) endpoint.
 
-    Non-customer schools are hidden from public portal routes: they raise the
-    same 404 as a missing school so prospects can't be reached by direct URL.
+    Access is granted to current customers OR prospects an admin has explicitly
+    activated (is_cmm_website_activated) so they can be shared a preview link.
+    Everything else raises the same 404 as a missing school so non-activated
+    prospects can't be reached by direct URL.
     """
-    q = db.query(School).filter(School.is_current_customer.is_(True))
+    q = db.query(School).filter(
+        or_(
+            School.is_current_customer.is_(True),
+            School.is_cmm_website_activated.is_(True),
+        )
+    )
     if slug is not None:
         q = q.filter(or_(School.slug == slug, School.airtable_slug == slug))
     if school_id is not None:
