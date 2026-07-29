@@ -761,6 +761,12 @@ def get_workshop_engagement(
     ws_date = window_start.isoformat()
     we_date = window_end.isoformat()
 
+    # School scoping: CMM webinars are SHARED across schools, so events for one
+    # webinar_id span many schools. Without this clause the cards aggregate every
+    # school's activity — inflating the counts vs. the school-scoped Overview
+    # card and timeline tile (empty string for super_admin viewing all schools).
+    school_clause = ph._hogql_school_clause(sid)
+
     # Video aggregate stats (powers the "Video engagement" card).
     video_hogql = (
         "SELECT "
@@ -769,7 +775,7 @@ def get_workshop_engagement(
         "  avg(toFloat(ifNull(properties.percent_watched, '0'))) AS avg_percent_watched "
         "FROM events "
         f"WHERE event = 'video_session_end' "
-        f"  AND properties.webinar_id = '{webinar_id}' "
+        f"  AND properties.webinar_id = '{webinar_id}'{school_clause} "
         f"  AND timestamp >= toDate('{ws_date}') "
         f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
     )
@@ -781,7 +787,7 @@ def get_workshop_engagement(
         "FROM events "
         f"WHERE event = 'resource_viewed' "
         f"  AND properties.via = 'workshop' "
-        f"  AND properties.from = '{webinar_id}' "
+        f"  AND properties.from = '{webinar_id}'{school_clause} "
         f"  AND timestamp >= toDate('{ws_date}') "
         f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY "
         "  AND properties.asset_name IS NOT NULL "

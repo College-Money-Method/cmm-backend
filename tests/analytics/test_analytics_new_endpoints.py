@@ -363,6 +363,40 @@ class TestWorkshopTimeline:
         assert mock_reg.called
 
 
+# ── /workshop-engagement — school scoping (shared webinars) ──────────────────
+
+class TestWorkshopEngagementSchoolScoping:
+    """CMM webinars are shared across schools, so a webinar_id's events span many
+    schools. Both the video and resources queries MUST scope to the counselor's
+    school — otherwise the cards aggregate every school's activity (the bug where
+    the 'Workshop Resources Used' card overcounted vs. the school-scoped tile)."""
+
+    def test_both_queries_include_school_clause(self, configured):
+        wid = uuid.uuid4()
+        webinar = {
+            "webinar_id": str(wid),
+            "workshop_name": "FAFSA 101",
+            "start_datetime": datetime(2026, 6, 1, 18, 0, tzinfo=timezone.utc),
+        }
+        captured: list[str] = []
+
+        def spy(api_key, project_id, query):
+            captured.append(query)
+            return []
+
+        with patch("src.analytics.router.get_webinar_by_id", return_value=webinar), \
+             patch("src.analytics.posthog.get_hogql_query", side_effect=spy):
+            resp = _hub_client().get(
+                f"/api/v1/analytics/workshop-engagement?webinar_id={wid}"
+                "&date_from=2026-05-04&date_to=2026-06-29"
+            )
+
+        assert resp.status_code == 200
+        assert len(captured) == 2  # video + resources
+        clause = f"properties.school_id = '{SCHOOL_A}'"
+        assert all(clause in q for q in captured), captured
+
+
 # ── Smoke: app imports cleanly with admin router mounted ─────────────────────
 
 def test_app_imports_and_has_admin_routes():
