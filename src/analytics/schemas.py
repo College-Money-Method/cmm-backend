@@ -299,6 +299,8 @@ class TranslationLocaleStat(BaseModel):
 class TranslationContextStat(BaseModel):
     context: str
     cost_usd: float
+    input_tokens: int
+    output_tokens: int
     invocations: int
 
 

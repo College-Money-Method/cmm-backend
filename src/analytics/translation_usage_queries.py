@@ -71,13 +71,21 @@ def get_by_context(db: Session) -> list[dict]:
         select(
             TranslationUsage.context,
             func.sum(TranslationUsage.cost_usd),
+            func.sum(TranslationUsage.input_tokens),
+            func.sum(TranslationUsage.output_tokens),
             func.count(),
         )
         .group_by(TranslationUsage.context)
         .order_by(func.sum(TranslationUsage.cost_usd).desc())
     ).all()
     return [
-        {"context": r[0], "cost_usd": float(r[1]), "invocations": int(r[2])}
+        {
+            "context": r[0],
+            "cost_usd": float(r[1]),
+            "input_tokens": int(r[2]),
+            "output_tokens": int(r[3]),
+            "invocations": int(r[4]),
+        }
         for r in rows
     ]
 
