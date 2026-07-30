@@ -33,8 +33,7 @@ from src.content.video_caption_archive import (
     resolve_transcript_key,
 )
 from src.content.video_cc_jobs import create_job, get_job, watch
-from src.content.video_cc_service import publish_edited_track, run_job
-from src.content.vtt_parser import VttError
+from src.content.video_cc_service import run_job
 from src.db.deps import DbDep
 from src.integrations.vimeo import VimeoError, extract_video_ref
 
@@ -86,15 +85,6 @@ class TranscriptDownload(BaseModel):
     expires_in_seconds: int
 
 
-class TrackPublished(BaseModel):
-    locale: str
-    language: str
-    vimeo_code: str
-    track_uri: str
-    replaced: bool
-    cue_count: int
-
-
 @router.get("/videos", response_model=list[VideoRecordOut])
 def list_processed_videos(_admin: AdminDep, db: DbDep = None) -> list[VideoRecordOut]:
     """Videos that have been through Video CC, most recently run first."""
@@ -131,53 +121,6 @@ def download_transcript(
 
     return TranscriptDownload(
         url=url, filename=f"{slug}-{label}.vtt", expires_in_seconds=_DOWNLOAD_TTL
-    )
-
-
-@router.post("/videos/{video_id}/tracks", response_model=TrackPublished)
-async def publish_track(
-    video_id: str,
-    _admin: AdminDep,
-    locale: str = Form(..., description="Target locale of the edited track, e.g. 'es'"),
-    privacy_hash: str | None = Form(None, description="Required for unlisted videos"),
-    file: UploadFile = File(..., description="Edited .vtt/.srt for this language"),
-    db: DbDep = None,
-) -> TrackPublished:
-    """Publish a hand-edited caption file to Vimeo without translating it.
-
-    For the download → fix a line → re-publish loop. Unlike ``POST /jobs``, the
-    file is treated as the finished track for ``locale``, not as English source.
-    """
-    targets = _parse_locales(locale)
-    if len(targets) != 1:
-        raise HTTPException(status_code=400, detail="Provide exactly one locale.")
-
-    # Raises 400 on an empty, oversized or non-UTF-8 file.
-    content = await _read_upload(file)
-
-    # The record stores the hash, so the caller usually need not supply one.
-    record = get_record(db, video_id)
-    resolved_hash = privacy_hash or (record.privacy_hash if record else None)
-    video_ref = f"{video_id}:{resolved_hash}" if resolved_hash else video_id
-
-    try:
-        result = await asyncio.to_thread(
-            publish_edited_track, db, video_ref, targets[0], content
-        )
-    except (VimeoError, VttError) as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    logger.info(
-        "video_cc: published edited %s track for video=%s", targets[0], video_id
-    )
-    return TrackPublished(
-        locale=targets[0],
-        language=result["language"],
-        vimeo_code=result["vimeo_code"],
-        track_uri=result["track_uri"],
-        replaced=result["replaced"],
-        cue_count=result["cue_count"],
     )
 
 
