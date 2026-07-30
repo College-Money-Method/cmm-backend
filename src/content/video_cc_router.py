@@ -55,16 +55,23 @@ async def start_job(
     _admin: AdminDep,
     video: str = Form(..., description="Vimeo URL, embed code, or numeric video ID"),
     locales: str = Form(..., description="Comma-separated target locale codes, e.g. 'es,zh'"),
-    file: UploadFile = File(..., description="Source transcript (.vtt or .srt)"),
+    file: UploadFile | None = File(
+        None, description="Optional transcript (.vtt/.srt); omit to use the video's own track"
+    ),
 ) -> JobStartResponse:
-    """Validate input, start the translation job, return its id for streaming."""
+    """Validate input, start the translation job, return its id for streaming.
+
+    With no ``file``, the English track already on the video (Vimeo's AI captions
+    or a previous upload) is downloaded and used as the translation source.
+    """
     try:
         video_ref = extract_video_ref(video)
     except VimeoError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     targets = _parse_locales(locales)
-    content = await _read_upload(file)
+    # An empty multipart part arrives as an UploadFile with no filename.
+    content = await _read_upload(file) if file and file.filename else None
 
     job = create_job(video_ref)
     task = asyncio.create_task(run_job(job, content, targets))
@@ -72,7 +79,11 @@ async def start_job(
     task.add_done_callback(_running.discard)
 
     logger.info(
-        "video_cc: job %s started — video=%s locales=%s", job.id, video_ref, targets
+        "video_cc: job %s started — video=%s locales=%s source=%s",
+        job.id,
+        video_ref,
+        targets,
+        "upload" if content else "vimeo",
     )
     return JobStartResponse(job_id=job.id, video_ref=video_ref, locales=targets)
 

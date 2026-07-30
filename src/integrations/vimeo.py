@@ -1,9 +1,12 @@
 """Vimeo API client — text track (closed caption) management.
 
-Auth is a personal access token (settings.vimeo_access_token) with the
-``public private edit`` scopes. Vimeo evaluates permissions against the token
-owner's *team role*, not video ownership, so a team member with edit rights can
-manage tracks on videos owned by the team account.
+Auth is a personal access token (settings.vimeo_access_token) carrying the
+scopes in ``REQUIRED_SCOPES`` below. Scopes are fixed at token creation, so a
+missing one means generating a new token.
+
+Permissions are evaluated against the token owner's *team role*, not video
+ownership, so a team member with edit rights can manage tracks on videos owned
+by the team account.
 
 Text track upload is a two-step flow:
   1. POST /videos/{id}/texttracks  → creates the track record, returns an
@@ -27,6 +30,15 @@ logger = logging.getLogger(__name__)
 
 _API_BASE = "https://api.vimeo.com"
 _ACCEPT = "application/vnd.vimeo.*+json;version=3.4"
+
+# Every scope this module needs, by call:
+#   public, private  → GET /videos/{id}, GET .../texttracks
+#   edit + upload    → POST .../texttracks (Vimeo counts writing the caption
+#                      FILE as an upload, so 'edit' alone 403s)
+#   delete           → DELETE .../texttracks/{id}, used when replacing a track
+# Scopes are fixed when a personal access token is generated and cannot be
+# widened later — a missing one means regenerating the token.
+REQUIRED_SCOPES = "public private edit upload delete"
 
 # Vimeo API is slow on writes; uploads of a large VTT can take a few seconds.
 _TIMEOUT = 30.0
@@ -115,9 +127,19 @@ def _describe_error(resp: httpx.Response, path: str) -> str:
     if resp.status_code == 404:
         return "Video not found on Vimeo, or your account cannot see it."
     if resp.status_code == 403:
+        # Two very different causes share this status: a missing token SCOPE
+        # (fixable by regenerating the token) versus insufficient role/permission
+        # on the video (needs a team-role change). Vimeo names the scope in
+        # developer_message, so lead with that rather than guessing.
+        if "scope" in detail.lower():
+            return (
+                f"Vimeo denied access (403): {detail.rstrip('.')}. Regenerate the "
+                f"personal access token at developer.vimeo.com with all of: "
+                f"{REQUIRED_SCOPES}."
+            )
         return (
-            "Vimeo denied access (403). Your token's account does not have edit "
-            f"rights on this video. {detail}".strip()
+            "Vimeo denied access (403). Your account does not have edit rights on "
+            f"this video. {detail}".strip()
         )
     if resp.status_code == 401:
         return "Vimeo rejected the access token (401). It may have been revoked."
@@ -126,12 +148,10 @@ def _describe_error(resp: httpx.Response, path: str) -> str:
 
 # Our internal locale codes (src.config.SUPPORTED_LOCALES) do not always match
 # Vimeo's text-track codes. Candidates are tried in order against Vimeo's live
-# list; the first that exists wins. Listed explicitly rather than prefix-matched
-# because a "zh" prefix would happily match "zh-Hant" (Traditional) when the
-# caller asked for Mandarin Simplified.
-# Only locales whose exact code is absent or ambiguous on Vimeo need an entry —
-# everything else falls through to an exact match. "zh" is the ambiguous one:
-# Vimeo's bare "zh" is generic "Chinese", so Mandarin is pinned to Simplified.
+# list; the first that exists wins. Only locales whose exact code is absent or
+# ambiguous on Vimeo need an entry — everything else falls through to an exact
+# match. "zh" is the ambiguous one: Vimeo's bare "zh" is generic "Chinese", so
+# Mandarin is pinned to Simplified rather than prefix-matching into "zh-Hant".
 _LANGUAGE_CANDIDATES: dict[str, tuple[str, ...]] = {
     "zh": ("zh-Hans", "zh-CN", "zh"),
     "zh-Hant": ("zh-Hant", "zh-TW"),
@@ -177,6 +197,17 @@ def resolve_language(locale: str, fallback_name: str) -> tuple[str, str]:
     raise VimeoError(f"Vimeo does not offer a caption language matching '{locale}'.")
 
 
+def missing_scopes() -> list[str]:
+    """Return required scopes the configured token lacks (empty when fine).
+
+    Cheap pre-flight: a caption job otherwise fails halfway, after paying for
+    translation, on a 403 that only names one missing scope at a time.
+    """
+    resp = _request("GET", "/oauth/verify")
+    granted = set((resp.json().get("scope") or "").split())
+    return [s for s in REQUIRED_SCOPES.split() if s not in granted]
+
+
 def get_video_name(video_ref: str) -> str:
     """Return the video's title — also serves as an existence + access check.
 
@@ -187,12 +218,15 @@ def get_video_name(video_ref: str) -> str:
     return resp.json().get("name") or f"Video {video_ref.split(':')[0]}"
 
 
-def list_text_tracks(video_ref: str) -> list[dict]:
-    """Return existing text tracks: ``[{uri, language, name, type}, ...]``."""
+def list_text_tracks(
+    video_ref: str, fields: str = "uri,language,name,type,active"
+) -> list[dict]:
+    """Return existing text tracks: ``[{uri, language, name, type}, ...]``.
+
+    ``fields`` is widened by callers that also need the pre-signed ``link``.
+    """
     resp = _request(
-        "GET",
-        f"/videos/{video_ref}/texttracks",
-        params={"fields": "uri,language,name,type,active"},
+        "GET", f"/videos/{video_ref}/texttracks", params={"fields": fields}
     )
     return resp.json().get("data") or []
 
@@ -200,6 +234,58 @@ def list_text_tracks(video_ref: str) -> list[dict]:
 def delete_text_track(track_uri: str) -> None:
     """Delete a text track by its API uri (e.g. ``/videos/123/texttracks/456``)."""
     _request("DELETE", track_uri)
+
+
+def download_source_track(video_ref: str, language: str = "en") -> tuple[str, str]:
+    """Fetch an existing track's WebVTT content to use as the translation source.
+
+    Lets an admin translate Vimeo's own (AI or uploaded) English captions without
+    re-uploading a transcript by hand.
+
+    Selection is deterministic: a video can carry several tracks in the same
+    language, so the ``active`` one wins — that is what the player actually shows
+    — falling back to the first listed.
+
+    Returns:
+        ``(vtt_content, track_name)``.
+
+    Raises:
+        VimeoError: when the video has no track in ``language``, or the download
+            fails / returns something that is not WebVTT.
+    """
+    candidates = [
+        t
+        for t in list_text_tracks(video_ref, fields="uri,language,name,type,active,link")
+        if (t.get("language") or "").lower().startswith(language.lower())
+    ]
+    if not candidates:
+        raise VimeoError(
+            f"This video has no {language} caption track to translate from. "
+            "Generate one on Vimeo first, or upload a transcript file instead."
+        )
+
+    track = next((t for t in candidates if t.get("active")), candidates[0])
+    link = track.get("link")
+    if not link:
+        raise VimeoError(
+            "Vimeo did not return a download link for the existing caption track."
+        )
+
+    # Pre-signed URL — sending the Authorization header would be rejected.
+    try:
+        resp = httpx.get(link, timeout=_TIMEOUT, follow_redirects=True)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise VimeoError(f"Could not download the existing caption track: {exc}") from exc
+
+    content = resp.text
+    if not content.lstrip("﻿").startswith("WEBVTT"):
+        raise VimeoError(
+            "The existing caption track did not come back as WebVTT — upload a "
+            "transcript file instead."
+        )
+
+    return content, track.get("name") or f"{language} captions"
 
 
 def upload_text_track(

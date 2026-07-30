@@ -62,13 +62,19 @@ def stubs(monkeypatch):
         lambda db, context, locale, out, count: state["usage"].append((context, locale, count)),
     )
     monkeypatch.setattr(svc, "get_session_factory", lambda: (lambda: state["session"]))
+    monkeypatch.setattr(svc.vimeo, "missing_scopes", lambda: [])
     monkeypatch.setattr(svc.vimeo, "get_video_name", lambda ref: "FAFSA Walkthrough")
     monkeypatch.setattr(
         svc.vimeo,
         "resolve_language",
         lambda locale, name: {"es": ("es", "Spanish"), "zh": ("zh-Hans", "Chinese")}[locale],
     )
-    monkeypatch.setattr(svc.vimeo, "list_text_tracks", lambda ref: [])
+    monkeypatch.setattr(svc.vimeo, "list_text_tracks", lambda ref, **kw: [])
+    monkeypatch.setattr(
+        svc.vimeo,
+        "download_source_track",
+        lambda ref, lang="en": (VTT, "Vimeo AI captions.vtt"),
+    )
     monkeypatch.setattr(
         svc.vimeo, "delete_text_track", lambda uri: state["deleted"].append(uri)
     )
@@ -121,7 +127,7 @@ def test_existing_track_in_same_language_is_replaced(stubs, monkeypatch):
     monkeypatch.setattr(
         svc.vimeo,
         "list_text_tracks",
-        lambda ref: [
+        lambda ref, **kw: [
             {"uri": "/videos/1/texttracks/old-es", "language": "es"},
             {"uri": "/videos/1/texttracks/keep-fr", "language": "fr"},
         ],
@@ -228,3 +234,158 @@ def test_cues_missing_from_the_model_response_keep_english(stubs, monkeypatch):
     _, body = stubs["uploads"][0]
     assert "[es] Cue number 1." in body
     assert "Cue number 2." in body  # untranslated, still present
+
+
+# ── Vimeo-sourced captions (no uploaded file) ─────────────────────────────────
+
+
+def test_uses_the_videos_own_track_when_no_file_is_uploaded(stubs):
+    """vtt_content=None means "translate what's already on the video"."""
+    job = create_job("123")
+    asyncio.run(svc.run_job(job, None, ["es"]))
+
+    assert job.status == "completed"
+    source = next(e for e in job.events if e["type"] == "source")
+    assert source["origin"] == "vimeo"
+    assert source["name"] == "Vimeo AI captions.vtt"
+    assert "[es] Cue number 1." in stubs["uploads"][0][1]
+
+
+def test_uploaded_file_takes_precedence_over_the_vimeo_track(stubs, monkeypatch):
+    monkeypatch.setattr(
+        svc.vimeo,
+        "download_source_track",
+        lambda ref, lang="en": ("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nWRONG SOURCE\n", "x"),
+    )
+    job = create_job("123")
+    asyncio.run(svc.run_job(job, VTT, ["es"]))
+
+    source = next(e for e in job.events if e["type"] == "source")
+    assert source["origin"] == "upload"
+    assert "WRONG SOURCE" not in stubs["uploads"][0][1]
+
+
+def test_video_without_a_source_track_fails_before_any_spend(stubs, monkeypatch):
+    def no_track(ref, lang="en"):
+        raise VimeoError(f"This video has no {lang} caption track to translate from.")
+
+    monkeypatch.setattr(svc.vimeo, "download_source_track", no_track)
+
+    job = create_job("123")
+    asyncio.run(svc.run_job(job, None, ["es"]))
+
+    assert job.status == "failed"
+    assert job.events[-1]["type"] == "error"
+    assert "no en caption track" in job.events[-1]["error"]
+    assert not stubs["usage"] and not stubs["uploads"]
+
+
+# ── Chunk-level resilience ────────────────────────────────────────────────────
+
+
+def test_transient_chunk_failure_is_retried(stubs, monkeypatch):
+    """Haiku returns malformed JSON non-deterministically; a retry usually works."""
+    calls = {"n": 0}
+
+    def flaky(fields, locale):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TranslationError("Bedrock response was not valid JSON")
+        return TranslationOutput(
+            fields={k: f"[{locale}] {v}" for k, v in fields.items()},
+            input_tokens=10,
+            output_tokens=20,
+            model_id="stub",
+        )
+
+    monkeypatch.setattr(svc, "translate_fields", flaky)
+
+    job = create_job("123")
+    asyncio.run(svc.run_job(job, VTT, ["es"]))
+
+    assert job.status == "completed"
+    assert calls["n"] == 2, "the failed chunk should be retried once"
+    assert "[es] Cue number 1." in stubs["uploads"][0][1]
+
+
+def test_one_permanently_bad_chunk_still_publishes_the_rest(stubs, monkeypatch):
+    """A chunk that never parses leaves its cues in English, not the whole track."""
+    # Force several chunks so one can fail while others succeed.
+    monkeypatch.setattr(svc, "_CUE_MAX_COUNT", 3)
+
+    def selective(fields, locale):
+        if "0" in fields:  # always fail the chunk containing the first cue
+            raise TranslationError("Bedrock response was not valid JSON")
+        return TranslationOutput(
+            fields={k: f"[{locale}] {v}" for k, v in fields.items()},
+            input_tokens=10,
+            output_tokens=20,
+            model_id="stub",
+        )
+
+    monkeypatch.setattr(svc, "translate_fields", selective)
+
+    job = create_job("123")
+    asyncio.run(svc.run_job(job, VTT, ["es"]))
+
+    assert job.status == "completed"
+    assert "language_warning" in types_of(job)
+    _, body = stubs["uploads"][0]
+    assert "Cue number 1." in body          # untranslated, preserved
+    assert "[es] Cue number 12." in body    # other chunks translated
+
+
+def test_every_chunk_failing_reports_an_error_instead_of_english_captions(stubs, monkeypatch):
+    """Systemic failure must not silently publish an all-English 'translation'."""
+
+    def always_bad(fields, locale):
+        raise TranslationError("Bedrock response was not valid JSON")
+
+    monkeypatch.setattr(svc, "translate_fields", always_bad)
+
+    job = create_job("123")
+    asyncio.run(svc.run_job(job, VTT, ["es"]))
+
+    assert job.status == "failed"
+    assert "language_error" in types_of(job)
+    assert not stubs["uploads"]
+
+
+def test_blank_model_output_counts_as_missing_and_keeps_english(stubs, monkeypatch):
+    """A "" value must fall back to source text, not publish an empty caption."""
+    monkeypatch.setattr(
+        svc,
+        "translate_fields",
+        lambda fields, locale: TranslationOutput(
+            fields={k: ("" if k == "3" else f"[{locale}] {v}") for k, v in fields.items()},
+            input_tokens=10,
+            output_tokens=20,
+            model_id="stub",
+        ),
+    )
+
+    job = create_job("123")
+    asyncio.run(svc.run_job(job, VTT, ["es"]))
+
+    warning = next(e for e in job.events if e["type"] == "language_warning")
+    assert warning["missing_cues"] == 1
+    body = stubs["uploads"][0][1]
+    assert "Cue number 4." in body  # cue index 3 → "Cue number 4."
+    # No timing line may be left without text.
+    import re as _re
+    for block in _re.split(r"\n\s*\n", body.strip()):
+        if "-->" in block:
+            assert block.strip().split("\n")[-1].strip(), f"empty cue: {block!r}"
+
+
+def test_token_missing_a_scope_fails_before_spending_anything(stubs, monkeypatch):
+    """A scope gap used to surface only at upload, after paying for translation."""
+    monkeypatch.setattr(svc.vimeo, "missing_scopes", lambda: ["upload", "delete"])
+
+    job = create_job("123")
+    asyncio.run(svc.run_job(job, VTT, ["es"]))
+
+    assert job.status == "failed"
+    assert job.events[-1]["type"] == "error"
+    assert "upload, delete" in job.events[-1]["error"]
+    assert not stubs["usage"] and not stubs["uploads"]
