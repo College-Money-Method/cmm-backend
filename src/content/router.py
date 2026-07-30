@@ -93,10 +93,15 @@ from src.content.schemas import (
 )
 from src.config import settings
 from src.db.deps import DbDep
+from src.storage.asset_url import s3_object_url
 from src.storage.models import StorageFile
 from src.utils.tiptap import extract_text
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
+
+# Uploaded assets use unique (uuid) keys, so they are immutable and can be
+# cached at the edge for a long time. Re-uploads produce a new key/URL.
+_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 
 def _calculate_read_time(content: str | None, summary: str | None = None) -> int | None:
@@ -517,7 +522,7 @@ async def upload_topic_image(topic_id: uuid.UUID, file: UploadFile, _admin: Admi
 
     ext_map = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp"}
     ext = ext_map.get(file.content_type, "bin")
-    s3_key = f"assets/topics/{topic_id}/image.{ext}"
+    s3_key = f"assets/topics/{topic_id}/{uuid.uuid4()}.{ext}"
 
     data = await file.read()
     s3 = boto3.client(
@@ -531,8 +536,9 @@ async def upload_topic_image(topic_id: uuid.UUID, file: UploadFile, _admin: Admi
         Key=s3_key,
         Body=data,
         ContentType=file.content_type,
+        CacheControl=_IMMUTABLE_CACHE_CONTROL,
     )
-    obj.image_url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
+    obj.image_url = s3_object_url(s3_key)
     db.commit()
     return _load_topic_detail(db, topic_id)
 
@@ -1254,7 +1260,7 @@ async def upload_asset_image(asset_id: uuid.UUID, file: UploadFile, _admin: Admi
 
     ext_map = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp"}
     ext = ext_map.get(file.content_type, "bin")
-    s3_key = f"assets/content/{asset_id}/image.{ext}"
+    s3_key = f"assets/content/{asset_id}/{uuid.uuid4()}.{ext}"
 
     data = await file.read()
     s3 = boto3.client(
@@ -1268,8 +1274,9 @@ async def upload_asset_image(asset_id: uuid.UUID, file: UploadFile, _admin: Admi
         Key=s3_key,
         Body=data,
         ContentType=file.content_type,
+        CacheControl=_IMMUTABLE_CACHE_CONTROL,
     )
-    obj.image_url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
+    obj.image_url = s3_object_url(s3_key)
     db.commit()
     return _load_asset_detail(db, asset_id)
 
@@ -1282,7 +1289,7 @@ async def upload_asset_file(asset_id: uuid.UUID, file: UploadFile, _admin: Admin
         raise HTTPException(status_code=404, detail="Content asset not found")
 
     filename = file.filename or "file"
-    s3_key = f"resources/{asset_id}/{filename}"
+    s3_key = f"resources/{asset_id}/{uuid.uuid4()}/{filename}"
     mime_type = file.content_type or "application/octet-stream"
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else None
 
@@ -1298,11 +1305,13 @@ async def upload_asset_file(asset_id: uuid.UUID, file: UploadFile, _admin: Admin
         Key=s3_key,
         Body=data,
         ContentType=mime_type,
+        CacheControl=_IMMUTABLE_CACHE_CONTROL,
     )
-    s3_url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
+    s3_url = s3_object_url(s3_key)
     obj.link = s3_url
 
-    # Upsert storage_files registry (same s3_key = re-upload of this asset)
+    # Register in storage_files. Keys are now unique per upload (versioned), so
+    # this records each version; the lookup stays for safety/back-compat.
     existing = db.execute(select(StorageFile).where(StorageFile.s3_key == s3_key)).scalar_one_or_none()
     if existing:
         existing.s3_url = s3_url

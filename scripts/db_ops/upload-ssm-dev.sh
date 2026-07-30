@@ -7,6 +7,7 @@
 set -euo pipefail
 
 ENV="${1:?Usage: $0 <dev|prod>}"
+SPECIFIC_KEY="${2:-}"
 
 if [[ "$ENV" != "dev" && "$ENV" != "prod" ]]; then
   echo "Error: environment must be 'dev' or 'prod'"
@@ -37,6 +38,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   value="${line#*=}"
   key="$(echo "$key" | xargs)"
   [[ -z "$key" ]] && continue
+  [[ -n "$SPECIFIC_KEY" && "$key" != "$SPECIFIC_KEY" ]] && continue
 
   aws ssm put-parameter \
     --name "${PREFIX}/${key}" \

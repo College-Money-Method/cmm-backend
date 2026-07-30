@@ -7,13 +7,15 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from src.storage.asset_url import CdnUrl
+
 
 class StorageFileOut(BaseModel):
     model_config = {"from_attributes": True}
 
     id: uuid.UUID
     s3_key: str
-    s3_url: str
+    s3_url: CdnUrl
     original_filename: str
     extension: str | None
     mime_type: str | None

@@ -5,6 +5,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from src.storage.asset_url import CdnUrl
+
 
 class CohortSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -53,8 +55,8 @@ class SchoolListItem(BaseModel):
     enrollment_range: str | None = None
     is_current_customer: bool = False
     is_cmm_website_activated: bool = False
-    logo_url: str | None = None
-    logo_thumb_url: str | None = None
+    logo_url: CdnUrl = None
+    logo_thumb_url: CdnUrl = None
     slug: str | None = None
     # Read from ORM but excluded from response — used only to compute effective slug below
     airtable_slug: str | None = Field(default=None, exclude=True)
@@ -99,7 +101,7 @@ class SchoolCreate(BaseModel):
     grade_set_id: uuid.UUID | None = None
     is_current_customer: bool = False
     is_cmm_website_activated: bool = False
-    logo_url: str | None = None
+    logo_url: CdnUrl = None
     school_resource_center_url: str | None = None
     appointlet_link: str | None = None
     calendar_link: str | None = None
@@ -124,7 +126,7 @@ class SchoolUpdate(BaseModel):
     grade_set_id: uuid.UUID | None = None
     is_current_customer: bool | None = None
     is_cmm_website_activated: bool | None = None
-    logo_url: str | None = None
+    logo_url: CdnUrl = None
     cmm_website_password: str | None = None
     school_resource_center_url: str | None = None
     appointlet_link: str | None = None
@@ -197,8 +199,8 @@ class SchoolPublic(BaseModel):
         return self
     city: str | None = None
     state: str | None = None
-    logo_url: str | None = None
-    logo_thumb_url: str | None = None
+    logo_url: CdnUrl = None
+    logo_thumb_url: CdnUrl = None
     is_current_customer: bool = False
     grade_set_id: uuid.UUID | None = None
     has_password: bool = False

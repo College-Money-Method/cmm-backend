@@ -7,6 +7,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from src.storage.asset_url import CdnUrl
+
 
 # ── Tags ─────────────────────────────────────────────────────────────────────
 
@@ -110,8 +112,8 @@ class ContentAssetSummary(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
-    image_url: str | None
-    link: str | None = None
+    image_url: CdnUrl
+    link: CdnUrl = None
     status: str = "draft"
     asset_type: AssetTypeOut | None
 
@@ -126,7 +128,7 @@ class TopicSummary(BaseModel):
     title: str
     slug: str
     description: str | None
-    image_url: str | None
+    image_url: CdnUrl
     status: str
     sort_order: int
     read_time_minutes: int | None = None
@@ -140,7 +142,7 @@ class TopicListItem(BaseModel):
     title: str
     slug: str
     description: str | None
-    image_url: str | None
+    image_url: CdnUrl
     status: str
     sort_order: int
     goal: GoalSummary | None
@@ -159,7 +161,7 @@ class TopicDetail(BaseModel):
     content: str | None
     action_items: list[str]
     video_embed_code: str | None
-    image_url: str | None
+    image_url: CdnUrl
     status: str
     sort_order: int
     created_at: datetime
@@ -181,7 +183,7 @@ class TopicCreate(BaseModel):
     content: str | None = None
     action_items: list[str] | None = None
     video_embed_code: str | None = None
-    image_url: str | None = None
+    image_url: CdnUrl = None
     status: str = "draft"
     goal_id: uuid.UUID | None = None
     sort_order: int = 0
@@ -203,7 +205,7 @@ class TopicUpdate(BaseModel):
     content: str | None = None
     action_items: list[str] | None = None
     video_embed_code: str | None = None
-    image_url: str | None = None
+    image_url: CdnUrl = None
     status: str | None = None
     goal_id: uuid.UUID | None = None
     sort_order: int | None = None
@@ -274,8 +276,8 @@ class ContentAssetListItem(BaseModel):
     status: str
     is_featured: bool
     is_public: bool = False
-    image_url: str | None
-    link: str | None
+    image_url: CdnUrl
+    link: CdnUrl
     asset_type: AssetTypeOut | None
     created_at: datetime
     updated_at: datetime | None = None
@@ -307,10 +309,10 @@ class ContentAssetDetail(BaseModel):
     summary: str | None
     content: str | None
     action_items: list[str]
-    link: str | None
+    link: CdnUrl
     embed_code: str | None
-    image_url: str | None
-    file_url: str | None
+    image_url: CdnUrl
+    file_url: CdnUrl
     is_featured: bool
     is_public: bool = False
     status: str
@@ -372,9 +374,9 @@ class ContentAssetCreate(BaseModel):
     asset_type_id: uuid.UUID | None = None
     description: str | None = None
     content: str | None = None
-    link: str | None = None
+    link: CdnUrl = None
     embed_code: str | None = None
-    image_url: str | None = None
+    image_url: CdnUrl = None
     is_featured: bool = False
     is_public: bool = False
     status: str = "draft"
@@ -398,9 +400,9 @@ class ContentAssetUpdate(BaseModel):
     summary: str | None = None
     content: str | None = None
     action_items: list[str] | None = None
-    link: str | None = None
+    link: CdnUrl = None
     embed_code: str | None = None
-    image_url: str | None = None
+    image_url: CdnUrl = None
     is_featured: bool | None = None
     is_public: bool | None = None
     status: str | None = None
@@ -525,7 +527,7 @@ class GradeConfigOut(BaseModel):
     bg_color: str | None
     page_title: str | None = None
     page_description: str | None = None
-    banner_image_url: str | None = None
+    banner_image_url: CdnUrl = None
     sort_order: int
     goals: list[GoalWithTopics]
     created_at: datetime
@@ -547,7 +549,7 @@ class GradeConfigSummary(BaseModel):
     bg_color: str | None
     page_title: str | None = None
     page_description: str | None = None
-    banner_image_url: str | None = None
+    banner_image_url: CdnUrl = None
     sort_order: int
     goal_ids: list[uuid.UUID]
 
@@ -564,7 +566,7 @@ class GradeConfigCreate(BaseModel):
     bg_color: str | None = None
     page_title: str | None = None
     page_description: str | None = None
-    banner_image_url: str | None = None
+    banner_image_url: CdnUrl = None
     sort_order: int = 0
 
 
@@ -576,7 +578,7 @@ class GradeConfigUpdate(BaseModel):
     bg_color: str | None = None
     page_title: str | None = None
     page_description: str | None = None
-    banner_image_url: str | None = None
+    banner_image_url: CdnUrl = None
     sort_order: int | None = None
 
 
@@ -683,7 +685,7 @@ class ResourceCategoryUpdate(BaseModel):
 class SubmissionCreate(BaseModel):
     name: str
     description: str | None = None
-    link: str | None = None
+    link: CdnUrl = None
     asset_type_id: str | None = None
     suggested_grades: str | None = None
     why_important: str | None = None
@@ -696,7 +698,7 @@ class SubmissionCreate(BaseModel):
 class SubmissionUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
-    link: str | None = None
+    link: CdnUrl = None
     asset_type_id: str | None = None
     suggested_grades: str | None = None
     why_important: str | None = None
@@ -710,8 +712,8 @@ class SubmissionOut(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
-    link: str | None
-    image_url: str | None
+    link: CdnUrl
+    image_url: CdnUrl
     asset_type: AssetTypeOut | None
     suggested_grades: str | None
     why_important: str | None

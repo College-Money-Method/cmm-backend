@@ -17,6 +17,10 @@ from src.auth.deps import CurrentUserDep
 from src.config import settings
 from src.content.models import ContentAsset
 from src.content.schemas import SubmissionCreate, SubmissionOut, SubmissionUpdate
+from src.storage.asset_url import s3_object_url
+
+# Uploaded files use unique (uuid) keys -> immutable, long edge-cacheable.
+_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 from src.db.deps import DbDep
 from src.storage.models import StorageFile
 
@@ -214,7 +218,7 @@ async def upload_submission_file(
         )
 
     filename = file.filename or "file"
-    s3_key = f"resources/{submission_id}/{filename}"
+    s3_key = f"resources/{submission_id}/{uuid.uuid4()}/{filename}"
     mime_type = file.content_type or "application/octet-stream"
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else None
 
@@ -230,8 +234,9 @@ async def upload_submission_file(
         Key=s3_key,
         Body=data,
         ContentType=mime_type,
+        CacheControl=_IMMUTABLE_CACHE_CONTROL,
     )
-    s3_url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
+    s3_url = s3_object_url(s3_key)
     obj.link = s3_url
 
     existing = db.execute(select(StorageFile).where(StorageFile.s3_key == s3_key)).scalar_one_or_none()

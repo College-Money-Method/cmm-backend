@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     s3_bucket_name: str = ""
 
+    # Public CDN base URL for serving S3 assets (e.g.
+    # "https://cdn.next.collegemoneymethod.com"). When set, asset URLs are
+    # rewritten from the raw S3 host to this CDN host at read time. Empty =
+    # fall back to direct S3 URLs (kill-switch). Swapping this value re-points
+    # all existing asset URLs with no data migration.
+    cdn_base_url: str = ""
+
     # AWS Bedrock — translation pipeline
     # Region for Bedrock API calls; defaults to the same region as S3/general AWS.
     bedrock_region: str = "us-east-1"

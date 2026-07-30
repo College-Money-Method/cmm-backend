@@ -18,7 +18,11 @@ from src.cycles.models import Cycle
 from src.schools.models import Contact, School, SchoolEnrollmentCycle
 from src.schools.logo_thumbnail import generate_logo_thumbnail
 from src.schools.slug_utils import unique_slug_db
+from src.storage.asset_url import s3_object_url, to_cdn_url
 from src.storage.s3_client import S3ClientDep
+
+# Logo objects use unique (uuid) keys, so they are immutable and long-cacheable.
+_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 from src.content.models import GradeSet
 from src.schools.schemas import (
     SchoolCreate,
@@ -353,8 +357,9 @@ async def upload_school_logo(
         Key=key,
         Body=content,
         ContentType=file.content_type,
+        CacheControl=_IMMUTABLE_CACHE_CONTROL,
     )
-    url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{key}"
+    url = s3_object_url(key)
 
     # Generate a small webp thumbnail for list views; fall back to the
     # full-size URL when the image can't be rasterized (e.g. SVG)
@@ -367,8 +372,9 @@ async def upload_school_logo(
             Key=thumb_key,
             Body=thumb_bytes,
             ContentType="image/webp",
+            CacheControl=_IMMUTABLE_CACHE_CONTROL,
         )
-        thumb_url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{thumb_key}"
+        thumb_url = s3_object_url(thumb_key)
 
     school = db.get(School, school_id)
     if school:
@@ -376,7 +382,7 @@ async def upload_school_logo(
         school.logo_thumb_url = thumb_url
         db.commit()
 
-    return {"url": url}
+    return {"url": to_cdn_url(url)}
 
 
 @router.get("/{school_id}", response_model=SchoolDetail)
