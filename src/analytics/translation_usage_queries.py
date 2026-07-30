@@ -60,7 +60,13 @@ def get_by_locale(db: Session) -> list[dict]:
 
 
 def get_by_context(db: Session) -> list[dict]:
-    """Spend grouped by content path (strings / topic / page / asset)."""
+    """Spend grouped by what was translated.
+
+    Contexts written by the pipelines: ``strings`` (site-wide DOM translation),
+    ``topic`` / ``page`` / ``asset`` (content entities), ``video_cc`` (caption
+    tracks). No whitelist here — a new context appears automatically. Display
+    names are mapped in the frontend; the stored codes are the data.
+    """
     rows = db.execute(
         select(
             TranslationUsage.context,
