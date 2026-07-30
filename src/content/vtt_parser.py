@@ -126,8 +126,9 @@ def _normalise_timing(timing: str) -> str:
 def serialize(doc: VttDocument, translations: dict[int, str]) -> str:
     """Rebuild a WebVTT document, substituting translated text per cue index.
 
-    Cues missing from ``translations`` keep their source text, so a partially
-    failed translation still yields a valid, playable file.
+    Cues missing from ``translations`` — or mapped to blank text — keep their
+    source text, so a partially failed translation still yields a valid, playable
+    file rather than one with silent gaps where captions should be.
     """
     parts: list[str] = []
     has_header = any(
@@ -141,7 +142,10 @@ def serialize(doc: VttDocument, translations: dict[int, str]) -> str:
             parts.append(block)
             continue
         cue = doc.cues[block]
-        text = translations.get(cue.index, cue.text)
+        # Defensive: a blank or whitespace-only translation would emit a
+        # timed-but-textless cue, i.e. a silent gap in the published track.
+        translated = translations.get(cue.index)
+        text = translated if translated and translated.strip() else cue.text
         lines = [cue.identifier, cue.timing, text] if cue.identifier else [cue.timing, text]
         parts.append("\n".join(lines))
 

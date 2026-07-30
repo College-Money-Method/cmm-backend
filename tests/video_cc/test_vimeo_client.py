@@ -87,3 +87,61 @@ def test_falls_back_to_verbatim_locale_when_list_unavailable(monkeypatch):
 
     monkeypatch.setattr(vimeo, "_fetch_languages", boom)
     assert vimeo.resolve_language("es", "Spanish") == ("es", "Spanish")
+
+
+# ── Source-track download ─────────────────────────────────────────────────────
+
+TRACKS = [
+    {"uri": "/v/1/tt/1", "language": "en", "active": False, "link": "https://x/inactive.vtt",
+     "name": "old.vtt"},
+    {"uri": "/v/1/tt/2", "language": "en", "active": True, "link": "https://x/active.vtt",
+     "name": "current.vtt"},
+    {"uri": "/v/1/tt/3", "language": "es", "active": True, "link": "https://x/spanish.vtt",
+     "name": "es.vtt"},
+]
+
+
+@pytest.fixture
+def stub_tracks(monkeypatch):
+    """Serve a fixed track list and echo which link was downloaded."""
+    monkeypatch.setattr(vimeo, "list_text_tracks", lambda ref, fields=None: TRACKS)
+
+    class Resp:
+        def __init__(self, url):
+            self.url = url
+            self.text = f"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nfrom {url}\n"
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(vimeo.httpx, "get", lambda url, **kw: Resp(url))
+
+
+def test_active_track_wins_when_a_video_has_several_in_one_language(stub_tracks):
+    """Real videos carry duplicate English tracks; the player shows the active one."""
+    content, name = vimeo.download_source_track("1", "en")
+    assert "active.vtt" in content
+    assert name == "current.vtt"
+
+
+def test_source_language_filter_is_respected(stub_tracks):
+    content, name = vimeo.download_source_track("1", "es")
+    assert "spanish.vtt" in content
+    assert name == "es.vtt"
+
+
+def test_missing_source_language_raises_actionable_error(stub_tracks):
+    with pytest.raises(VimeoError, match="no fr caption track"):
+        vimeo.download_source_track("1", "fr")
+
+
+def test_non_webvtt_response_is_rejected(monkeypatch, stub_tracks):
+    class Html:
+        text = "<html>expired link</html>"
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(vimeo.httpx, "get", lambda url, **kw: Html())
+    with pytest.raises(VimeoError, match="did not come back as WebVTT"):
+        vimeo.download_source_track("1", "en")

@@ -112,3 +112,16 @@ def test_chunking_never_loses_a_cue():
     doc = parse(SAMPLE)
     batched = [c.index for batch in chunk_cues(doc.cues, 40, 2) for c in batch]
     assert batched == [c.index for c in doc.cues]
+
+
+def test_blank_translation_falls_back_instead_of_emitting_an_empty_cue():
+    """Observed live: the model returned "" for one cue, publishing a silent gap."""
+    doc = parse(SAMPLE)
+    out = serialize(doc, {0: "", 1: "   ", 2: "Fin."})
+
+    # Every cue keeps text — a timing line must never be followed by nothing.
+    assert "Welcome to College Money Method." in out
+    assert "This cue spans\ntwo lines." in out
+    assert "Fin." in out
+    # Round-tripping the result must recover the same number of cues.
+    assert len(parse(out).cues) == len(doc.cues)

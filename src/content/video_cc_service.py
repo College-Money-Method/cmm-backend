@@ -45,16 +45,49 @@ _CUE_CHAR_BUDGET = 2500
 _CUE_MAX_COUNT = 25
 _MAX_CONCURRENT_CHUNKS = 6
 
+# Haiku occasionally emits malformed JSON (an unescaped quote inside a translated
+# string, a truncated object) — observed roughly 1 chunk in 4 on CJK output, and
+# non-deterministic: the identical request succeeds on a retry. Retry before
+# giving up, and when a chunk still fails let its cues keep their English text
+# rather than failing the whole language.
+_CHUNK_ATTEMPTS = 3
+
 
 async def run_job(
-    job: VideoCcJob, vtt_content: str, locales: list[str], replace_existing: bool = True
+    job: VideoCcJob,
+    vtt_content: str | None,
+    locales: list[str],
+    replace_existing: bool = True,
+    source_language: str = "en",
 ) -> None:
-    """Execute a caption job, emitting progress events. Never raises."""
+    """Execute a caption job, emitting progress events. Never raises.
+
+    ``vtt_content`` of None means "use the track already on the video" — Vimeo's
+    own AI or previously uploaded captions are downloaded and used as the source.
+    """
     db: Session | None = None
     try:
         job.emit("status", message="Checking the video on Vimeo…")
+        # Fail before spending anything if the token can't finish the job.
+        missing = await asyncio.to_thread(vimeo.missing_scopes)
+        if missing:
+            raise VimeoError(
+                f"The Vimeo access token is missing the {', '.join(missing)} "
+                f"scope{'s' if len(missing) > 1 else ''}. Regenerate it at "
+                f"developer.vimeo.com with all of: {vimeo.REQUIRED_SCOPES}."
+            )
+
         video_name = await asyncio.to_thread(vimeo.get_video_name, job.video_ref)
         job.emit("video", name=video_name, video_ref=job.video_ref)
+
+        if vtt_content is None:
+            job.emit("status", message="Downloading the existing captions from Vimeo…")
+            vtt_content, track_name = await asyncio.to_thread(
+                vimeo.download_source_track, job.video_ref, source_language
+            )
+            job.emit("source", origin="vimeo", name=track_name)
+        else:
+            job.emit("source", origin="upload", name="Uploaded transcript")
 
         job.emit("status", message="Reading the caption file…")
         doc = parse(vtt_content)
@@ -164,22 +197,47 @@ async def _translate_cues(
     completed = 0
 
     async def run_batch(batch: list[Cue]):
+        """Translate one chunk, retrying transient model errors.
+
+        Returns ``(batch, TranslationOutput)`` on success or ``(batch, None)``
+        when every attempt failed — a failed chunk must not abort its siblings.
+        """
         async with semaphore:
             # Keys are cue indices as strings — the model returns the same keys,
             # which is how translated text finds its way back to the right timing.
             field_map = {str(cue.index): cue.text for cue in batch}
-            return batch, await asyncio.to_thread(translate_fields, field_map, locale)
+            for attempt in range(1, _CHUNK_ATTEMPTS + 1):
+                try:
+                    return batch, await asyncio.to_thread(translate_fields, field_map, locale)
+                except TranslationError as exc:
+                    logger.warning(
+                        "video_cc: %s chunk (cues %d-%d) attempt %d/%d failed: %s",
+                        locale,
+                        batch[0].index,
+                        batch[-1].index,
+                        attempt,
+                        _CHUNK_ATTEMPTS,
+                        exc,
+                    )
+            return batch, None
 
     translations: dict[int, str] = {}
+    failed_chunks = 0
     tasks = [asyncio.create_task(run_batch(batch)) for batch in batches]
 
     try:
         for future in asyncio.as_completed(tasks):
             batch, out = await future
-            for key, value in out.fields.items():
-                if isinstance(value, str) and key.isdigit():
-                    translations[int(key)] = value
-            record_translation_usage(db, _USAGE_CONTEXT, locale, out, len(batch))
+            if out is None:
+                failed_chunks += 1
+            else:
+                for key, value in out.fields.items():
+                    # A blank value is treated as absent: the model occasionally
+                    # returns "" for a cue, which would publish an empty caption
+                    # at that timestamp instead of falling back to English.
+                    if isinstance(value, str) and value.strip() and key.isdigit():
+                        translations[int(key)] = value
+                record_translation_usage(db, _USAGE_CONTEXT, locale, out, len(batch))
 
             completed += 1
             job.emit(
@@ -195,6 +253,14 @@ async def _translate_cues(
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
+
+    # Every chunk failing means something systemic (throttling, bad credentials) —
+    # publishing an all-English "translation" would be worse than reporting it.
+    if failed_chunks == len(batches):
+        raise TranslationError(
+            f"All {len(batches)} translation batches failed after "
+            f"{_CHUNK_ATTEMPTS} attempts each."
+        )
 
     missing = len(cues) - len(translations)
     if missing > 0:
