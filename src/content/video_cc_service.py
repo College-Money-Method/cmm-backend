@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -26,6 +27,11 @@ from sqlalchemy.orm import Session
 from src.config import SUPPORTED_LOCALES
 from src.content.bedrock_translation import TranslationError, translate_fields
 from src.content.translation_service import record_translation_usage
+from src.content.video_caption_archive import (
+    archive_transcript,
+    split_video_ref,
+    upsert_record,
+)
 from src.content.video_cc_jobs import VideoCcJob
 from src.content.vtt_parser import Cue, VttDocument, VttError, chunk_cues, parse, serialize
 from src.db.base import get_session_factory
@@ -45,12 +51,43 @@ _CUE_CHAR_BUDGET = 2500
 _CUE_MAX_COUNT = 25
 _MAX_CONCURRENT_CHUNKS = 6
 
+# Start a new batch after this much silence, so batches break where the speaker
+# pauses rather than mid-sentence. 2.0s marks a real pause without fragmenting
+# normal between-cue breathing room (measured: most inter-cue gaps are <0.5s).
+# The size caps above still bound batches when speech is continuous.
+_CUE_SILENCE_GAP = 2.0
+
 # Haiku occasionally emits malformed JSON (an unescaped quote inside a translated
 # string, a truncated object) — observed roughly 1 chunk in 4 on CJK output, and
 # non-deterministic: the identical request succeeds on a retry. Retry before
 # giving up, and when a chunk still fails let its cues keep their English text
 # rather than failing the whole language.
 _CHUNK_ATTEMPTS = 3
+
+# Caption-specific prompt rules, appended to the shared translation system prompt.
+# Both rules target failure modes observed on real transcripts:
+#
+#  * Unescaped quotes — cues quoting UI labels ("I can't find my school") came
+#    back with raw ASCII double quotes inside JSON string values, breaking the
+#    whole batch's JSON. Steering to typographic quotes removes the character
+#    that can break the encoding at all.
+#  * Cue merging — because cues are mid-sentence fragments, the model would
+#    reflow a sentence into one key and omit the others, so those cues fell back
+#    to English at a *different* timestamp than the content it had absorbed.
+_CAPTION_RULES = (
+    "A. Each key is one subtitle cue. Cues are often mid-sentence fragments that "
+    "start or end abruptly — this is correct and intentional.\n"
+    "B. Translate each key's text on its own. NEVER merge, split, reorder or move "
+    "content between keys, even when it would read better. A key's value must "
+    "correspond only to that key's source text.\n"
+    "C. Return every key you were given, with a non-empty value. If a fragment is "
+    "hard to translate alone, translate it literally rather than omitting it.\n"
+    "D. Keep each translation close to the source length so it fits the cue's time "
+    "slot on screen.\n"
+    'E. Never use the straight double-quote character (") inside a value. Use '
+    "typographic quotes appropriate to the target language (e.g. “ ” or 「 」) so "
+    "the JSON stays valid."
+)
 
 
 async def run_job(
@@ -77,7 +114,8 @@ async def run_job(
                 f"developer.vimeo.com with all of: {vimeo.REQUIRED_SCOPES}."
             )
 
-        video_name = await asyncio.to_thread(vimeo.get_video_name, job.video_ref)
+        metadata = await asyncio.to_thread(vimeo.get_video_metadata, job.video_ref)
+        video_name = metadata["name"]
         job.emit("video", name=video_name, video_ref=job.video_ref)
 
         if vtt_content is None:
@@ -85,23 +123,38 @@ async def run_job(
             vtt_content, track_name = await asyncio.to_thread(
                 vimeo.download_source_track, job.video_ref, source_language
             )
+            source_origin = "vimeo"
             job.emit("source", origin="vimeo", name=track_name)
         else:
-            job.emit("source", origin="upload", name="Uploaded transcript")
+            source_origin, track_name = "upload", "Uploaded transcript"
+            job.emit("source", origin="upload", name=track_name)
 
         job.emit("status", message="Reading the caption file…")
         doc = parse(vtt_content)
         job.emit("parsed", cue_count=len(doc.cues))
 
+        video_id, _ = split_video_ref(job.video_ref)
+        source_s3_key = await asyncio.to_thread(
+            archive_transcript, video_id, "source", vtt_content
+        )
+
         db = get_session_factory()()
         succeeded: list[str] = []
         failed: list[dict[str, str]] = []
+        results: dict[str, dict] = {}
 
         for locale in locales:
             try:
                 result = await _process_locale(job, db, doc, locale, replace_existing)
                 succeeded.append(locale)
-                job.emit("language_done", locale=locale, **result)
+                results[locale] = {
+                    k: v for k, v in result.items() if k != "translated_vtt"
+                }
+                job.emit(
+                    "language_done",
+                    locale=locale,
+                    **{k: v for k, v in result.items() if k != "translated_vtt"},
+                )
             except (TranslationError, VimeoError, VttError) as exc:
                 logger.warning("video_cc: %s failed for %s: %s", locale, job.video_ref, exc)
                 db.rollback()
@@ -114,8 +167,29 @@ async def run_job(
                 failed.append({"locale": locale, "error": message})
                 job.emit("language_error", locale=locale, error=message)
 
+        status = "completed" if succeeded else "failed"
+
+        # Registry row is written even for a total failure, so the admin list
+        # shows the attempt rather than the video silently never appearing.
+        try:
+            upsert_record(
+                db,
+                video_ref=job.video_ref,
+                metadata=metadata,
+                source_origin=source_origin,
+                source_name=track_name,
+                source_cue_count=len(doc.cues),
+                source_s3_key=source_s3_key,
+                translations=results,
+                status=status,
+            )
+            db.commit()
+        except Exception:  # noqa: BLE001 — bookkeeping must not fail a live job
+            logger.exception("video_cc: could not record job %s in the registry", job.id)
+            db.rollback()
+
         job.emit("done", succeeded=succeeded, failed=failed)
-        job.finish("completed" if succeeded else "failed")
+        job.finish(status)
 
     except (VimeoError, VttError) as exc:
         # Fatal: no video or no parseable cues — nothing was uploaded or spent.
@@ -128,6 +202,32 @@ async def run_job(
     finally:
         if db is not None:
             db.close()
+
+
+async def _backfill_cues(db: Session, cues: list[Cue], locale: str) -> dict[int, str]:
+    """Re-translate individual cues the main pass dropped. Never raises.
+
+    Cues go one at a time: a single-key request cannot be merged into a
+    neighbour, which is the failure this recovers from. Any cue that fails again
+    is simply left out and keeps its English text.
+    """
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_CHUNKS)
+
+    async def one(cue: Cue):
+        async with semaphore:
+            try:
+                out = await asyncio.to_thread(
+                    translate_fields, {str(cue.index): cue.text}, locale, _CAPTION_RULES
+                )
+            except TranslationError as exc:
+                logger.warning("video_cc: backfill failed for cue %d: %s", cue.index, exc)
+                return None
+            value = out.fields.get(str(cue.index))
+            record_translation_usage(db, _USAGE_CONTEXT, locale, out, 1)
+            return (cue.index, value) if isinstance(value, str) and value.strip() else None
+
+    results = await asyncio.gather(*(one(c) for c in cues), return_exceptions=True)
+    return {r[0]: r[1] for r in results if isinstance(r, tuple)}
 
 
 async def _process_locale(
@@ -160,12 +260,19 @@ async def _process_locale(
         vimeo.upload_text_track, job.video_ref, vimeo_code, track_name, translated_vtt
     )
 
+    # Archive after a successful publish, so S3 mirrors what is live on Vimeo.
+    video_id, _ = split_video_ref(job.video_ref)
+    s3_key = await asyncio.to_thread(archive_transcript, video_id, locale, translated_vtt)
+
     return {
         "language": language_name,
         "vimeo_code": vimeo_code,
         "track_uri": track_uri,
         "replaced": replaced,
         "cue_count": len(doc.cues),
+        "missing_cues": len(doc.cues) - len(translations),
+        "s3_key": s3_key,
+        "translated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -184,7 +291,7 @@ def _remove_existing_tracks(video_ref: str, vimeo_code: str) -> bool:
     return removed
 
 
-async def _translate_cues(
+async def _translate_cues(  # noqa: PLR0915 — linear pipeline, clearer unsplit
     job: VideoCcJob, db: Session, cues: list[Cue], locale: str, language_name: str
 ) -> dict[int, str]:
     """Translate all cues for one locale, in bounded-concurrency chunks.
@@ -192,7 +299,7 @@ async def _translate_cues(
     Returns ``{cue_index: translated_text}``. Cues the model omits are simply
     absent and fall back to source text at serialisation time.
     """
-    batches = chunk_cues(cues, _CUE_CHAR_BUDGET, _CUE_MAX_COUNT)
+    batches = chunk_cues(cues, _CUE_CHAR_BUDGET, _CUE_MAX_COUNT, _CUE_SILENCE_GAP)
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_CHUNKS)
     completed = 0
 
@@ -208,7 +315,9 @@ async def _translate_cues(
             field_map = {str(cue.index): cue.text for cue in batch}
             for attempt in range(1, _CHUNK_ATTEMPTS + 1):
                 try:
-                    return batch, await asyncio.to_thread(translate_fields, field_map, locale)
+                    return batch, await asyncio.to_thread(
+                        translate_fields, field_map, locale, _CAPTION_RULES
+                    )
                 except TranslationError as exc:
                     logger.warning(
                         "video_cc: %s chunk (cues %d-%d) attempt %d/%d failed: %s",
@@ -260,6 +369,21 @@ async def _translate_cues(
         raise TranslationError(
             f"All {len(batches)} translation batches failed after "
             f"{_CHUNK_ATTEMPTS} attempts each."
+        )
+
+    # Enforcement pass: retry whatever is still missing in tiny groups. A batch of
+    # one or two cues gives the model nothing to reflow into, which is what rescues
+    # the cues the main pass merged away.
+    leftover = [c for c in cues if c.index not in translations]
+    if leftover:
+        job.emit("status", message=f"Retrying {len(leftover)} untranslated {language_name} lines…")
+        recovered = await _backfill_cues(db, leftover, locale)
+        translations.update(recovered)
+        logger.info(
+            "video_cc: backfill recovered %d/%d %s cues",
+            len(recovered),
+            len(leftover),
+            locale,
         )
 
     missing = len(cues) - len(translations)

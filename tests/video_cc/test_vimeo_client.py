@@ -145,3 +145,112 @@ def test_non_webvtt_response_is_rejected(monkeypatch, stub_tracks):
     monkeypatch.setattr(vimeo.httpx, "get", lambda url, **kw: Html())
     with pytest.raises(VimeoError, match="did not come back as WebVTT"):
         vimeo.download_source_track("1", "en")
+
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+
+
+class FakeResp:
+    """Minimal httpx.Response stand-in for rate-limit tests."""
+
+    def __init__(self, status, headers=None, payload=None):
+        self.status_code = status
+        self.headers = headers or {}
+        self._payload = payload or {}
+        self.text = ""
+
+    def json(self):
+        return self._payload
+
+
+def test_retry_after_uses_the_reset_header_not_the_local_clock():
+    """Container clock skew must not produce a negative or huge sleep."""
+    resp = FakeResp(
+        429,
+        {
+            "x-ratelimit-reset": "2026-07-30T05:37:34+00:00",
+            "date": "Thu, 30 Jul 2026 05:37:09 GMT",
+        },
+    )
+    # 25s until reset, +1s so we land past the boundary.
+    assert vimeo._retry_after_seconds(resp) == pytest.approx(26.0, abs=0.1)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},                                            # no reset header at all
+        {"x-ratelimit-reset": "not-a-timestamp"},      # unparseable
+    ],
+)
+def test_retry_after_falls_back_when_headers_are_unusable(headers):
+    assert vimeo._retry_after_seconds(FakeResp(429, headers)) == vimeo._RATE_LIMIT_FALLBACK_WAIT
+
+
+def test_retry_after_is_capped_and_never_negative():
+    past = FakeResp(429, {
+        "x-ratelimit-reset": "2026-07-30T05:00:00+00:00",
+        "date": "Thu, 30 Jul 2026 05:37:09 GMT",   # reset already elapsed
+    })
+    assert vimeo._retry_after_seconds(past) == 1.0
+
+    far = FakeResp(429, {
+        "x-ratelimit-reset": "2026-07-30T09:37:34+00:00",  # hours away
+        "date": "Thu, 30 Jul 2026 05:37:09 GMT",
+    })
+    assert far.headers and vimeo._retry_after_seconds(far) == vimeo._RATE_LIMIT_MAX_WAIT
+
+
+def test_a_rate_limited_request_is_retried_and_succeeds(monkeypatch):
+    calls = {"n": 0, "slept": []}
+
+    def fake_request(method, url, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return FakeResp(429, {
+                "x-ratelimit-reset": "2026-07-30T05:37:12+00:00",
+                "date": "Thu, 30 Jul 2026 05:37:09 GMT",
+            })
+        return FakeResp(200, {}, {"name": "ok"})
+
+    monkeypatch.setattr(vimeo.httpx, "request", fake_request)
+    monkeypatch.setattr(vimeo.time, "sleep", lambda s: calls["slept"].append(s))
+    monkeypatch.setattr(vimeo.settings, "vimeo_access_token", "t")
+
+    assert vimeo._request("GET", "/videos/1").json() == {"name": "ok"}
+    assert calls["n"] == 2
+    assert calls["slept"] == [4.0]
+
+
+def test_persistent_rate_limiting_eventually_raises(monkeypatch):
+    monkeypatch.setattr(
+        vimeo.httpx, "request", lambda *a, **kw: FakeResp(429, {}, {"error": "slow down"})
+    )
+    monkeypatch.setattr(vimeo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(vimeo.settings, "vimeo_access_token", "t")
+
+    with pytest.raises(VimeoError) as exc:
+        vimeo._request("GET", "/videos/1")
+    assert exc.value.status == 429
+
+
+def test_scope_check_is_cached_per_token(monkeypatch):
+    """/oauth/verify runs first in every job — re-fetching it burns the 50/min budget."""
+    calls = {"n": 0}
+
+    def fake_request(method, path, **kw):
+        calls["n"] += 1
+        return FakeResp(200, {}, {"scope": vimeo.REQUIRED_SCOPES})
+
+    monkeypatch.setattr(vimeo, "_request", fake_request)
+    monkeypatch.setattr(vimeo, "_scope_cache", None)
+    monkeypatch.setattr(vimeo.settings, "vimeo_access_token", "token-a")
+
+    assert vimeo.missing_scopes() == []
+    assert vimeo.missing_scopes() == []
+    assert calls["n"] == 1, "second call must come from cache"
+
+    # Rotating the token must re-verify rather than trust the cached answer.
+    monkeypatch.setattr(vimeo.settings, "vimeo_access_token", "token-b")
+    assert vimeo.missing_scopes() == []
+    assert calls["n"] == 2
