@@ -12,8 +12,13 @@ from src.auth.deps import AdminDep
 from src.config import settings
 from src.db.deps import DbDep
 from src.storage.models import StorageFile
+from src.storage.asset_url import s3_object_url, to_cdn_url
 from src.storage.s3_client import S3ClientDep
 from src.storage.schemas import StorageFileOut
+
+# Uploaded objects use unique (uuid) keys, so they are immutable and safe to
+# cache at the edge for a long time.
+_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 router = APIRouter(prefix="/api/v1/storage", tags=["storage"])
 
@@ -45,10 +50,12 @@ async def upload_image(file: UploadFile, _admin: AdminDep, s3: S3ClientDep):
         Key=s3_key,
         Body=data,
         ContentType=file.content_type,
+        CacheControl=_IMMUTABLE_CACHE_CONTROL,
     )
 
-    url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
-    return {"url": url}
+    # Persist raw S3 URL semantics; return the CDN-rewritten URL to the client.
+    url = s3_object_url(s3_key)
+    return {"url": to_cdn_url(url)}
 
 
 @router.get("/files", response_model=list[StorageFileOut])
@@ -75,9 +82,10 @@ async def upload_standalone_file(file: UploadFile, _admin: AdminDep, db: DbDep, 
         Key=s3_key,
         Body=data,
         ContentType=mime_type,
+        CacheControl=_IMMUTABLE_CACHE_CONTROL,
     )
 
-    s3_url = f"https://{settings.s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
+    s3_url = s3_object_url(s3_key)
     sf = StorageFile(
         s3_key=s3_key,
         s3_url=s3_url,

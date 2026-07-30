@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -25,7 +26,12 @@ from pydantic import BaseModel
 
 from src.auth.deps import AdminDep
 from src.config import SUPPORTED_LOCALES
-from src.content.video_caption_archive import list_records
+from src.content.video_caption_archive import (
+    get_record,
+    list_records,
+    presign_transcript,
+    resolve_transcript_key,
+)
 from src.content.video_cc_jobs import create_job, get_job, watch
 from src.content.video_cc_service import run_job
 from src.db.deps import DbDep
@@ -41,6 +47,9 @@ _MAX_FILE_BYTES = 5 * 1024 * 1024
 
 # Each locale is a full pass over the transcript; cap the fan-out per job.
 _MAX_LOCALES = 5
+
+# Download links are short-lived — long enough to click, not to circulate.
+_DOWNLOAD_TTL = 300
 
 # asyncio keeps only weak references to tasks, so an unreferenced task can be
 # garbage-collected mid-flight. Hold strong refs until each job completes.
@@ -70,10 +79,55 @@ class VideoRecordOut(BaseModel):
     last_run_at: datetime | None
 
 
+class TranscriptDownload(BaseModel):
+    url: str
+    filename: str
+    expires_in_seconds: int
+
+
 @router.get("/videos", response_model=list[VideoRecordOut])
 def list_processed_videos(_admin: AdminDep, db: DbDep = None) -> list[VideoRecordOut]:
     """Videos that have been through Video CC, most recently run first."""
     return [VideoRecordOut.model_validate(r, from_attributes=True) for r in list_records(db)]
+
+
+@router.get("/videos/{video_id}/transcripts/{label}", response_model=TranscriptDownload)
+def download_transcript(
+    video_id: str, label: str, _admin: AdminDep, db: DbDep = None
+) -> TranscriptDownload:
+    """Short-lived download URL for an archived transcript.
+
+    - **label**: ``source`` for the English original, or a locale code (``es``).
+
+    The S3 key is resolved from the registry, never taken from the caller, so
+    this cannot be used to read arbitrary bucket objects.
+    """
+    record = get_record(db, video_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="This video has no Video CC history.")
+
+    key = resolve_transcript_key(record, label)
+    if not key:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No archived '{label}' transcript for this video. Runs from before "
+            "archiving was added have no stored file.",
+        )
+
+    slug = _slugify(record.title or video_id)
+    url = presign_transcript(key, f"{slug}-{label}.vtt", expires_in=_DOWNLOAD_TTL)
+    if url is None:
+        raise HTTPException(status_code=502, detail="Could not generate a download link.")
+
+    return TranscriptDownload(
+        url=url, filename=f"{slug}-{label}.vtt", expires_in_seconds=_DOWNLOAD_TTL
+    )
+
+
+def _slugify(text: str) -> str:
+    """Filesystem-safe, lowercase slug for a download filename."""
+    cleaned = re.sub(r"[^\w\s-]", "", text).strip().lower()
+    return re.sub(r"[\s_]+", "-", cleaned)[:80] or "transcript"
 
 
 @router.post("/jobs", response_model=JobStartResponse)

@@ -111,6 +111,48 @@ def upsert_record(
     return record
 
 
+def presign_transcript(key: str, filename: str, expires_in: int = 300) -> str | None:
+    """Short-lived download URL for an archived transcript, or None on failure.
+
+    Presigned rather than a direct bucket URL so this keeps working if the bucket
+    is ever made private (it is currently public). ``ResponseContentDisposition``
+    makes the browser save it under a readable name instead of the uuid key.
+    """
+    try:
+        return get_s3_client().generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": settings.s3_bucket_name,
+                "Key": key,
+                "ResponseContentDisposition": f'attachment; filename="{filename}"',
+                "ResponseContentType": "text/vtt; charset=utf-8",
+            },
+            ExpiresIn=expires_in,
+        )
+    except Exception as exc:  # noqa: BLE001 — a missing object must not 500
+        logger.warning("video_cc: could not presign %s: %s", key, exc)
+        return None
+
+
+def get_record(db: Session, video_id: str) -> VideoCaptionRecord | None:
+    """Registry row for a video id (without privacy hash), or None."""
+    return db.execute(
+        select(VideoCaptionRecord).where(VideoCaptionRecord.video_id == video_id)
+    ).scalar_one_or_none()
+
+
+def resolve_transcript_key(record: VideoCaptionRecord, label: str) -> str | None:
+    """S3 key for ``label`` — "source" or a locale code — on this record.
+
+    Keys are read from the record rather than taken from the caller, so the
+    download endpoint cannot be pointed at arbitrary bucket objects.
+    """
+    if label == "source":
+        return record.source_s3_key
+    entry = (record.translations or {}).get(label)
+    return entry.get("s3_key") if isinstance(entry, dict) else None
+
+
 def list_records(db: Session, limit: int = 200) -> list[VideoCaptionRecord]:
     """Processed videos, most recently run first."""
     return list(
