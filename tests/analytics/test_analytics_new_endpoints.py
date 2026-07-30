@@ -209,11 +209,22 @@ class TestWorkshopsDetail:
             "_webinar_id_raw": uuid.uuid4(),
         }
 
+        # Views (video_view) and avg % watched (video_session_end) are now two
+        # separate per-webinar reads — return the right shape for each.
+        def hogql(api_key, project_id, query):
+            if "GROUP BY properties.object_id" in query and "video_view" in query:
+                return [["zoom-123", 7]]        # recording VIEWS
+            if "GROUP BY properties.object_id" in query and "percent_watched" in query:
+                return [["zoom-123", 0.65]]     # avg % watched
+            if "countIf(event = '$pageview') AS visits" in query:
+                return [[100, 7, 20]]           # site totals
+            return []
+
         with patch("src.analytics.router.get_webinars_for_school_in_range", return_value=[sample_row]), \
              patch("src.analytics.router.get_workshops_detail_totals", return_value={
                  "registered": 40, "attended_live": 30, "no_show": 10, "recording_views": 0
              }), \
-             patch("src.analytics.posthog.get_hogql_query", return_value=[["zoom-123", 7, 0.65]]):
+             patch("src.analytics.posthog.get_hogql_query", side_effect=hogql):
             client = _hub_client()
             resp = client.get("/api/v1/analytics/workshops-detail?date_from=-30d")
 
@@ -392,7 +403,7 @@ class TestWorkshopEngagementSchoolScoping:
             )
 
         assert resp.status_code == 200
-        assert len(captured) == 2  # video + resources
+        assert len(captured) == 3  # plays (video_view) + video stats + resources
         clause = f"properties.school_id = '{SCHOOL_A}'"
         assert all(clause in q for q in captured), captured
 
@@ -424,8 +435,10 @@ def test_workshops_detail_ph_force_partial_outage_keeps_complete_cache():
     def all_ok(api_key, project_id, query):
         if "countIf(event = '$pageview') AS visits" in query:
             return [[100, 50, 20]]                       # site totals
-        if "GROUP BY properties.webinar_id" in query and "video_session_end" in query:
-            return [["w1", 5, 80.0]]                     # recording views
+        if "GROUP BY properties.object_id" in query and "video_view" in query:
+            return [["w1", 5]]                           # recording VIEWS (video_view)
+        if "GROUP BY properties.object_id" in query and "percent_watched" in query:
+            return [["w1", 80.0]]                        # avg % watched (video_session_end)
         if "workshop_detail_view" in query:
             return [["w1", 3]]                           # detail views
         if "properties.via = 'workshop'" in query:

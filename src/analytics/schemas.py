@@ -39,8 +39,8 @@ class WorkshopData(BaseModel):
     watch_recordings: TrendMetric
     registrations_opened: TrendMetric
     registrations: TrendMetric
-    top_videos: list[TopBreakdown]       # video_session_end count by workshop_name
-    top_watchtime: list[TopBreakdown]    # video_session_end avg total_watch_seconds by workshop_name
+    top_videos: list[TopBreakdown]       # video_view count by object_name
+    top_watchtime: list[TopBreakdown]    # video_session_end avg total_watch_seconds by object_name
     # recording_progress counts per milestone_pct (10..100), milestone order —
     # shows where viewers stop watching recordings
     milestone_dropoff: list[TopBreakdown] = []
@@ -48,7 +48,7 @@ class WorkshopData(BaseModel):
 
 class VideoBreakdownRow(BaseModel):
     name: str                              # workshop_name (videos are workshop recordings)
-    view_count: int                        # video_session_end count
+    view_count: int                        # video_view count (first play)
     avg_percent_watched: float | None = None
 
 
@@ -57,13 +57,13 @@ class ContentEngagementTotals(BaseModel):
     the true totals across ALL rows (not just the truncated top-N breakdowns)."""
     topic_engagement: int = 0   # topic_viewed count (visits to Topic pages)
     resources_used: int = 0     # resource_viewed count (all resources)
-    video_views: int = 0        # video_session_end count (all videos)
+    video_views: int = 0        # video_view count (all videos, first play)
 
 
 class ContentData(BaseModel):
     """Number-only content breakdowns (no time-series charts) — kept lightweight:
     top videos (views + avg % watched), resources (views), topics (views)."""
-    videos: list[VideoBreakdownRow] = []   # video_session_end by workshop_name
+    videos: list[VideoBreakdownRow] = []   # video_view count + video_session_end avg %, by object_name
     resources: list[TopBreakdown] = []     # resource_viewed by asset_name
     topics: list[TopBreakdown] = []        # topic_viewed by topic_title
     # Aggregate totals for the "Content Engagement" summary tiles above the cards.
@@ -114,7 +114,7 @@ class SiteTotals(BaseModel):
     """Website-wide content totals (NOT workshop-scoped) for the summary cards.
     Still scoped by the counselor's school and the selected period."""
     visits: int = 0          # $pageview across the whole site
-    video_views: int = 0     # video_session_end across all videos
+    video_views: int = 0     # video_view across all videos (first play)
     resource_views: int = 0  # resource_viewed across all resources
 
 
@@ -264,7 +264,7 @@ class WorkshopTimelineTrends(BaseModel):
     registrations: TrendMetric   # DB WorkshopRegistration by registration_time (window)
     attendees: int = 0           # DB attended count (0 when workshop is outside window)
     detail_views: TrendMetric    # workshop_detail_view
-    video_watch_count: TrendMetric  # video_session_end
+    video_watch_count: TrendMetric  # video_view (first play = a "view")
     resource_views: TrendMetric  # resource_viewed via=workshop AND from=<webinar_id>
 
 
