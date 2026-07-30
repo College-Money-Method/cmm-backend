@@ -60,18 +60,32 @@ def get_by_locale(db: Session) -> list[dict]:
 
 
 def get_by_context(db: Session) -> list[dict]:
-    """Spend grouped by content path (strings / topic / page / asset)."""
+    """Spend grouped by what was translated.
+
+    Contexts written by the pipelines: ``strings`` (site-wide DOM translation),
+    ``topic`` / ``page`` / ``asset`` (content entities), ``video_cc`` (caption
+    tracks). No whitelist here — a new context appears automatically. Display
+    names are mapped in the frontend; the stored codes are the data.
+    """
     rows = db.execute(
         select(
             TranslationUsage.context,
             func.sum(TranslationUsage.cost_usd),
+            func.sum(TranslationUsage.input_tokens),
+            func.sum(TranslationUsage.output_tokens),
             func.count(),
         )
         .group_by(TranslationUsage.context)
         .order_by(func.sum(TranslationUsage.cost_usd).desc())
     ).all()
     return [
-        {"context": r[0], "cost_usd": float(r[1]), "invocations": int(r[2])}
+        {
+            "context": r[0],
+            "cost_usd": float(r[1]),
+            "input_tokens": int(r[2]),
+            "output_tokens": int(r[3]),
+            "invocations": int(r[4]),
+        }
         for r in rows
     ]
 
