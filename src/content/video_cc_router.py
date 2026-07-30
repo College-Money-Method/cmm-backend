@@ -91,6 +91,19 @@ def list_processed_videos(_admin: AdminDep, db: DbDep = None) -> list[VideoRecor
     return [VideoRecordOut.model_validate(r, from_attributes=True) for r in list_records(db)]
 
 
+@router.get("/videos/{video_id}", response_model=VideoRecordOut)
+def get_video_status(video_id: str, _admin: AdminDep, db: DbDep = None) -> VideoRecordOut:
+    """Caption history for one video, or 404 when it has never been translated.
+
+    Lets other admin screens (e.g. a webinar's video embed) show whether captions
+    exist without pulling the whole list.
+    """
+    record = get_record(db, video_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="This video has no Video CC history.")
+    return VideoRecordOut.model_validate(record, from_attributes=True)
+
+
 @router.get("/videos/{video_id}/transcripts/{label}", response_model=TranscriptDownload)
 def download_transcript(
     video_id: str, label: str, _admin: AdminDep, db: DbDep = None
