@@ -68,9 +68,10 @@ def _get_bedrock_client() -> AnthropicBedrock:
     )
 
 
-def _build_system_prompt(target_locale: str) -> str:
+def _build_system_prompt(target_locale: str, extra_rules: str | None = None) -> str:
     language_name = SUPPORTED_LOCALES.get(target_locale, target_locale)
     protected = ", ".join(f'"{term}"' for term in PROTECTED_TERMS)
+    suffix = f"\n\nAdditional rules for this content type:\n{extra_rules}" if extra_rules else ""
     return (
         f"You are a professional translator and educational content editor. "
         f"Your task is to translate educational financial-aid content into {language_name}.\n\n"
@@ -86,6 +87,7 @@ def _build_system_prompt(target_locale: str) -> str:
         f"inside a sentence — never translate or transliterate them: {protected}.\n"
         "7. Return ONLY a valid JSON object with the SAME keys as the input and translated values. "
         "No explanation, no markdown, no code fences."
+        + suffix
     )
 
 
@@ -107,13 +109,63 @@ def _strip_code_fences(text: str) -> str:
     return m.group(1).strip() if m else stripped
 
 
-def translate_fields(fields: dict[str, object], target_locale: str) -> TranslationOutput:
+# Matches one "key": "value" pair. The value is non-greedy and terminated by a
+# lookahead for the *structural* delimiter (`, "` or a closing brace), so raw
+# quotes inside the value do not end the match. Works for both the pretty-printed
+# and single-line compact objects the model emits — DOTALL covers multi-line
+# values (two-line cues).
+_JSON_PAIR_RE = re.compile(
+    r'"([^"\\]+)"\s*:\s*"(.*?)"\s*(?=,\s*"|\}\s*$)',
+    re.DOTALL,
+)
+
+
+def _repair_flat_json_object(text: str) -> str | None:
+    """Best-effort repair of a flat {"k": "v"} object with unescaped inner quotes.
+
+    Observed repeatedly on caption batches: cues quoting UI labels come back as
+    ``"154": "到"我找不到我的学校"。"`` — raw double quotes inside the value,
+    which invalidates the whole response and loses ~25 good translations with it.
+
+    Pairs are re-extracted and re-encoded with ``json.dumps``, so escaping is
+    handled by the encoder rather than by string surgery. Returns None when the
+    text is not a flat object of string pairs, letting the caller fall through
+    to its normal error path.
+    """
+    stripped = text.strip()
+    if not (stripped.startswith("{") and stripped.endswith("}")):
+        return None
+
+    pairs = _JSON_PAIR_RE.findall(stripped)
+    if not pairs:
+        return None
+
+    def decode(value: str) -> str:
+        # Undo the escapes the model did emit correctly; json.dumps re-applies
+        # them. Order matters: backslash last would double-unescape the others.
+        return (
+            value.replace('\\"', '"')
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\\\\", "\\")
+        )
+
+    return json.dumps({k: decode(v) for k, v in pairs}, ensure_ascii=False)
+
+
+def translate_fields(
+    fields: dict[str, object], target_locale: str, extra_rules: str | None = None
+) -> TranslationOutput:
     """Translate a field map via Bedrock Haiku.
 
     Args:
         fields: Dict of field_name → value (strings, HTML strings, or JSON-serialisable
                 structured data like action_items/faqs lists).
         target_locale: BCP-47 locale code present in SUPPORTED_LOCALES.
+        extra_rules: Optional content-type-specific rules appended to the system
+                prompt. Omitted by the site-translation callers, so their prompt
+                is unchanged; used by the caption pipeline, whose fields are
+                subtitle cues with constraints ordinary content does not have.
 
     Returns:
         TranslationOutput — translated fields (same keys) plus token usage.
@@ -125,7 +177,7 @@ def translate_fields(fields: dict[str, object], target_locale: str) -> Translati
         return TranslationOutput({}, 0, 0, settings.bedrock_haiku_model_id)
 
     client = _get_bedrock_client()
-    system_prompt = _build_system_prompt(target_locale)
+    system_prompt = _build_system_prompt(target_locale, extra_rules)
     user_message = _build_user_message(fields)
 
     logger.info(
@@ -166,10 +218,19 @@ def translate_fields(fields: dict[str, object], target_locale: str) -> Translati
     try:
         translated: dict[str, object] = json.loads(clean_text)
     except json.JSONDecodeError as exc:
-        logger.error("Bedrock returned non-JSON: %r", raw_text[:500])
-        raise TranslationError(
-            f"Bedrock response was not valid JSON: {exc}"
-        ) from exc
+        # Try to salvage the batch before discarding 25 good translations —
+        # the usual cause is unescaped quotes inside otherwise valid values.
+        repaired = _repair_flat_json_object(clean_text)
+        try:
+            if repaired is None:
+                raise exc
+            translated = json.loads(repaired)
+            logger.info("Recovered a malformed Bedrock response by re-escaping quotes")
+        except json.JSONDecodeError:
+            logger.error("Bedrock returned non-JSON: %r", raw_text[:500])
+            raise TranslationError(
+                f"Bedrock response was not valid JSON: {exc}"
+            ) from exc
 
     if not isinstance(translated, dict):
         raise TranslationError(

@@ -21,6 +21,9 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -42,6 +45,14 @@ REQUIRED_SCOPES = "public private edit upload delete"
 
 # Vimeo API is slow on writes; uploads of a large VTT can take a few seconds.
 _TIMEOUT = 30.0
+
+# Rate limiting: Vimeo allows 50 requests/minute per token across ALL endpoints
+# (verified via x-ratelimit-limit). One caption job costs roughly 4 + 2 per
+# language, so limits are only reached when jobs overlap or are retried quickly.
+# The window is 60s, so the reset is never far away — wait rather than fail.
+_RATE_LIMIT_ATTEMPTS = 3
+_RATE_LIMIT_MAX_WAIT = 65.0
+_RATE_LIMIT_FALLBACK_WAIT = 10.0
 
 # Video reference forms we accept from the admin form:
 #   https://vimeo.com/123456789
@@ -101,19 +112,67 @@ def _headers() -> dict[str, str]:
     }
 
 
-def _request(method: str, path: str, **kwargs) -> httpx.Response:
-    """Issue an authenticated Vimeo API call, mapping failures to VimeoError."""
-    url = f"{_API_BASE}{path}"
-    try:
-        resp = httpx.request(method, url, headers=_headers(), timeout=_TIMEOUT, **kwargs)
-    except httpx.TimeoutException as exc:
-        raise VimeoError(f"Vimeo request timed out: {method} {path}") from exc
-    except httpx.HTTPError as exc:
-        raise VimeoError(f"Could not reach Vimeo: {exc}") from exc
+def _retry_after_seconds(resp: httpx.Response) -> float:
+    """Seconds to wait before retrying a 429, from Vimeo's rate-limit headers.
 
-    if resp.status_code >= 400:
-        raise VimeoError(_describe_error(resp, path), status=resp.status_code)
-    return resp
+    Vimeo sends no ``Retry-After``; it sends ``x-ratelimit-reset`` as an absolute
+    ISO-8601 timestamp. The delta is computed against the response's own ``Date``
+    header rather than the local clock, so server/container clock skew cannot
+    produce a negative or absurdly long sleep.
+    """
+    reset = resp.headers.get("x-ratelimit-reset")
+    served = resp.headers.get("date")
+    if not reset:
+        return _RATE_LIMIT_FALLBACK_WAIT
+
+    try:
+        reset_at = datetime.fromisoformat(reset)
+        now = parsedate_to_datetime(served) if served else datetime.now(timezone.utc)
+        wait = (reset_at - now).total_seconds()
+    except (ValueError, TypeError):
+        return _RATE_LIMIT_FALLBACK_WAIT
+
+    # +1s so we land just past the boundary rather than exactly on it.
+    return min(max(wait + 1.0, 1.0), _RATE_LIMIT_MAX_WAIT)
+
+
+def _request(method: str, path: str, **kwargs) -> httpx.Response:
+    """Issue an authenticated Vimeo API call, mapping failures to VimeoError.
+
+    Retries on 429. Vimeo allows 50 requests/minute across ALL endpoints for the
+    whole token, which a couple of concurrent caption jobs can exhaust; the
+    window is short, so waiting it out beats failing a job that has already paid
+    for translation.
+    """
+    url = f"{_API_BASE}{path}"
+
+    for attempt in range(1, _RATE_LIMIT_ATTEMPTS + 1):
+        try:
+            resp = httpx.request(method, url, headers=_headers(), timeout=_TIMEOUT, **kwargs)
+        except httpx.TimeoutException as exc:
+            raise VimeoError(f"Vimeo request timed out: {method} {path}") from exc
+        except httpx.HTTPError as exc:
+            raise VimeoError(f"Could not reach Vimeo: {exc}") from exc
+
+        if resp.status_code == 429 and attempt < _RATE_LIMIT_ATTEMPTS:
+            wait = _retry_after_seconds(resp)
+            logger.warning(
+                "Vimeo rate limit hit on %s %s — waiting %.1fs (attempt %d/%d)",
+                method,
+                path,
+                wait,
+                attempt,
+                _RATE_LIMIT_ATTEMPTS,
+            )
+            time.sleep(wait)
+            continue
+
+        if resp.status_code >= 400:
+            raise VimeoError(_describe_error(resp, path), status=resp.status_code)
+        return resp
+
+    # Unreachable: the loop either returns or raises.
+    raise VimeoError(f"Vimeo request failed after {_RATE_LIMIT_ATTEMPTS} attempts")
 
 
 def _describe_error(resp: httpx.Response, path: str) -> str:
@@ -160,6 +219,10 @@ _LANGUAGE_CANDIDATES: dict[str, tuple[str, ...]] = {
 # Vimeo's supported text-track languages, fetched once per process.
 _language_cache: dict[str, str] | None = None
 
+# (token, missing_scopes) — see missing_scopes(). Keyed on the token so rotating
+# VIMEO_ACCESS_TOKEN re-verifies instead of trusting a stale answer.
+_scope_cache: tuple[str, list[str]] | None = None
+
 
 def _fetch_languages() -> dict[str, str]:
     """Return Vimeo's text-track languages as ``{code: display_name}`` (cached)."""
@@ -202,20 +265,46 @@ def missing_scopes() -> list[str]:
 
     Cheap pre-flight: a caption job otherwise fails halfway, after paying for
     translation, on a 403 that only names one missing scope at a time.
+
+    Cached per process and keyed on the token: scopes are fixed when a token is
+    created and can never widen, so re-verifying on every job only burns the
+    50/minute rate limit — /oauth/verify runs first, making it the call most
+    likely to eat the 429.
     """
+    global _scope_cache
+    token = settings.vimeo_access_token
+    if _scope_cache is not None and _scope_cache[0] == token:
+        return list(_scope_cache[1])
+
     resp = _request("GET", "/oauth/verify")
     granted = set((resp.json().get("scope") or "").split())
-    return [s for s in REQUIRED_SCOPES.split() if s not in granted]
+    missing = [s for s in REQUIRED_SCOPES.split() if s not in granted]
+    _scope_cache = (token, missing)
+    return list(missing)
 
 
-def get_video_name(video_ref: str) -> str:
-    """Return the video's title — also serves as an existence + access check.
+def get_video_metadata(video_ref: str) -> dict:
+    """Return ``{name, created_time, duration}`` — also the existence/access check.
+
+    ``created_time`` is Vimeo's upload timestamp (ISO-8601 string, or None).
 
     Raises:
         VimeoError: 404 when the video does not exist or is invisible to the token.
     """
-    resp = _request("GET", f"/videos/{video_ref}", params={"fields": "name"})
-    return resp.json().get("name") or f"Video {video_ref.split(':')[0]}"
+    resp = _request(
+        "GET", f"/videos/{video_ref}", params={"fields": "name,created_time,duration"}
+    )
+    body = resp.json()
+    return {
+        "name": body.get("name") or f"Video {video_ref.split(':')[0]}",
+        "created_time": body.get("created_time"),
+        "duration": body.get("duration"),
+    }
+
+
+def get_video_name(video_ref: str) -> str:
+    """Return just the video's title. Thin wrapper over get_video_metadata()."""
+    return get_video_metadata(video_ref)["name"]
 
 
 def list_text_tracks(

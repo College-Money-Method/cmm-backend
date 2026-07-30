@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -24,8 +25,10 @@ from pydantic import BaseModel
 
 from src.auth.deps import AdminDep
 from src.config import SUPPORTED_LOCALES
+from src.content.video_caption_archive import list_records
 from src.content.video_cc_jobs import create_job, get_job, watch
 from src.content.video_cc_service import run_job
+from src.db.deps import DbDep
 from src.integrations.vimeo import VimeoError, extract_video_ref
 
 logger = logging.getLogger(__name__)
@@ -48,6 +51,29 @@ class JobStartResponse(BaseModel):
     job_id: str
     video_ref: str
     locales: list[str]
+
+
+class VideoRecordOut(BaseModel):
+    """One processed video, as shown in the admin list."""
+
+    video_id: str
+    privacy_hash: str | None
+    title: str | None
+    vimeo_created_at: datetime | None
+    duration_seconds: int | None
+    source_origin: str | None
+    source_cue_count: int | None
+    source_s3_key: str | None
+    # locale -> {language, vimeo_code, track_uri, cue_count, missing_cues, s3_key, ...}
+    translations: dict
+    last_status: str | None
+    last_run_at: datetime | None
+
+
+@router.get("/videos", response_model=list[VideoRecordOut])
+def list_processed_videos(_admin: AdminDep, db: DbDep = None) -> list[VideoRecordOut]:
+    """Videos that have been through Video CC, most recently run first."""
+    return [VideoRecordOut.model_validate(r, from_attributes=True) for r in list_records(db)]
 
 
 @router.post("/jobs", response_model=JobStartResponse)
