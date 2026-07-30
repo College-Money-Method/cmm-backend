@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -25,9 +26,15 @@ from pydantic import BaseModel
 
 from src.auth.deps import AdminDep
 from src.config import SUPPORTED_LOCALES
-from src.content.video_caption_archive import list_records
+from src.content.video_caption_archive import (
+    get_record,
+    list_records,
+    presign_transcript,
+    resolve_transcript_key,
+)
 from src.content.video_cc_jobs import create_job, get_job, watch
-from src.content.video_cc_service import run_job
+from src.content.video_cc_service import publish_edited_track, run_job
+from src.content.vtt_parser import VttError
 from src.db.deps import DbDep
 from src.integrations.vimeo import VimeoError, extract_video_ref
 
@@ -41,6 +48,9 @@ _MAX_FILE_BYTES = 5 * 1024 * 1024
 
 # Each locale is a full pass over the transcript; cap the fan-out per job.
 _MAX_LOCALES = 5
+
+# Download links are short-lived — long enough to click, not to circulate.
+_DOWNLOAD_TTL = 300
 
 # asyncio keeps only weak references to tasks, so an unreferenced task can be
 # garbage-collected mid-flight. Hold strong refs until each job completes.
@@ -70,10 +80,111 @@ class VideoRecordOut(BaseModel):
     last_run_at: datetime | None
 
 
+class TranscriptDownload(BaseModel):
+    url: str
+    filename: str
+    expires_in_seconds: int
+
+
+class TrackPublished(BaseModel):
+    locale: str
+    language: str
+    vimeo_code: str
+    track_uri: str
+    replaced: bool
+    cue_count: int
+
+
 @router.get("/videos", response_model=list[VideoRecordOut])
 def list_processed_videos(_admin: AdminDep, db: DbDep = None) -> list[VideoRecordOut]:
     """Videos that have been through Video CC, most recently run first."""
     return [VideoRecordOut.model_validate(r, from_attributes=True) for r in list_records(db)]
+
+
+@router.get("/videos/{video_id}/transcripts/{label}", response_model=TranscriptDownload)
+def download_transcript(
+    video_id: str, label: str, _admin: AdminDep, db: DbDep = None
+) -> TranscriptDownload:
+    """Short-lived download URL for an archived transcript.
+
+    - **label**: ``source`` for the English original, or a locale code (``es``).
+
+    The S3 key is resolved from the registry, never taken from the caller, so
+    this cannot be used to read arbitrary bucket objects.
+    """
+    record = get_record(db, video_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="This video has no Video CC history.")
+
+    key = resolve_transcript_key(record, label)
+    if not key:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No archived '{label}' transcript for this video. Runs from before "
+            "archiving was added have no stored file.",
+        )
+
+    slug = _slugify(record.title or video_id)
+    url = presign_transcript(key, f"{slug}-{label}.vtt", expires_in=_DOWNLOAD_TTL)
+    if url is None:
+        raise HTTPException(status_code=502, detail="Could not generate a download link.")
+
+    return TranscriptDownload(
+        url=url, filename=f"{slug}-{label}.vtt", expires_in_seconds=_DOWNLOAD_TTL
+    )
+
+
+@router.post("/videos/{video_id}/tracks", response_model=TrackPublished)
+async def publish_track(
+    video_id: str,
+    _admin: AdminDep,
+    locale: str = Form(..., description="Target locale of the edited track, e.g. 'es'"),
+    privacy_hash: str | None = Form(None, description="Required for unlisted videos"),
+    file: UploadFile = File(..., description="Edited .vtt/.srt for this language"),
+    db: DbDep = None,
+) -> TrackPublished:
+    """Publish a hand-edited caption file to Vimeo without translating it.
+
+    For the download → fix a line → re-publish loop. Unlike ``POST /jobs``, the
+    file is treated as the finished track for ``locale``, not as English source.
+    """
+    targets = _parse_locales(locale)
+    if len(targets) != 1:
+        raise HTTPException(status_code=400, detail="Provide exactly one locale.")
+
+    # Raises 400 on an empty, oversized or non-UTF-8 file.
+    content = await _read_upload(file)
+
+    # The record stores the hash, so the caller usually need not supply one.
+    record = get_record(db, video_id)
+    resolved_hash = privacy_hash or (record.privacy_hash if record else None)
+    video_ref = f"{video_id}:{resolved_hash}" if resolved_hash else video_id
+
+    try:
+        result = await asyncio.to_thread(
+            publish_edited_track, db, video_ref, targets[0], content
+        )
+    except (VimeoError, VttError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    logger.info(
+        "video_cc: published edited %s track for video=%s", targets[0], video_id
+    )
+    return TrackPublished(
+        locale=targets[0],
+        language=result["language"],
+        vimeo_code=result["vimeo_code"],
+        track_uri=result["track_uri"],
+        replaced=result["replaced"],
+        cue_count=result["cue_count"],
+    )
+
+
+def _slugify(text: str) -> str:
+    """Filesystem-safe, lowercase slug for a download filename."""
+    cleaned = re.sub(r"[^\w\s-]", "", text).strip().lower()
+    return re.sub(r"[\s_]+", "-", cleaned)[:80] or "transcript"
 
 
 @router.post("/jobs", response_model=JobStartResponse)

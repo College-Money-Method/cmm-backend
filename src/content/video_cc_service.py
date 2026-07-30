@@ -29,6 +29,7 @@ from src.content.bedrock_translation import TranslationError, translate_fields
 from src.content.translation_service import record_translation_usage
 from src.content.video_caption_archive import (
     archive_transcript,
+    get_record,
     split_video_ref,
     upsert_record,
 )
@@ -202,6 +203,71 @@ async def run_job(
     finally:
         if db is not None:
             db.close()
+
+
+def publish_edited_track(
+    db: Session, video_ref: str, locale: str, vtt_content: str
+) -> dict[str, Any]:
+    """Publish an already-translated VTT to Vimeo as-is, with no translation.
+
+    The flow for a hand-corrected caption file: download the archived track, fix
+    a line, publish it back. Distinct from ``run_job``, which treats an uploaded
+    file as *English source* and would re-translate it.
+
+    Synchronous — no Bedrock call means this finishes in a couple of seconds, so
+    it needs no job/SSE machinery.
+
+    Raises:
+        VimeoError / VttError: on an inaccessible video or unusable file.
+    """
+    missing = vimeo.missing_scopes()
+    if missing:
+        raise VimeoError(
+            f"The Vimeo access token is missing the {', '.join(missing)} "
+            f"scope{'s' if len(missing) > 1 else ''}. Regenerate it with all of: "
+            f"{vimeo.REQUIRED_SCOPES}."
+        )
+
+    metadata = vimeo.get_video_metadata(video_ref)
+    # Parse to validate, then upload the file verbatim — it is already the final
+    # track, so re-serialising it would only risk altering the admin's edits.
+    doc = parse(vtt_content)
+
+    language_name = SUPPORTED_LOCALES.get(locale, locale)
+    vimeo_code, track_name = vimeo.resolve_language(locale, language_name)
+    replaced = _remove_existing_tracks(video_ref, vimeo_code)
+    track_uri = vimeo.upload_text_track(video_ref, vimeo_code, track_name, vtt_content)
+
+    video_id, _ = split_video_ref(video_ref)
+    s3_key = archive_transcript(video_id, locale, vtt_content)
+
+    result = {
+        "language": language_name,
+        "vimeo_code": vimeo_code,
+        "track_uri": track_uri,
+        "replaced": replaced,
+        "cue_count": len(doc.cues),
+        "missing_cues": 0,  # a hand-edited file is complete by definition
+        "s3_key": s3_key,
+        "translated_at": datetime.now(timezone.utc).isoformat(),
+        "edited": True,
+    }
+
+    existing = get_record(db, video_id)
+    upsert_record(
+        db,
+        video_ref=video_ref,
+        metadata=metadata,
+        # Preserve what the original run recorded about the English source.
+        source_origin=existing.source_origin if existing else "upload",
+        source_name=existing.source_name if existing else "Edited track",
+        source_cue_count=existing.source_cue_count if existing else len(doc.cues),
+        source_s3_key=existing.source_s3_key if existing else None,
+        translations={locale: result},
+        status="completed",
+    )
+    db.commit()
+    return result
 
 
 async def _backfill_cues(db: Session, cues: list[Cue], locale: str) -> dict[int, str]:
