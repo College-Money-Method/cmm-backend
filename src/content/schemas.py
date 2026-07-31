@@ -187,6 +187,8 @@ class TopicCreate(BaseModel):
     status: str = "draft"
     goal_id: uuid.UUID | None = None
     sort_order: int = 0
+    # Read time in minutes; when null, the backend fills it from the word count.
+    read_time_minutes: int | None = None
 
     @field_validator("status")
     @classmethod
@@ -209,6 +211,9 @@ class TopicUpdate(BaseModel):
     status: str | None = None
     goal_id: uuid.UUID | None = None
     sort_order: int | None = None
+    # Read time in minutes, set manually by the admin. Stored as-is; not
+    # recomputed on content edits (admin updates it using the suggested value).
+    read_time_minutes: int | None = None
 
     @field_validator("status")
     @classmethod

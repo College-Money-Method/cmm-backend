@@ -105,14 +105,14 @@ _IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 
 def _calculate_read_time(content: str | None, summary: str | None = None) -> int | None:
-    """Estimate reading time in minutes at ~50 wpm from TipTap JSON or HTML content."""
+    """Estimate reading time in minutes at ~100 wpm from TipTap JSON or HTML content."""
     combined = " ".join(filter(None, [extract_text(content), extract_text(summary)]))
     if not combined:
         # Fallback: strip HTML tags for plain-HTML content
         raw = (content or "") + " " + (summary or "")
         combined = re.sub(r"<[^>]+>", " ", raw)
     words = len(combined.split())
-    return max(1, round(words / 50)) if words > 0 else None
+    return max(1, round(words / 100)) if words > 0 else None
 
 
 def _extract_video_duration(embed_code: str | None) -> int | None:
@@ -455,7 +455,9 @@ def create_topic(body: TopicCreate, _admin: AdminDep, db: DbDep):
         extract_text(obj.summary),
         extract_text(obj.content),
     ]))
-    obj.read_time_minutes = _calculate_read_time(obj.content, obj.summary)
+    # Fall back to the word-count estimate only when the admin didn't supply one.
+    if obj.read_time_minutes is None:
+        obj.read_time_minutes = _calculate_read_time(obj.content, obj.summary)
     obj.video_duration_seconds = _extract_video_duration(obj.video_embed_code)
     db.add(obj)
     db.commit()
@@ -468,6 +470,8 @@ def update_topic(topic_id: uuid.UUID, body: TopicUpdate, _admin: AdminDep, db: D
     obj = db.get(Topic, topic_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Topic not found")
+    # read_time_minutes flows through as-is; the admin sets it manually using the
+    # suggested value shown in the editor. It is never recomputed on save here.
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(obj, k, v)
     obj.search_text = " ".join(filter(None, [
@@ -476,7 +480,6 @@ def update_topic(topic_id: uuid.UUID, body: TopicUpdate, _admin: AdminDep, db: D
         extract_text(obj.summary),
         extract_text(obj.content),
     ]))
-    obj.read_time_minutes = _calculate_read_time(obj.content, obj.summary)
     obj.video_duration_seconds = _extract_video_duration(obj.video_embed_code)
     db.commit()
     return _load_topic_detail(db, topic_id)
