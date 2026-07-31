@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.analytics import posthog as ph
-from src.analytics.schemas import TopBreakdown, TrendMetric
+from src.analytics.schemas import RankedContentRow, TopBreakdown, TrendMetric
 from src.auth.deps import require_counselor
 from src.auth.schemas import CurrentUser
 from src.main import app
@@ -182,7 +182,12 @@ def test_workshop_milestone_dropoff_empty_when_no_data(mock_posthog_configured):
 def test_content_endpoint_shape(mock_posthog_configured):
     # Number-only content page: videos (views + avg % watched), resources, topics.
     # The Content Engagement tiles read the aggregate totals (one extra query).
+    # Resource rows are id-keyed and named from Postgres (resolve_asset_rows is
+    # unit-tested in test_resource_breakdown_queries.py), so it's stubbed here.
+    resolved = [RankedContentRow(id="0f8f-asset", name="FAFSA Checklist", count=30)]
     with patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=fake_breakdowns()), \
+         patch("src.analytics.router.resolve_asset_rows", return_value=resolved), \
+         patch("src.analytics.router.get_school_slug", return_value="lincoln-high"), \
          patch("src.analytics.posthog.get_hogql_query", return_value=[[12, 34, 56]]):
         resp = admin_client().get("/api/v1/analytics/content")
 
@@ -193,23 +198,46 @@ def test_content_endpoint_shape(mock_posthog_configured):
     assert body["videos"][0]["name"] == "FAFSA"
     assert body["videos"][0]["view_count"] == 30
     assert body["videos"][0]["avg_percent_watched"] == 30
-    assert body["resources"][0]["label"] == "FAFSA"
+    # Resources carry the id the UI links with, plus the current name.
+    assert body["resources"][0] == {"id": "0f8f-asset", "name": "FAFSA Checklist", "count": 30}
+    assert body["school_slug"] == "lincoln-high"
     assert body["topics"][0]["label"] == "FAFSA"
     # Content Engagement summary tiles: topic_engagement, resources_used, video_views.
     assert body["totals"] == {"topic_engagement": 12, "resources_used": 34, "video_views": 56}
 
 
+def test_content_groups_resources_by_asset_id(mock_posthog_configured):
+    """Grouping by asset_name merged same-named assets and split renamed ones."""
+    seen = {}
+
+    def spy(api_key, project_id, specs, **kwargs):
+        seen.update({sp["key"]: sp for sp in specs})
+        return {sp["key"]: [] for sp in specs}
+
+    with patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=spy), \
+         patch("src.analytics.posthog.get_hogql_query", return_value=[[0, 0, 0]]):
+        resp = admin_client().get("/api/v1/analytics/content")
+
+    assert resp.status_code == 200
+    assert seen["resources"]["prop"] == "asset_id"
+
+
 def test_content_breakdown_paginates(mock_posthog_configured):
     # 21 rows for limit=20 → has_more True, trimmed to 20.
     rows = [[f"Resource {i}", float(100 - i)] for i in range(21)]
-    with patch("src.analytics.posthog.get_hogql_query", return_value=rows):
+    # Name resolution is stubbed to a pass-through so ordering stays readable.
+    def passthrough(_db, page):
+        return [RankedContentRow(id=None, name=r.label, count=int(r.count)) for r in page]
+
+    with patch("src.analytics.posthog.get_hogql_query", return_value=rows), \
+         patch("src.analytics.router.resolve_asset_rows", side_effect=passthrough):
         resp = admin_client().get("/api/v1/analytics/content-breakdown?kind=resources&limit=20")
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["has_more"] is True
     assert len(body["rows"]) == 20
-    assert body["rows"][0]["label"] == "Resource 0"
+    assert body["rows"][0]["name"] == "Resource 0"
 
 
 def test_content_breakdown_rejects_invalid_kind(mock_posthog_configured):
