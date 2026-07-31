@@ -2,7 +2,7 @@
 One-time backfill: populate read_time_minutes and video_duration_seconds
 for Topics and ContentAssets.
 
-    read_time_minutes      — estimated from content + summary word count (~200 wpm)
+    read_time_minutes      — estimated from content + summary word count (~100 wpm)
     video_duration_seconds — fetched from Vimeo oEmbed API or YouTube Data API
 
 Usage:
@@ -46,7 +46,7 @@ def _calculate_read_time(content: str | None, summary: str | None = None) -> int
         raw = (content or "") + " " + (summary or "")
         combined = re.sub(r"<[^>]+>", " ", raw)
     words = len(combined.split())
-    return max(1, round(words / 200)) if words > 0 else None
+    return max(1, round(words / 100)) if words > 0 else None
 
 
 def _extract_video_duration(embed_code: str | None) -> int | None:

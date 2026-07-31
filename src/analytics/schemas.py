@@ -74,19 +74,39 @@ class ContentEngagementTotals(BaseModel):
     video_views: int = 0        # video_view count (all videos, first play)
 
 
+class RankedContentRow(BaseModel):
+    """One row of a ranked content list.
+
+    `id` is the entity's own UUID, which is what the counts are GROUPED BY — so a
+    rename keeps one row (with its current name, read from Postgres) instead of
+    splitting history, and two assets sharing a title stay separate instead of
+    merging. It also lets the UI link the row to the entity's page. None → the
+    entity is no longer in the library, or this list groups by name (see
+    ContentBreakdownPage); either way the UI renders it unlinked."""
+    id: str | None = None
+    name: str
+    count: int = 0
+
+
 class ContentData(CachedAtMixin):
     """Number-only content breakdowns (no time-series charts) — kept lightweight:
     top videos (views + avg % watched), resources (views), topics (views)."""
     videos: list[VideoBreakdownRow] = []   # video_view count + video_session_end avg %, by object_name
-    resources: list[TopBreakdown] = []     # resource_viewed by asset_name
+    resources: list[RankedContentRow] = []  # resource_viewed by asset_id, named from Postgres
     topics: list[TopBreakdown] = []        # topic_viewed by topic_title
     # Aggregate totals for the "Content Engagement" summary tiles above the cards.
     totals: ContentEngagementTotals = Field(default_factory=ContentEngagementTotals)
+    # Link base for the resource rows: /school/{school_slug}/resources/{id}.
+    # None (admin viewing all schools) → rows render unlinked.
+    school_slug: str | None = None
 
 
 class ContentBreakdownPage(BaseModel):
-    """One page of a full resources/topics ranked list (Content-tab "View all" popup)."""
-    rows: list[TopBreakdown] = []
+    """One page of a full resources/topics ranked list (Content-tab "View all" popup).
+
+    Resource rows carry `id` (grouped by asset id, same as ContentData.resources);
+    topic rows are still grouped by title and leave it None."""
+    rows: list[RankedContentRow] = []
     has_more: bool = False
 
 

@@ -26,6 +26,7 @@ from src.analytics.schemas import (
     PeakUsageCell,
     PeakUsageData,
     ReachBenchmark,
+    RankedContentRow,
     ReachData,
     ResourceUsedRow,
     SearchData,
@@ -53,6 +54,7 @@ from src.analytics.postgres_queries import (
     get_webinars_for_school_in_range,
     get_workshops_detail_totals,
 )
+from src.analytics.resource_breakdown_queries import get_school_slug, resolve_asset_rows
 from src.analytics.topic_engagement_queries import get_school_topic_tree, get_topic_metrics
 from src.auth.deps import CounselorDep
 from src.config import settings
@@ -171,7 +173,9 @@ def get_content(
         {"key": "video_views", "event": "video_view", "prop": "object_name", "limit": 50},
         {"key": "video_pct", "event": "video_session_end", "prop": "object_name",
          "math": "avg", "math_prop": "percent_watched", "limit": 100},
-        {"key": "resources", "event": "resource_viewed", "prop": "asset_name", "limit": 10},
+        # Grouped by asset_id, NOT asset_name: names collide across assets and
+        # change over time. resolve_asset_rows() supplies the current names.
+        {"key": "resources", "event": "resource_viewed", "prop": "asset_id", "limit": 10},
         {"key": "topics", "event": "topic_viewed", "prop": "topic_title", "limit": 10},
     ], **opts)
     pct_by_name = {r.label: r.count for r in breakdowns["video_pct"]}
@@ -207,23 +211,28 @@ def get_content(
 
     return ContentData(
         videos=videos,
-        resources=breakdowns["resources"],
+        resources=resolve_asset_rows(db, breakdowns["resources"]),
         topics=breakdowns["topics"],
         totals=totals,
+        school_slug=get_school_slug(db, sid),
         cached_at=ph.oldest_cache_hit(db),
     )
 
 
-# kind → (event, breakdown property) for the Content-tab "View all" popup.
+# kind → (event, breakdown property, resolve ids to current Postgres names)
+# for the Content-tab "View all" popup. Resources group by id so the popup
+# ranks identically to the card (and can link each row); the topics kind is no
+# longer reachable from the UI and stays name-grouped.
 _CONTENT_BREAKDOWN_KINDS = {
-    "resources": ("resource_viewed", "asset_name"),
-    "topics": ("topic_viewed", "topic_title"),
+    "resources": ("resource_viewed", "asset_id", True),
+    "topics": ("topic_viewed", "topic_title", False),
 }
 
 
 @router.get("/content-breakdown", response_model=ContentBreakdownPage)
 def get_content_breakdown(
     current_user: CounselorDep,
+    db: DbDep,
     kind: str = Query(..., description="resources | topics"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
@@ -238,7 +247,7 @@ def get_content_breakdown(
         raise HTTPException(status_code=400, detail="kind must be 'resources' or 'topics'")
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
-    event, prop = _CONTENT_BREAKDOWN_KINDS[kind]
+    event, prop, resolve_names = _CONTENT_BREAKDOWN_KINDS[kind]
 
     # The HogQL Query API rejects bare OFFSET, so fetch the top `offset+limit+1`
     # rows (breakdown lists are small) and slice the page in Python — matching the
@@ -262,7 +271,13 @@ def get_content_breakdown(
     except Exception:
         logger.warning("PostHog error in get_content_breakdown(%s)", kind, exc_info=True)
     page = all_rows[offset : offset + limit]
-    return ContentBreakdownPage(rows=page, has_more=len(all_rows) > offset + limit)
+    # Resolve only the page — one small IN query instead of the whole ranking.
+    rows = (
+        resolve_asset_rows(db, page)
+        if resolve_names
+        else [RankedContentRow(name=r.label, count=int(r.count)) for r in page]
+    )
+    return ContentBreakdownPage(rows=rows, has_more=len(all_rows) > offset + limit)
 
 
 @router.get("/topic-engagement", response_model=TopicEngagementData)
