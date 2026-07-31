@@ -76,6 +76,46 @@ class ContentBreakdownPage(BaseModel):
     has_more: bool = False
 
 
+# ── Topic-engagement tree (Grade → Goal → Topic) ───────────────────────────────
+
+class TopicEngagementTopic(BaseModel):
+    topic_id: str
+    title: str
+    slug: str                # links to /school/{school_slug}/topic/{slug}
+    engagement: int = 0      # topic_viewed count for this topic
+    video_views: int = 0     # video_view count (object_type='topic', object_id=topic_id)
+
+
+class TopicEngagementGoal(BaseModel):
+    goal_id: str
+    name: str
+    engagement: int = 0      # sum over this goal's topics
+    video_views: int = 0
+    topics: list[TopicEngagementTopic] = []
+
+
+class TopicEngagementGrade(BaseModel):
+    grade: int
+    label: str                    # "9th Grade"
+    page_title: str | None = None  # the grade page's own title ("Learn How Financial Aid Works")
+    engagement: int = 0      # sum over this grade's goals
+    video_views: int = 0
+    goals: list[TopicEngagementGoal] = []
+
+
+class TopicEngagementData(BaseModel):
+    """The school's published Grade → Goal → Topic hierarchy with per-topic
+    engagement + video views, for the Content tab's Topic Engagement table.
+
+    A goal may sit under several grades, so a topic can appear more than once;
+    rollups count it under each grade it appears in (the tree mirrors the site's
+    navigation rather than partitioning topics)."""
+    school_slug: str | None = None   # None → topic titles render without links
+    grades: list[TopicEngagementGrade] = []
+    engagement: int = 0              # tree-wide totals (same duplication caveat)
+    video_views: int = 0
+
+
 class SearchData(BaseModel):
     searches: TrendMetric
     top_queries: list[TopBreakdown]

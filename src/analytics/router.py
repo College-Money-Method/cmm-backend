@@ -28,6 +28,10 @@ from src.analytics.schemas import (
     SearchData,
     SiteTotals,
     TopBreakdown,
+    TopicEngagementData,
+    TopicEngagementGoal,
+    TopicEngagementGrade,
+    TopicEngagementTopic,
     TrendMetric,
     VideoBreakdownRow,
     WebinarDetail,
@@ -47,6 +51,7 @@ from src.analytics.postgres_queries import (
     get_webinars_for_school_in_range,
     get_workshops_detail_totals,
 )
+from src.analytics.topic_engagement_queries import get_school_topic_tree, get_topic_metrics
 from src.auth.deps import CounselorDep
 from src.config import settings
 from src.db.deps import DbDep
@@ -242,6 +247,69 @@ def get_content_breakdown(
         logger.warning("PostHog error in get_content_breakdown(%s)", kind, exc_info=True)
     page = all_rows[offset : offset + limit]
     return ContentBreakdownPage(rows=page, has_more=len(all_rows) > offset + limit)
+
+
+@router.get("/topic-engagement", response_model=TopicEngagementData)
+def get_topic_engagement(
+    current_user: CounselorDep,
+    db: DbDep,
+    school_id: str | None = Query(default=None),
+    date_from: str = Query(default="-30d"),
+    date_to: str | None = Query(default=None),
+    cycle_name: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
+) -> TopicEngagementData:
+    """Grade → Goal → Topic tree with per-topic engagement + video views.
+
+    The hierarchy comes from Postgres (the school's grade set, published topics
+    only — cheap, always current); the numbers come from ONE cached HogQL query
+    keyed on the topic ids. Topics with no activity are kept, showing zeros, so
+    the counselor sees full coverage rather than only what was visited.
+    """
+    api_key, project_id = _check_configured()
+    sid = _resolve_school(current_user, school_id)
+
+    school_slug, grades = get_school_topic_tree(db, sid)
+    topic_ids = [t["topic_id"] for g in grades for gl in g["goals"] for t in gl["topics"]]
+    metrics = get_topic_metrics(
+        api_key, project_id, topic_ids,
+        school_id=sid, date_from=date_from, date_to=date_to,
+        cycle_name=cycle_name, db=db, force_refresh=refresh,
+    )
+
+    out_grades: list[TopicEngagementGrade] = []
+    tree_eng = tree_vid = 0
+    for g in grades:
+        out_goals: list[TopicEngagementGoal] = []
+        g_eng = g_vid = 0
+        for gl in g["goals"]:
+            topics = [
+                TopicEngagementTopic(
+                    topic_id=t["topic_id"], title=t["title"], slug=t["slug"],
+                    engagement=metrics.get(t["topic_id"], {}).get("engagement", 0),
+                    video_views=metrics.get(t["topic_id"], {}).get("video_views", 0),
+                )
+                for t in gl["topics"]
+            ]
+            gl_eng = sum(t.engagement for t in topics)
+            gl_vid = sum(t.video_views for t in topics)
+            out_goals.append(TopicEngagementGoal(
+                goal_id=gl["goal_id"], name=gl["name"],
+                engagement=gl_eng, video_views=gl_vid, topics=topics,
+            ))
+            g_eng += gl_eng
+            g_vid += gl_vid
+        out_grades.append(TopicEngagementGrade(
+            grade=g["grade"], label=g["label"], page_title=g["page_title"],
+            engagement=g_eng, video_views=g_vid, goals=out_goals,
+        ))
+        tree_eng += g_eng
+        tree_vid += g_vid
+
+    return TopicEngagementData(
+        school_slug=school_slug, grades=out_grades,
+        engagement=tree_eng, video_views=tree_vid,
+    )
 
 
 @router.get("/search", response_model=SearchData)
