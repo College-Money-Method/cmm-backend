@@ -209,11 +209,22 @@ class TestWorkshopsDetail:
             "_webinar_id_raw": uuid.uuid4(),
         }
 
+        # Views (video_view) and avg % watched (video_session_end) are now two
+        # separate per-webinar reads — return the right shape for each.
+        def hogql(api_key, project_id, query):
+            if "GROUP BY properties.object_id" in query and "video_view" in query:
+                return [["zoom-123", 7]]        # recording VIEWS
+            if "GROUP BY properties.object_id" in query and "percent_watched" in query:
+                return [["zoom-123", 0.65]]     # avg % watched
+            if "countIf(event = '$pageview') AS visits" in query:
+                return [[100, 7, 20]]           # site totals
+            return []
+
         with patch("src.analytics.router.get_webinars_for_school_in_range", return_value=[sample_row]), \
              patch("src.analytics.router.get_workshops_detail_totals", return_value={
                  "registered": 40, "attended_live": 30, "no_show": 10, "recording_views": 0
              }), \
-             patch("src.analytics.posthog.get_hogql_query", return_value=[["zoom-123", 7, 0.65]]):
+             patch("src.analytics.posthog.get_hogql_query", side_effect=hogql):
             client = _hub_client()
             resp = client.get("/api/v1/analytics/workshops-detail?date_from=-30d")
 
@@ -392,7 +403,7 @@ class TestWorkshopEngagementSchoolScoping:
             )
 
         assert resp.status_code == 200
-        assert len(captured) == 2  # video + resources
+        assert len(captured) == 3  # plays (video_view) + video stats + resources
         clause = f"properties.school_id = '{SCHOOL_A}'"
         assert all(clause in q for q in captured), captured
 
@@ -424,8 +435,10 @@ def test_workshops_detail_ph_force_partial_outage_keeps_complete_cache():
     def all_ok(api_key, project_id, query):
         if "countIf(event = '$pageview') AS visits" in query:
             return [[100, 50, 20]]                       # site totals
-        if "GROUP BY properties.webinar_id" in query and "video_session_end" in query:
-            return [["w1", 5, 80.0]]                     # recording views
+        if "GROUP BY properties.object_id" in query and "video_view" in query:
+            return [["w1", 5]]                           # recording VIEWS (video_view)
+        if "GROUP BY properties.object_id" in query and "percent_watched" in query:
+            return [["w1", 80.0]]                        # avg % watched (video_session_end)
         if "workshop_detail_view" in query:
             return [["w1", 3]]                           # detail views
         if "properties.via = 'workshop'" in query:
@@ -450,3 +463,80 @@ def test_workshops_detail_ph_force_partial_outage_keeps_complete_cache():
     # Stale COMPLETE entry served — detail_map preserved, not clobbered to {}.
     assert forced[2] == {"w1": 3}
     assert forced[0] == good[0]      # site totals preserved
+
+
+# ── /topic-engagement — Grade → Goal → Topic tree with per-topic metrics ───────
+
+TOPIC_1 = "11111111-1111-1111-1111-111111111111"
+TOPIC_2 = "22222222-2222-2222-2222-222222222222"
+
+_SAMPLE_TREE = (
+    "lincoln-high",
+    [
+        {
+            "grade": 9,
+            "label": "9th Grade",
+            "page_title": "Learn How Financial Aid Works",
+            "goals": [
+                {
+                    "goal_id": "99999999-9999-9999-9999-999999999999",
+                    "name": "Build a college list",
+                    "topics": [
+                        {"topic_id": TOPIC_1, "title": "Picking schools", "slug": "picking-schools"},
+                        {"topic_id": TOPIC_2, "title": "Costs 101", "slug": "costs-101"},
+                    ],
+                }
+            ],
+        }
+    ],
+)
+
+
+class TestTopicEngagement:
+    def test_tree_metrics_and_rollups(self, configured):
+        # engagement + video_views per topic id; TOPIC_2 has no activity at all.
+        def hogql(api_key, project_id, query):
+            assert "topic_viewed" in query and "video_view" in query
+            assert TOPIC_1 in query  # filtered by the tree's topic ids
+            return [[TOPIC_1, 12, 4]]
+
+        with patch("src.analytics.router.get_school_topic_tree", return_value=_SAMPLE_TREE), \
+             patch("src.analytics.posthog.get_hogql_query", side_effect=hogql):
+            client = _hub_client()
+            resp = client.get("/api/v1/analytics/topic-engagement?date_from=-30d")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["school_slug"] == "lincoln-high"
+        grade = body["grades"][0]
+        assert grade["page_title"] == "Learn How Financial Aid Works"
+        goal = grade["goals"][0]
+        # Topics with no activity are KEPT (zeros) so coverage stays visible.
+        assert [t["engagement"] for t in goal["topics"]] == [12, 0]
+        assert [t["video_views"] for t in goal["topics"]] == [4, 0]
+        # Rollups: goal → grade → tree
+        assert (goal["engagement"], goal["video_views"]) == (12, 4)
+        assert (grade["engagement"], grade["video_views"]) == (12, 4)
+        assert (body["engagement"], body["video_views"]) == (12, 4)
+
+    def test_posthog_error_still_returns_tree(self, configured):
+        with patch("src.analytics.router.get_school_topic_tree", return_value=_SAMPLE_TREE), \
+             patch("src.analytics.posthog.get_hogql_query", side_effect=RuntimeError("posthog down")):
+            client = _hub_client()
+            resp = client.get("/api/v1/analytics/topic-engagement?date_from=-30d")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        topics = body["grades"][0]["goals"][0]["topics"]
+        assert len(topics) == 2
+        assert all(t["engagement"] == 0 and t["video_views"] == 0 for t in topics)
+
+    def test_no_topics_skips_posthog(self, configured):
+        with patch("src.analytics.router.get_school_topic_tree", return_value=(None, [])), \
+             patch("src.analytics.posthog.get_hogql_query") as q:
+            client = _hub_client()
+            resp = client.get("/api/v1/analytics/topic-engagement?date_from=-30d")
+
+        assert resp.status_code == 200
+        assert resp.json()["grades"] == []
+        q.assert_not_called()

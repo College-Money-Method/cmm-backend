@@ -39,8 +39,8 @@ class WorkshopData(BaseModel):
     watch_recordings: TrendMetric
     registrations_opened: TrendMetric
     registrations: TrendMetric
-    top_videos: list[TopBreakdown]       # video_session_end count by workshop_name
-    top_watchtime: list[TopBreakdown]    # video_session_end avg total_watch_seconds by workshop_name
+    top_videos: list[TopBreakdown]       # video_view count by object_name
+    top_watchtime: list[TopBreakdown]    # video_session_end avg total_watch_seconds by object_name
     # recording_progress counts per milestone_pct (10..100), milestone order —
     # shows where viewers stop watching recordings
     milestone_dropoff: list[TopBreakdown] = []
@@ -48,7 +48,7 @@ class WorkshopData(BaseModel):
 
 class VideoBreakdownRow(BaseModel):
     name: str                              # workshop_name (videos are workshop recordings)
-    view_count: int                        # video_session_end count
+    view_count: int                        # video_view count (first play)
     avg_percent_watched: float | None = None
 
 
@@ -57,13 +57,13 @@ class ContentEngagementTotals(BaseModel):
     the true totals across ALL rows (not just the truncated top-N breakdowns)."""
     topic_engagement: int = 0   # topic_viewed count (visits to Topic pages)
     resources_used: int = 0     # resource_viewed count (all resources)
-    video_views: int = 0        # video_session_end count (all videos)
+    video_views: int = 0        # video_view count (all videos, first play)
 
 
 class ContentData(BaseModel):
     """Number-only content breakdowns (no time-series charts) — kept lightweight:
     top videos (views + avg % watched), resources (views), topics (views)."""
-    videos: list[VideoBreakdownRow] = []   # video_session_end by workshop_name
+    videos: list[VideoBreakdownRow] = []   # video_view count + video_session_end avg %, by object_name
     resources: list[TopBreakdown] = []     # resource_viewed by asset_name
     topics: list[TopBreakdown] = []        # topic_viewed by topic_title
     # Aggregate totals for the "Content Engagement" summary tiles above the cards.
@@ -74,6 +74,46 @@ class ContentBreakdownPage(BaseModel):
     """One page of a full resources/topics ranked list (Content-tab "View all" popup)."""
     rows: list[TopBreakdown] = []
     has_more: bool = False
+
+
+# ── Topic-engagement tree (Grade → Goal → Topic) ───────────────────────────────
+
+class TopicEngagementTopic(BaseModel):
+    topic_id: str
+    title: str
+    slug: str                # links to /school/{school_slug}/topic/{slug}
+    engagement: int = 0      # topic_viewed count for this topic
+    video_views: int = 0     # video_view count (object_type='topic', object_id=topic_id)
+
+
+class TopicEngagementGoal(BaseModel):
+    goal_id: str
+    name: str
+    engagement: int = 0      # sum over this goal's topics
+    video_views: int = 0
+    topics: list[TopicEngagementTopic] = []
+
+
+class TopicEngagementGrade(BaseModel):
+    grade: int
+    label: str                    # "9th Grade"
+    page_title: str | None = None  # the grade page's own title ("Learn How Financial Aid Works")
+    engagement: int = 0      # sum over this grade's goals
+    video_views: int = 0
+    goals: list[TopicEngagementGoal] = []
+
+
+class TopicEngagementData(BaseModel):
+    """The school's published Grade → Goal → Topic hierarchy with per-topic
+    engagement + video views, for the Content tab's Topic Engagement table.
+
+    A goal may sit under several grades, so a topic can appear more than once;
+    rollups count it under each grade it appears in (the tree mirrors the site's
+    navigation rather than partitioning topics)."""
+    school_slug: str | None = None   # None → topic titles render without links
+    grades: list[TopicEngagementGrade] = []
+    engagement: int = 0              # tree-wide totals (same duplication caveat)
+    video_views: int = 0
 
 
 class SearchData(BaseModel):
@@ -114,7 +154,7 @@ class SiteTotals(BaseModel):
     """Website-wide content totals (NOT workshop-scoped) for the summary cards.
     Still scoped by the counselor's school and the selected period."""
     visits: int = 0          # $pageview across the whole site
-    video_views: int = 0     # video_session_end across all videos
+    video_views: int = 0     # video_view across all videos (first play)
     resource_views: int = 0  # resource_viewed across all resources
 
 
@@ -264,7 +304,7 @@ class WorkshopTimelineTrends(BaseModel):
     registrations: TrendMetric   # DB WorkshopRegistration by registration_time (window)
     attendees: int = 0           # DB attended count (0 when workshop is outside window)
     detail_views: TrendMetric    # workshop_detail_view
-    video_watch_count: TrendMetric  # video_session_end
+    video_watch_count: TrendMetric  # video_view (first play = a "view")
     resource_views: TrendMetric  # resource_viewed via=workshop AND from=<webinar_id>
 
 

@@ -28,6 +28,10 @@ from src.analytics.schemas import (
     SearchData,
     SiteTotals,
     TopBreakdown,
+    TopicEngagementData,
+    TopicEngagementGoal,
+    TopicEngagementGrade,
+    TopicEngagementTopic,
     TrendMetric,
     VideoBreakdownRow,
     WebinarDetail,
@@ -47,6 +51,7 @@ from src.analytics.postgres_queries import (
     get_webinars_for_school_in_range,
     get_workshops_detail_totals,
 )
+from src.analytics.topic_engagement_queries import get_school_topic_tree, get_topic_metrics
 from src.auth.deps import CounselorDep
 from src.config import settings
 from src.db.deps import DbDep
@@ -114,8 +119,8 @@ def get_workshop(
         {"key": "registrations", "event": "workshop_registration_complete"},
     ], **opts)
     breakdowns = phb.get_batched_breakdowns(api_key, project_id, [
-        {"key": "top_videos", "event": "video_session_end", "prop": "workshop_name", "limit": 10},
-        {"key": "top_watchtime", "event": "video_session_end", "prop": "workshop_name",
+        {"key": "top_videos", "event": "video_view", "prop": "object_name", "limit": 10},
+        {"key": "top_watchtime", "event": "video_session_end", "prop": "object_name",
          "math": "avg", "math_prop": "total_watch_seconds", "limit": 10},
         {"key": "milestone_dropoff", "event": "recording_progress", "prop": "milestone_pct", "order": "label_num"},
     ], **opts)
@@ -148,8 +153,8 @@ def get_content(
     # Videos: show all (only a handful of workshop recordings per cycle). Resources
     # & topics: top 10 in the card; the "View all" popup paginates via /content-breakdown.
     breakdowns = phb.get_batched_breakdowns(api_key, project_id, [
-        {"key": "video_views", "event": "video_session_end", "prop": "workshop_name", "limit": 50},
-        {"key": "video_pct", "event": "video_session_end", "prop": "workshop_name",
+        {"key": "video_views", "event": "video_view", "prop": "object_name", "limit": 50},
+        {"key": "video_pct", "event": "video_session_end", "prop": "object_name",
          "math": "avg", "math_prop": "percent_watched", "limit": 100},
         {"key": "resources", "event": "resource_viewed", "prop": "asset_name", "limit": 10},
         {"key": "topics", "event": "topic_viewed", "prop": "topic_title", "limit": 10},
@@ -167,10 +172,10 @@ def get_content(
         "SELECT "
         "countIf(event = 'topic_viewed') AS topic_engagement, "
         "countIf(event = 'resource_viewed') AS resources_used, "
-        "countIf(event = 'video_session_end') AS video_views "
+        "countIf(event = 'video_view') AS video_views "
         "FROM events "
         f"WHERE {ph._hogql_date_clause(date_from, date_to)}{ph._hogql_school_clause(sid)}{ph._hogql_cycle_clause(cycle_name)} "
-        "AND event IN ('topic_viewed', 'resource_viewed', 'video_session_end')"
+        "AND event IN ('topic_viewed', 'resource_viewed', 'video_view')"
     )
     totals = ContentEngagementTotals()
     try:
@@ -242,6 +247,69 @@ def get_content_breakdown(
         logger.warning("PostHog error in get_content_breakdown(%s)", kind, exc_info=True)
     page = all_rows[offset : offset + limit]
     return ContentBreakdownPage(rows=page, has_more=len(all_rows) > offset + limit)
+
+
+@router.get("/topic-engagement", response_model=TopicEngagementData)
+def get_topic_engagement(
+    current_user: CounselorDep,
+    db: DbDep,
+    school_id: str | None = Query(default=None),
+    date_from: str = Query(default="-30d"),
+    date_to: str | None = Query(default=None),
+    cycle_name: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
+) -> TopicEngagementData:
+    """Grade → Goal → Topic tree with per-topic engagement + video views.
+
+    The hierarchy comes from Postgres (the school's grade set, published topics
+    only — cheap, always current); the numbers come from ONE cached HogQL query
+    keyed on the topic ids. Topics with no activity are kept, showing zeros, so
+    the counselor sees full coverage rather than only what was visited.
+    """
+    api_key, project_id = _check_configured()
+    sid = _resolve_school(current_user, school_id)
+
+    school_slug, grades = get_school_topic_tree(db, sid)
+    topic_ids = [t["topic_id"] for g in grades for gl in g["goals"] for t in gl["topics"]]
+    metrics = get_topic_metrics(
+        api_key, project_id, topic_ids,
+        school_id=sid, date_from=date_from, date_to=date_to,
+        cycle_name=cycle_name, db=db, force_refresh=refresh,
+    )
+
+    out_grades: list[TopicEngagementGrade] = []
+    tree_eng = tree_vid = 0
+    for g in grades:
+        out_goals: list[TopicEngagementGoal] = []
+        g_eng = g_vid = 0
+        for gl in g["goals"]:
+            topics = [
+                TopicEngagementTopic(
+                    topic_id=t["topic_id"], title=t["title"], slug=t["slug"],
+                    engagement=metrics.get(t["topic_id"], {}).get("engagement", 0),
+                    video_views=metrics.get(t["topic_id"], {}).get("video_views", 0),
+                )
+                for t in gl["topics"]
+            ]
+            gl_eng = sum(t.engagement for t in topics)
+            gl_vid = sum(t.video_views for t in topics)
+            out_goals.append(TopicEngagementGoal(
+                goal_id=gl["goal_id"], name=gl["name"],
+                engagement=gl_eng, video_views=gl_vid, topics=topics,
+            ))
+            g_eng += gl_eng
+            g_vid += gl_vid
+        out_grades.append(TopicEngagementGrade(
+            grade=g["grade"], label=g["label"], page_title=g["page_title"],
+            engagement=g_eng, video_views=g_vid, goals=out_goals,
+        ))
+        tree_eng += g_eng
+        tree_vid += g_vid
+
+    return TopicEngagementData(
+        school_slug=school_slug, grades=out_grades,
+        engagement=tree_eng, video_views=tree_vid,
+    )
 
 
 @router.get("/search", response_model=SearchData)
@@ -319,19 +387,29 @@ def _query_workshops_detail_ph(
     site_hogql = (
         "SELECT "
         "countIf(event = '$pageview') AS visits, "
-        "countIf(event = 'video_session_end') AS video_views, "
+        "countIf(event = 'video_view') AS video_views, "
         "countIf(event = 'resource_viewed') AS resource_views "
         "FROM events "
         f"WHERE {date_clause}{school_clause}{cycle_clause} "
-        "AND event IN ('$pageview', 'video_session_end', 'resource_viewed')"
+        "AND event IN ('$pageview', 'video_view', 'resource_viewed')"
     )
-    # Recording views + avg % watched per webinar_id (video_session_end).
-    hogql_rec = (
-        "SELECT properties.webinar_id, count(), avg(toFloat(ifNull(properties.percent_watched, '0'))) "
+    # Recording VIEWS per object_id (video_view — the "view" = first play metric).
+    # Video events key on properties.object_id (workshop videos → webinar UUID).
+    hogql_rec_views = (
+        "SELECT properties.object_id, count() "
+        "FROM events "
+        f"WHERE event = 'video_view' AND {date_clause}{school_clause}{cycle_clause} "
+        "AND isNotNull(properties.object_id) "
+        "GROUP BY properties.object_id"
+    )
+    # Avg % watched per object_id (video_session_end — watch-quality stat, kept
+    # separate because only the session-end summary carries percent_watched).
+    hogql_rec_pct = (
+        "SELECT properties.object_id, avg(toFloat(ifNull(properties.percent_watched, '0'))) "
         "FROM events "
         f"WHERE event = 'video_session_end' AND {date_clause}{school_clause}{cycle_clause} "
-        "AND isNotNull(properties.webinar_id) "
-        "GROUP BY properties.webinar_id"
+        "AND isNotNull(properties.object_id) "
+        "GROUP BY properties.object_id"
     )
     # Detail views per webinar_id (workshop_detail_view).
     hogql_detail = (
@@ -358,9 +436,9 @@ def _query_workshops_detail_ph(
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        site_rows, rec_rows, detail_rows, res_rows = ex.map(
-            _run, [site_hogql, hogql_rec, hogql_detail, hogql_res]
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        site_rows, rec_view_rows, rec_pct_rows, detail_rows, res_rows = ex.map(
+            _run, [site_hogql, hogql_rec_views, hogql_rec_pct, hogql_detail, hogql_res]
         )
 
     # Outage handling is deferred until AFTER parsing (see the guard before
@@ -376,9 +454,18 @@ def _query_workshops_detail_ph(
     except Exception:
         pass
     try:
+        # Merge the two per-webinar reads: view count (video_view) + avg %
+        # watched (video_session_end), keyed by object_id (= webinar UUID for
+        # workshop videos, so it aligns with the DB webinar rows). Shape stays
+        # (view_count, avg_pct) so downstream consumers are unchanged.
+        view_map = {str(r[0]): int(r[1]) for r in (rec_view_rows or []) if r[0]}
+        pct_map = {
+            str(r[0]): (float(r[1]) if r[1] is not None else None)
+            for r in (rec_pct_rows or []) if r[0]
+        }
         ph_map = {
-            str(r[0]): (int(r[1]), float(r[2]) if r[2] is not None else None)
-            for r in (rec_rows or []) if r[0]
+            wid: (view_map.get(wid, 0), pct_map.get(wid))
+            for wid in (view_map.keys() | pct_map.keys())
         }
     except Exception:
         ph_map = {}
@@ -396,7 +483,8 @@ def _query_workshops_detail_ph(
     # on a forced refresh (which bypassed the read and would otherwise clobber
     # good data for the whole TTL). Prefer the stale-but-complete entry; if none
     # exists, return the partial result WITHOUT caching it.
-    if site_rows is None or rec_rows is None or detail_rows is None or res_rows is None:
+    if (site_rows is None or rec_view_rows is None or rec_pct_rows is None
+            or detail_rows is None or res_rows is None):
         stale = ph._db_get_stale(db, cache_key)
         if stale is not None:
             return _unpack_workshops_detail_ph(stale)
@@ -664,7 +752,8 @@ def get_workshop_timeline(
     # filter — the windowed helper matches from=<webinar_id> per window.
     event_specs: list[phb.EventSpec] = [
         {"key": "detail_views", "event": "workshop_detail_view"},
-        {"key": "video_watch_count", "event": "video_session_end"},
+        # video_view keys the webinar on properties.object_id (workshop → webinar id)
+        {"key": "video_watch_count", "event": "video_view", "match_prop": "object_id"},
         {
             "key": "resource_views",
             "event": "resource_viewed",
@@ -767,15 +856,25 @@ def get_workshop_engagement(
     # card and timeline tile (empty string for super_admin viewing all schools).
     school_clause = ph._hogql_school_clause(sid)
 
-    # Video aggregate stats (powers the "Video engagement" card).
+    # Total plays = VIEWS (video_view, first play per session).
+    plays_hogql = (
+        "SELECT count() AS total_plays "
+        "FROM events "
+        f"WHERE event = 'video_view' "
+        f"  AND properties.object_id = '{webinar_id}'{school_clause} "
+        f"  AND timestamp >= toDate('{ws_date}') "
+        f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
+    )
+    # Watch-quality stats (minutes watched + avg %) come from the session-end
+    # summary, which is the only event carrying total_watch_seconds/percent.
     video_hogql = (
         "SELECT "
-        "  count() AS total_plays, "
+        "  count() AS session_count, "
         "  round(sum(toFloat(ifNull(properties.total_watch_seconds, '0'))) / 60) AS total_minutes_watched, "
         "  avg(toFloat(ifNull(properties.percent_watched, '0'))) AS avg_percent_watched "
         "FROM events "
         f"WHERE event = 'video_session_end' "
-        f"  AND properties.webinar_id = '{webinar_id}'{school_clause} "
+        f"  AND properties.object_id = '{webinar_id}'{school_clause} "
         f"  AND timestamp >= toDate('{ws_date}') "
         f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
     )
@@ -803,9 +902,11 @@ def get_workshop_engagement(
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=2) as ex:
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_plays = ex.submit(_run, plays_hogql)
         f_video = ex.submit(_run, video_hogql)
         f_res = ex.submit(_run, resources_hogql)
+        plays_rows = f_plays.result()
         video_rows = f_video.result()
         resource_rows = f_res.result()
 
@@ -814,13 +915,22 @@ def get_workshop_engagement(
     # complete cache entry — critical on a forced refresh.
 
     # -- Video aggregate stats — degrade gracefully to zeros on parse failure. --
-    video_stats = WorkshopVideoStats(total_plays=0, total_minutes_watched=0, avg_percent_watched=None)
+    # total_plays (views) and watch stats come from two separate reads.
+    total_plays = 0
+    try:
+        if plays_rows and plays_rows[0][0] is not None:
+            total_plays = int(plays_rows[0][0])
+    except Exception:
+        pass
+    video_stats = WorkshopVideoStats(
+        total_plays=total_plays, total_minutes_watched=0, avg_percent_watched=None
+    )
     try:
         if video_rows:
             r = video_rows[0]
-            total_plays = int(r[0]) if r[0] is not None else 0
+            session_count = int(r[0]) if r[0] is not None else 0
             total_minutes = int(r[1]) if r[1] is not None else 0
-            avg_pct = float(r[2]) if r[2] is not None and total_plays > 0 else None
+            avg_pct = float(r[2]) if r[2] is not None and session_count > 0 else None
             video_stats = WorkshopVideoStats(
                 total_plays=total_plays,
                 total_minutes_watched=total_minutes,
@@ -850,7 +960,7 @@ def get_workshop_engagement(
     # Total OR partial outage: at least one read failed. Don't overwrite a
     # complete entry with partial/zeroed data (esp. on a forced refresh). Prefer
     # the stale-but-complete entry; else return the partial WITHOUT caching it.
-    if video_rows is None or resource_rows is None:
+    if plays_rows is None or video_rows is None or resource_rows is None:
         stale = ph._db_get_stale(db, cache_key)
         if stale:
             return WorkshopEngagementCards.model_validate(stale)
