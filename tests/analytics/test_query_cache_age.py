@@ -24,7 +24,9 @@ class _FakeSession:
         self._rows = {r.key: r for r in rows}
         self.info: dict = {}
 
-    def get(self, _model, key):
+    def get(self, _model, key, **_kwargs):
+        # **_kwargs swallows populate_existing=True (the readers bypass the
+        # identity map so single_flight's post-wait re-check sees fresh rows).
         return self._rows.get(key)
 
 

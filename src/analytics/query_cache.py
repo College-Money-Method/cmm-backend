@@ -7,6 +7,7 @@ Falls back to the in-process dict in posthog.py when no DB session is provided
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,8 @@ from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from src.db.base import Base
+
+logger = logging.getLogger(__name__)
 
 
 class AnalyticsQueryCache(Base):
@@ -68,7 +71,11 @@ def oldest_cache_hit(db: Session | None) -> datetime | None:
 
 def db_cache_get(db: Session, key: str, ttl: timedelta) -> dict | None:
     """Return cached payload if present and within TTL, else None."""
-    row = db.get(AnalyticsQueryCache, key)
+    # populate_existing: single_flight's post-wait re-check reads the same key this
+    # request already read (and found expired) before waiting. Without it, get()
+    # would hand back the instance still in the identity map — the pre-wait,
+    # pre-refresh row — so the waiter would recompute what it just waited for.
+    row = db.get(AnalyticsQueryCache, key, populate_existing=True)
     if row is None:
         return None
     fetched_at = row.fetched_at.replace(tzinfo=timezone.utc)
@@ -80,7 +87,7 @@ def db_cache_get(db: Session, key: str, ttl: timedelta) -> dict | None:
 
 def db_cache_get_stale(db: Session, key: str) -> dict | None:
     """Return cached payload regardless of age (for stale-on-error serving)."""
-    row = db.get(AnalyticsQueryCache, key)
+    row = db.get(AnalyticsQueryCache, key, populate_existing=True)
     if row is None:
         return None
     # Counts as a hit — and an old one, which is exactly what the UI should show
@@ -117,17 +124,34 @@ def _advisory_key(key: str) -> int:
     return int.from_bytes(hashlib.md5(key.encode()).digest()[:8], "big", signed=True)
 
 
+# How long to wait for another request's compute before giving up and computing
+# anyway. A duplicate PostHog round trip is far cheaper than a hung page: the
+# frontend streams these payloads and aborts at 30s (entry.server streamTimeout).
+_LOCK_WAIT = "10s"
+
+
 @contextmanager
 def single_flight(db: Session | None, key: str) -> Iterator[None]:
     """Serialize concurrent computations of the same cache key across processes.
 
-    Uses a SESSION-level Postgres advisory lock (pg_advisory_lock /
-    pg_advisory_unlock) — NOT the transaction-scoped pg_advisory_xact_lock.
-    Compute sites call db_cache_set() mid-computation, which does db.commit();
-    a transaction-scoped lock would be released at that commit, defeating the
-    purpose. A session-level lock instead stays held across commits until
-    explicitly released here (in `finally`), so a second request for the same
-    key genuinely waits for the first request's full compute-and-write to finish.
+    Uses a TRANSACTION-scoped advisory lock (pg_advisory_xact_lock). Postgres
+    releases it at transaction end no matter what — commit, rollback, error, or a
+    dropped connection — so a lock can never be orphaned.
+
+    Releasing at commit is exactly the handoff we want, not a limitation: the
+    commit that ends the transaction is db_cache_set()'s, i.e. the moment the
+    cache entry is published. A waiter woken there re-reads and finds the fresh
+    row (READ COMMITTED shows it the latest committed data).
+
+    It must NOT be the session-level pg_advisory_lock: that lock belongs to the
+    CONNECTION, and db_cache_set()'s mid-computation db.commit() returns the
+    connection to the pool. The matching pg_advisory_unlock then ran on whatever
+    connection the pool handed back — a different one under concurrency (measured:
+    7 of 8 times) — so it silently returned false and left the lock held by an
+    idle pooled connection FOREVER. Every later request for that key blocked on
+    it, which surfaced as analytics tabs hanging until the 30s stream timeout.
+    Same reason it can't work through Supabase's transaction pooler in prod,
+    where consecutive transactions need not share a server connection at all.
 
     If db is None (CLI / background jobs, no request-scoped session), this is a
     no-op — those callers already fall back to the in-process dict cache in
@@ -137,8 +161,18 @@ def single_flight(db: Session | None, key: str) -> Iterator[None]:
         yield
         return
     k = _advisory_key(key)
-    db.execute(text("SELECT pg_advisory_lock(:k)"), {"k": k})
     try:
-        yield
-    finally:
-        db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": k})
+        # Bounded wait: lock_timeout covers advisory-lock acquisition, so a
+        # pathological holder degrades us to duplicate work, never to a hang.
+        # LOCAL = for this transaction only, undone by the next commit.
+        db.execute(text(f"SET LOCAL lock_timeout = '{_LOCK_WAIT}'"))
+        db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": k})
+    except Exception:
+        # Timed out (or the lock statement failed) — the transaction is aborted,
+        # so roll back before the caller runs its own queries, then compute
+        # WITHOUT coalescing. Correctness never depended on the lock.
+        logger.warning("single_flight lock unavailable for %s; computing uncoalesced", key)
+        db.rollback()
+    yield
+    # No unlock: the lock ends with the transaction. Whatever the caller did —
+    # committed the fresh entry, raised, or returned early — Postgres cleans up.
