@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 from sqlalchemy.orm import Session
 
+from src.analytics.query_cache import single_flight
 from src.analytics.schemas import FunnelStep, TopBreakdown, TrendMetric
 
 logger = logging.getLogger(__name__)
@@ -241,31 +242,36 @@ def get_trend(
     if (cached := _db_get(db, cache_key, school_id)) is not None:
         return TrendMetric.model_validate(cached) if isinstance(cached, dict) else cached
 
-    series: dict = {"kind": "EventsNode", "event": event, "math": math}
-    if math_property:
-        series["math_property"] = math_property
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        if (cached := _db_get(db, cache_key, school_id)) is not None:
+            return TrendMetric.model_validate(cached) if isinstance(cached, dict) else cached
 
-    try:
-        result = _query(api_key, project_id, {
-            "kind": "TrendsQuery",
-            "series": [series],
-            "dateRange": _date_range(date_from, date_to),
-            "properties": _school_filter(school_id, prop_type) + _cycle_filter(cycle_name),
-            "interval": "day",
-            "filterTestAccounts": False,
-            "version": 2,
-        })
-    except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        logger.warning("PostHog error in get_trend(%s): %s — serving stale", event, exc)
-        stale = _db_get_stale(db, cache_key)
-        if stale is not None:
-            return TrendMetric.model_validate(stale) if isinstance(stale, dict) else stale
-        return TrendMetric(total=0, data=[], days=[])
+        series: dict = {"kind": "EventsNode", "event": event, "math": math}
+        if math_property:
+            series["math_property"] = math_property
 
-    s = result.get("results", [{}])[0]
-    metric = TrendMetric(total=s.get("count", 0), data=s.get("data", []), days=s.get("days", []))
-    _db_set(db, cache_key, metric.model_dump())
-    return metric
+        try:
+            result = _query(api_key, project_id, {
+                "kind": "TrendsQuery",
+                "series": [series],
+                "dateRange": _date_range(date_from, date_to),
+                "properties": _school_filter(school_id, prop_type) + _cycle_filter(cycle_name),
+                "interval": "day",
+                "filterTestAccounts": False,
+                "version": 2,
+            })
+        except (httpx.HTTPError, httpx.TimeoutException) as exc:
+            logger.warning("PostHog error in get_trend(%s): %s — serving stale", event, exc)
+            stale = _db_get_stale(db, cache_key)
+            if stale is not None:
+                return TrendMetric.model_validate(stale) if isinstance(stale, dict) else stale
+            return TrendMetric(total=0, data=[], days=[])
+
+        s = result.get("results", [{}])[0]
+        metric = TrendMetric(total=s.get("count", 0), data=s.get("data", []), days=s.get("days", []))
+        _db_set(db, cache_key, metric.model_dump())
+        return metric
 
 
 def get_funnel(
@@ -286,32 +292,39 @@ def get_funnel(
             return [FunnelStep.model_validate(s) for s in cached]
         return cached
 
-    try:
-        result = _query(api_key, project_id, {
-            "kind": "FunnelsQuery",
-            "series": [{"kind": "EventsNode", "event": step1}, {"kind": "EventsNode", "event": step2}],
-            "dateRange": _date_range(date_from, date_to),
-            "properties": _school_filter(school_id) + _cycle_filter(cycle_name),
-            "funnelsFilter": {"funnelVizType": "steps", "funnelOrderType": "ordered", "funnelWindowInterval": 1, "funnelWindowIntervalUnit": "day"},
-            "filterTestAccounts": False,
-        })
-    except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        logger.warning("PostHog error in get_funnel: %s — serving stale", exc)
-        stale = _db_get_stale(db, cache_key)
-        if stale is not None:
-            return [FunnelStep.model_validate(s) for s in stale] if stale and isinstance(stale[0], dict) else stale
-        return []
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        if (cached := _db_get(db, cache_key, school_id)) is not None:
+            if isinstance(cached, list) and cached and isinstance(cached[0], dict):
+                return [FunnelStep.model_validate(s) for s in cached]
+            return cached
 
-    raw = result.get("result") or result.get("results") or []
-    if raw and isinstance(raw[0], list):
-        raw_steps = raw[0]
-    elif raw and isinstance(raw[0], dict):
-        raw_steps = raw
-    else:
-        raw_steps = []
-    steps = [FunnelStep(name=s.get("name", s.get("breakdown_value", "")), count=s.get("count", 0)) for s in raw_steps]
-    _db_set(db, cache_key, [s.model_dump() for s in steps])
-    return steps
+        try:
+            result = _query(api_key, project_id, {
+                "kind": "FunnelsQuery",
+                "series": [{"kind": "EventsNode", "event": step1}, {"kind": "EventsNode", "event": step2}],
+                "dateRange": _date_range(date_from, date_to),
+                "properties": _school_filter(school_id) + _cycle_filter(cycle_name),
+                "funnelsFilter": {"funnelVizType": "steps", "funnelOrderType": "ordered", "funnelWindowInterval": 1, "funnelWindowIntervalUnit": "day"},
+                "filterTestAccounts": False,
+            })
+        except (httpx.HTTPError, httpx.TimeoutException) as exc:
+            logger.warning("PostHog error in get_funnel: %s — serving stale", exc)
+            stale = _db_get_stale(db, cache_key)
+            if stale is not None:
+                return [FunnelStep.model_validate(s) for s in stale] if stale and isinstance(stale[0], dict) else stale
+            return []
+
+        raw = result.get("result") or result.get("results") or []
+        if raw and isinstance(raw[0], list):
+            raw_steps = raw[0]
+        elif raw and isinstance(raw[0], dict):
+            raw_steps = raw
+        else:
+            raw_steps = []
+        steps = [FunnelStep(name=s.get("name", s.get("breakdown_value", "")), count=s.get("count", 0)) for s in raw_steps]
+        _db_set(db, cache_key, [s.model_dump() for s in steps])
+        return steps
 
 
 def get_top_breakdown(
@@ -335,48 +348,55 @@ def get_top_breakdown(
             return [TopBreakdown.model_validate(r) for r in cached]
         return cached
 
-    series: dict = {"kind": "EventsNode", "event": event, "math": math}
-    if math_property:
-        series["math_property"] = math_property
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        if (cached := _db_get(db, cache_key, school_id)) is not None:
+            if isinstance(cached, list) and cached and isinstance(cached[0], dict):
+                return [TopBreakdown.model_validate(r) for r in cached]
+            return cached
 
-    try:
-        result = _query(api_key, project_id, {
-            "kind": "TrendsQuery",
-            "series": [series],
-            "dateRange": _date_range(date_from, date_to),
-            "properties": _school_filter(school_id) + _cycle_filter(cycle_name),
-            "breakdownFilter": {"breakdowns": [{"type": "event", "property": breakdown_prop}], "breakdown_type": "event"},
-            "trendsFilter": {"display": "ActionsBarValue"},
-            "filterTestAccounts": False,
-            "version": 2,
-        })
-    except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        logger.warning("PostHog error in get_top_breakdown(%s): %s — serving stale", event, exc)
-        stale = _db_get_stale(db, cache_key)
-        if stale is not None:
-            return [TopBreakdown.model_validate(r) for r in stale] if stale and isinstance(stale[0], dict) else stale
-        return []
+        series: dict = {"kind": "EventsNode", "event": event, "math": math}
+        if math_property:
+            series["math_property"] = math_property
 
-    def _extract_label(r: dict) -> str:
-        bv = r.get("breakdown_value")
-        if bv is None:
-            bv = r.get("label", "")
-        if isinstance(bv, list):
-            bv = bv[0] if bv else ""
-        return str(bv)
+        try:
+            result = _query(api_key, project_id, {
+                "kind": "TrendsQuery",
+                "series": [series],
+                "dateRange": _date_range(date_from, date_to),
+                "properties": _school_filter(school_id) + _cycle_filter(cycle_name),
+                "breakdownFilter": {"breakdowns": [{"type": "event", "property": breakdown_prop}], "breakdown_type": "event"},
+                "trendsFilter": {"display": "ActionsBarValue"},
+                "filterTestAccounts": False,
+                "version": 2,
+            })
+        except (httpx.HTTPError, httpx.TimeoutException) as exc:
+            logger.warning("PostHog error in get_top_breakdown(%s): %s — serving stale", event, exc)
+            stale = _db_get_stale(db, cache_key)
+            if stale is not None:
+                return [TopBreakdown.model_validate(r) for r in stale] if stale and isinstance(stale[0], dict) else stale
+            return []
 
-    def _valid(r: dict) -> bool:
-        label = _extract_label(r)
-        return bool(label) and label != "Other" and not label.startswith("$$_posthog")
+        def _extract_label(r: dict) -> str:
+            bv = r.get("breakdown_value")
+            if bv is None:
+                bv = r.get("label", "")
+            if isinstance(bv, list):
+                bv = bv[0] if bv else ""
+            return str(bv)
 
-    def _value(r: dict) -> float:
-        val = r.get("aggregated_value")
-        return val if val is not None else r.get("count", 0)
+        def _valid(r: dict) -> bool:
+            label = _extract_label(r)
+            return bool(label) and label != "Other" and not label.startswith("$$_posthog")
 
-    rows = sorted(
-        [{"label": _extract_label(r), "count": _value(r)} for r in result.get("results", []) if _valid(r)],
-        key=lambda x: x["count"], reverse=True,
-    )[:limit]
-    breakdown = [TopBreakdown(label=r["label"], count=r["count"]) for r in rows]
-    _db_set(db, cache_key, [b.model_dump() for b in breakdown])
-    return breakdown
+        def _value(r: dict) -> float:
+            val = r.get("aggregated_value")
+            return val if val is not None else r.get("count", 0)
+
+        rows = sorted(
+            [{"label": _extract_label(r), "count": _value(r)} for r in result.get("results", []) if _valid(r)],
+            key=lambda x: x["count"], reverse=True,
+        )[:limit]
+        breakdown = [TopBreakdown(label=r["label"], count=r["count"]) for r in rows]
+        _db_set(db, cache_key, [b.model_dump() for b in breakdown])
+        return breakdown
