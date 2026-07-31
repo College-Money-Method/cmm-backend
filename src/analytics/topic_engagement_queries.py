@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, contains_eager, selectinload
 
 from src.analytics import posthog as ph
+from src.analytics.query_cache import single_flight
 from src.content.models import Goal, GradeConfig, GradeConfigGoal, GradeSet
 from src.schools.models import School
 
@@ -138,34 +139,41 @@ def get_topic_metrics(
     if cached is not None:
         return cached
 
-    id_list = ", ".join(f"'{i}'" for i in ids)
-    # The id filter is spelled out per event (NOT via the `tid` alias): each event
-    # carries the topic id under a different property, and referencing a SELECT
-    # alias in WHERE is not something to rely on across query engines.
-    hogql = (
-        "SELECT "
-        "  toString(if(event = 'topic_viewed', properties.topic_id, properties.object_id)) AS tid, "
-        "  countIf(event = 'topic_viewed') AS engagement, "
-        "  countIf(event = 'video_view') AS video_views "
-        "FROM events "
-        f"WHERE {ph._hogql_date_clause(date_from, date_to)}"
-        f"{ph._hogql_school_clause(school_id)}{ph._hogql_cycle_clause(cycle_name)} "
-        f"  AND ((event = 'topic_viewed' AND toString(properties.topic_id) IN ({id_list})) "
-        "       OR (event = 'video_view' AND properties.object_type = 'topic' "
-        f"           AND toString(properties.object_id) IN ({id_list}))) "
-        "GROUP BY tid"
-    )
-    try:
-        rows = ph.get_hogql_query(api_key, project_id, hogql)
-    except Exception:
-        logger.warning("PostHog error computing topic metrics", exc_info=True)
-        stale = ph._db_get_stale(db, cache_key)
-        return stale if stale is not None else {}
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        # (force_refresh still bypasses this, so Refresh keeps recomputing.)
+        cached = ph._db_get(db, cache_key, school_id, force=force_refresh)
+        if cached is not None:
+            return cached
 
-    metrics = {
-        str(r[0]): {"engagement": int(r[1] or 0), "video_views": int(r[2] or 0)}
-        for r in rows
-        if r and r[0]
-    }
-    ph._db_set(db, cache_key, metrics)
-    return metrics
+        id_list = ", ".join(f"'{i}'" for i in ids)
+        # The id filter is spelled out per event (NOT via the `tid` alias): each event
+        # carries the topic id under a different property, and referencing a SELECT
+        # alias in WHERE is not something to rely on across query engines.
+        hogql = (
+            "SELECT "
+            "  toString(if(event = 'topic_viewed', properties.topic_id, properties.object_id)) AS tid, "
+            "  countIf(event = 'topic_viewed') AS engagement, "
+            "  countIf(event = 'video_view') AS video_views "
+            "FROM events "
+            f"WHERE {ph._hogql_date_clause(date_from, date_to)}"
+            f"{ph._hogql_school_clause(school_id)}{ph._hogql_cycle_clause(cycle_name)} "
+            f"  AND ((event = 'topic_viewed' AND toString(properties.topic_id) IN ({id_list})) "
+            "       OR (event = 'video_view' AND properties.object_type = 'topic' "
+            f"           AND toString(properties.object_id) IN ({id_list}))) "
+            "GROUP BY tid"
+        )
+        try:
+            rows = ph.get_hogql_query(api_key, project_id, hogql)
+        except Exception:
+            logger.warning("PostHog error computing topic metrics", exc_info=True)
+            stale = ph._db_get_stale(db, cache_key)
+            return stale if stale is not None else {}
+
+        metrics = {
+            str(r[0]): {"engagement": int(r[1] or 0), "video_views": int(r[2] or 0)}
+            for r in rows
+            if r and r[0]
+        }
+        ph._db_set(db, cache_key, metrics)
+        return metrics

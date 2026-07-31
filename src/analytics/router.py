@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 from src.analytics import posthog as ph
 from src.analytics import posthog_batched as phb
+from src.analytics.query_cache import single_flight
 from src.analytics.schemas import (
     ContentBreakdownPage,
     ContentData,
@@ -378,129 +379,135 @@ def _query_workshops_detail_ph(
     if (cached := ph._db_get(db, cache_key, sid, force=force)) is not None:
         return _unpack_workshops_detail_ph(cached)
 
-    date_clause = ph._hogql_date_clause(date_from, date_to)
-    school_clause = ph._hogql_school_clause(sid)
-    cycle_clause = ph._hogql_cycle_clause(cycle_name)
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        # (force still bypasses this, so Refresh keeps recomputing.)
+        if (cached := ph._db_get(db, cache_key, sid, force=force)) is not None:
+            return _unpack_workshops_detail_ph(cached)
 
-    # Website-wide content totals for the summary tiles — NOT restricted to
-    # workshops (still scoped by this school + selected period).
-    site_hogql = (
-        "SELECT "
-        "countIf(event = '$pageview') AS visits, "
-        "countIf(event = 'video_view') AS video_views, "
-        "countIf(event = 'resource_viewed') AS resource_views "
-        "FROM events "
-        f"WHERE {date_clause}{school_clause}{cycle_clause} "
-        "AND event IN ('$pageview', 'video_view', 'resource_viewed')"
-    )
-    # Recording VIEWS per object_id (video_view — the "view" = first play metric).
-    # Video events key on properties.object_id (workshop videos → webinar UUID).
-    hogql_rec_views = (
-        "SELECT properties.object_id, count() "
-        "FROM events "
-        f"WHERE event = 'video_view' AND {date_clause}{school_clause}{cycle_clause} "
-        "AND isNotNull(properties.object_id) "
-        "GROUP BY properties.object_id"
-    )
-    # Avg % watched per object_id (video_session_end — watch-quality stat, kept
-    # separate because only the session-end summary carries percent_watched).
-    hogql_rec_pct = (
-        "SELECT properties.object_id, avg(toFloat(ifNull(properties.percent_watched, '0'))) "
-        "FROM events "
-        f"WHERE event = 'video_session_end' AND {date_clause}{school_clause}{cycle_clause} "
-        "AND isNotNull(properties.object_id) "
-        "GROUP BY properties.object_id"
-    )
-    # Detail views per webinar_id (workshop_detail_view).
-    hogql_detail = (
-        "SELECT properties.webinar_id, count() "
-        "FROM events "
-        f"WHERE event = 'workshop_detail_view' AND {date_clause}{school_clause}{cycle_clause} "
-        "AND isNotNull(properties.webinar_id) "
-        "GROUP BY properties.webinar_id"
-    )
-    # Resource views per webinar_id (resource_viewed WHERE via='workshop'); the
-    # origin webinar is carried in properties.from.
-    hogql_res = (
-        "SELECT properties.from, count() "
-        "FROM events "
-        f"WHERE event = 'resource_viewed' AND {date_clause}{school_clause}{cycle_clause} "
-        "AND properties.via = 'workshop' "
-        "AND isNotNull(properties.from) "
-        "GROUP BY properties.from"
-    )
+        date_clause = ph._hogql_date_clause(date_from, date_to)
+        school_clause = ph._hogql_school_clause(sid)
+        cycle_clause = ph._hogql_cycle_clause(cycle_name)
 
-    def _run(q: str):
-        try:
-            return ph.get_hogql_query(api_key, project_id, q)
-        except Exception:
-            return None
-
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        site_rows, rec_view_rows, rec_pct_rows, detail_rows, res_rows = ex.map(
-            _run, [site_hogql, hogql_rec_views, hogql_rec_pct, hogql_detail, hogql_res]
+        # Website-wide content totals for the summary tiles — NOT restricted to
+        # workshops (still scoped by this school + selected period).
+        site_hogql = (
+            "SELECT "
+            "countIf(event = '$pageview') AS visits, "
+            "countIf(event = 'video_view') AS video_views, "
+            "countIf(event = 'resource_viewed') AS resource_views "
+            "FROM events "
+            f"WHERE {date_clause}{school_clause}{cycle_clause} "
+            "AND event IN ('$pageview', 'video_view', 'resource_viewed')"
+        )
+        # Recording VIEWS per object_id (video_view — the "view" = first play metric).
+        # Video events key on properties.object_id (workshop videos → webinar UUID).
+        hogql_rec_views = (
+            "SELECT properties.object_id, count() "
+            "FROM events "
+            f"WHERE event = 'video_view' AND {date_clause}{school_clause}{cycle_clause} "
+            "AND isNotNull(properties.object_id) "
+            "GROUP BY properties.object_id"
+        )
+        # Avg % watched per object_id (video_session_end — watch-quality stat, kept
+        # separate because only the session-end summary carries percent_watched).
+        hogql_rec_pct = (
+            "SELECT properties.object_id, avg(toFloat(ifNull(properties.percent_watched, '0'))) "
+            "FROM events "
+            f"WHERE event = 'video_session_end' AND {date_clause}{school_clause}{cycle_clause} "
+            "AND isNotNull(properties.object_id) "
+            "GROUP BY properties.object_id"
+        )
+        # Detail views per webinar_id (workshop_detail_view).
+        hogql_detail = (
+            "SELECT properties.webinar_id, count() "
+            "FROM events "
+            f"WHERE event = 'workshop_detail_view' AND {date_clause}{school_clause}{cycle_clause} "
+            "AND isNotNull(properties.webinar_id) "
+            "GROUP BY properties.webinar_id"
+        )
+        # Resource views per webinar_id (resource_viewed WHERE via='workshop'); the
+        # origin webinar is carried in properties.from.
+        hogql_res = (
+            "SELECT properties.from, count() "
+            "FROM events "
+            f"WHERE event = 'resource_viewed' AND {date_clause}{school_clause}{cycle_clause} "
+            "AND properties.via = 'workshop' "
+            "AND isNotNull(properties.from) "
+            "GROUP BY properties.from"
         )
 
-    # Outage handling is deferred until AFTER parsing (see the guard before
-    # _db_set): a PARTIAL failure must not overwrite a complete cache entry.
+        def _run(q: str):
+            try:
+                return ph.get_hogql_query(api_key, project_id, q)
+            except Exception:
+                return None
 
-    # Parse each result defensively — a malformed row must degrade to empty for
-    # that metric, not fail the whole request (mirrors the original per-query guards).
-    site_totals = SiteTotals()
-    try:
-        if site_rows:
-            r0 = site_rows[0]
-            site_totals = SiteTotals(visits=int(r0[0]), video_views=int(r0[1]), resource_views=int(r0[2]))
-    except Exception:
-        pass
-    try:
-        # Merge the two per-webinar reads: view count (video_view) + avg %
-        # watched (video_session_end), keyed by object_id (= webinar UUID for
-        # workshop videos, so it aligns with the DB webinar rows). Shape stays
-        # (view_count, avg_pct) so downstream consumers are unchanged.
-        view_map = {str(r[0]): int(r[1]) for r in (rec_view_rows or []) if r[0]}
-        pct_map = {
-            str(r[0]): (float(r[1]) if r[1] is not None else None)
-            for r in (rec_pct_rows or []) if r[0]
-        }
-        ph_map = {
-            wid: (view_map.get(wid, 0), pct_map.get(wid))
-            for wid in (view_map.keys() | pct_map.keys())
-        }
-    except Exception:
-        ph_map = {}
-    try:
-        detail_map = {str(r[0]): int(r[1]) for r in (detail_rows or []) if r[0]}
-    except Exception:
-        detail_map = {}
-    try:
-        res_map = {str(r[0]): int(r[1]) for r in (res_rows or []) if r[0]}
-    except Exception:
-        res_map = {}
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            site_rows, rec_view_rows, rec_pct_rows, detail_rows, res_rows = ex.map(
+                _run, [site_hogql, hogql_rec_views, hogql_rec_pct, hogql_detail, hogql_res]
+            )
 
-    # Total OR partial PostHog outage: at least one sub-query failed. Never
-    # overwrite a previously-complete entry with partial/zeroed data — critical
-    # on a forced refresh (which bypassed the read and would otherwise clobber
-    # good data for the whole TTL). Prefer the stale-but-complete entry; if none
-    # exists, return the partial result WITHOUT caching it.
-    if (site_rows is None or rec_view_rows is None or rec_pct_rows is None
-            or detail_rows is None or res_rows is None):
-        stale = ph._db_get_stale(db, cache_key)
-        if stale is not None:
-            return _unpack_workshops_detail_ph(stale)
+        # Outage handling is deferred until AFTER parsing (see the guard before
+        # _db_set): a PARTIAL failure must not overwrite a complete cache entry.
+
+        # Parse each result defensively — a malformed row must degrade to empty for
+        # that metric, not fail the whole request (mirrors the original per-query guards).
+        site_totals = SiteTotals()
+        try:
+            if site_rows:
+                r0 = site_rows[0]
+                site_totals = SiteTotals(visits=int(r0[0]), video_views=int(r0[1]), resource_views=int(r0[2]))
+        except Exception:
+            pass
+        try:
+            # Merge the two per-webinar reads: view count (video_view) + avg %
+            # watched (video_session_end), keyed by object_id (= webinar UUID for
+            # workshop videos, so it aligns with the DB webinar rows). Shape stays
+            # (view_count, avg_pct) so downstream consumers are unchanged.
+            view_map = {str(r[0]): int(r[1]) for r in (rec_view_rows or []) if r[0]}
+            pct_map = {
+                str(r[0]): (float(r[1]) if r[1] is not None else None)
+                for r in (rec_pct_rows or []) if r[0]
+            }
+            ph_map = {
+                wid: (view_map.get(wid, 0), pct_map.get(wid))
+                for wid in (view_map.keys() | pct_map.keys())
+            }
+        except Exception:
+            ph_map = {}
+        try:
+            detail_map = {str(r[0]): int(r[1]) for r in (detail_rows or []) if r[0]}
+        except Exception:
+            detail_map = {}
+        try:
+            res_map = {str(r[0]): int(r[1]) for r in (res_rows or []) if r[0]}
+        except Exception:
+            res_map = {}
+
+        # Total OR partial PostHog outage: at least one sub-query failed. Never
+        # overwrite a previously-complete entry with partial/zeroed data — critical
+        # on a forced refresh (which bypassed the read and would otherwise clobber
+        # good data for the whole TTL). Prefer the stale-but-complete entry; if none
+        # exists, return the partial result WITHOUT caching it.
+        if (site_rows is None or rec_view_rows is None or rec_pct_rows is None
+                or detail_rows is None or res_rows is None):
+            stale = ph._db_get_stale(db, cache_key)
+            if stale is not None:
+                return _unpack_workshops_detail_ph(stale)
+            return site_totals, ph_map, detail_map, res_map
+
+        ph._db_set(db, cache_key, {
+            "site": {
+                "visits": site_totals.visits,
+                "video_views": site_totals.video_views,
+                "resource_views": site_totals.resource_views,
+            },
+            "rec": {k: [v[0], v[1]] for k, v in ph_map.items()},
+            "detail": detail_map,
+            "res": res_map,
+        })
         return site_totals, ph_map, detail_map, res_map
-
-    ph._db_set(db, cache_key, {
-        "site": {
-            "visits": site_totals.visits,
-            "video_views": site_totals.video_views,
-            "resource_views": site_totals.resource_views,
-        },
-        "rec": {k: [v[0], v[1]] for k, v in ph_map.items()},
-        "detail": detail_map,
-        "res": res_map,
-    })
-    return site_totals, ph_map, detail_map, res_map
 
 
 @router.get("/workshops-detail", response_model=WorkshopsDetailData)
@@ -620,28 +627,34 @@ def get_peak_usage(
     if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
         return PeakUsageData.model_validate(cached)
 
-    date_clause = ph._hogql_date_clause(date_from, date_to)
-    school_clause = ph._hogql_school_clause(sid)
-    cycle_clause = ph._hogql_cycle_clause(cycle_name)
-    hogql = (
-        "SELECT toDayOfWeek(timestamp), toHour(timestamp), count() "
-        "FROM events "
-        f"WHERE event = '$pageview' AND {date_clause}{school_clause}{cycle_clause} "
-        "GROUP BY 1, 2 ORDER BY 1, 2"
-    )
-    try:
-        rows = ph.get_hogql_query(api_key, project_id, hogql)
-    except Exception:
-        stale = ph._db_get_stale(db, cache_key)
-        if stale:
-            return PeakUsageData.model_validate(stale)
-        return PeakUsageData(cells=[], max_count=0)
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        # (refresh still bypasses this, so Refresh keeps recomputing.)
+        if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
+            return PeakUsageData.model_validate(cached)
 
-    cells = [PeakUsageCell(day=int(r[0]), hour=int(r[1]), count=int(r[2])) for r in rows]
-    max_count = max((c.count for c in cells), default=0)
-    result = PeakUsageData(cells=cells, max_count=max_count)
-    ph._db_set(db, cache_key, result.model_dump())
-    return result
+        date_clause = ph._hogql_date_clause(date_from, date_to)
+        school_clause = ph._hogql_school_clause(sid)
+        cycle_clause = ph._hogql_cycle_clause(cycle_name)
+        hogql = (
+            "SELECT toDayOfWeek(timestamp), toHour(timestamp), count() "
+            "FROM events "
+            f"WHERE event = '$pageview' AND {date_clause}{school_clause}{cycle_clause} "
+            "GROUP BY 1, 2 ORDER BY 1, 2"
+        )
+        try:
+            rows = ph.get_hogql_query(api_key, project_id, hogql)
+        except Exception:
+            stale = ph._db_get_stale(db, cache_key)
+            if stale:
+                return PeakUsageData.model_validate(stale)
+            return PeakUsageData(cells=[], max_count=0)
+
+        cells = [PeakUsageCell(day=int(r[0]), hour=int(r[1]), count=int(r[2])) for r in rows]
+        max_count = max((c.count for c in cells), default=0)
+        result = PeakUsageData(cells=cells, max_count=max_count)
+        ph._db_set(db, cache_key, result.model_dump())
+        return result
 
 
 # Hard cap on a custom workshop window (~15 months) — bounds the zero-filled
@@ -735,79 +748,85 @@ def get_workshop_timeline(
     if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
         return WorkshopTimelineTrends.model_validate(cached)
 
-    webinar, start_dt, window_start, window_end = _resolve_webinar_window(
-        db, webinar_id, weeks_before, weeks_after, date_from, date_to
-    )
-    total_days = (window_end - window_start).days + 1  # inclusive of both ends
-    days = [(window_start + timedelta(days=i)).isoformat() for i in range(total_days)]
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        # (refresh still bypasses this, so Refresh keeps recomputing.)
+        if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
+            return WorkshopTimelineTrends.model_validate(cached)
 
-    webinar_windows: list[phb.WebinarWindow] = [
-        {"webinar_id": webinar_id, "window_start": window_start, "window_end": window_end}
-    ]
-
-    # Registrations come from the DB (below), NOT PostHog. The remaining three
-    # series are PostHog engagement events.
-    # resource_viewed carries the origin workshop in properties.from (its
-    # webinar_id is empty), so match on `from` and add only the via='workshop'
-    # filter — the windowed helper matches from=<webinar_id> per window.
-    event_specs: list[phb.EventSpec] = [
-        {"key": "detail_views", "event": "workshop_detail_view"},
-        # video_view keys the webinar on properties.object_id (workshop → webinar id)
-        {"key": "video_watch_count", "event": "video_view", "match_prop": "object_id"},
-        {
-            "key": "resource_views",
-            "event": "resource_viewed",
-            "match_prop": "from",
-            "extra_filter": " AND properties.via = 'workshop'",
-        },
-    ]
-
-    try:
-        raw = phb.get_windowed_trends_by_webinar(
-            api_key, project_id, webinar_windows, event_specs, sid, None
+        webinar, start_dt, window_start, window_end = _resolve_webinar_window(
+            db, webinar_id, weeks_before, weeks_after, date_from, date_to
         )
-    except Exception as exc:
-        stale = ph._db_get_stale(db, cache_key)
-        if stale:
-            return WorkshopTimelineTrends.model_validate(stale)
-        raise HTTPException(status_code=503, detail="PostHog unavailable") from exc
+        total_days = (window_end - window_start).days + 1  # inclusive of both ends
+        days = [(window_start + timedelta(days=i)).isoformat() for i in range(total_days)]
 
-    # Build each PostHog TrendMetric with zero-fill
-    def _trend(event_key: str) -> TrendMetric:
-        pairs = raw.get(event_key, {}).get(webinar_id, [])
-        day_count: dict[str, int] = {}
-        for d, cnt in pairs:
-            day_count[d] = day_count.get(d, 0) + cnt
-        data = [float(day_count.get(d, 0)) for d in days]
-        return TrendMetric(total=int(sum(data)), data=data, days=days)
+        webinar_windows: list[phb.WebinarWindow] = [
+            {"webinar_id": webinar_id, "window_start": window_start, "window_end": window_end}
+        ]
 
-    # Registrations + attendees from the DB (authoritative), windowed by
-    # registration_time. Scoped to the school when one is resolved (counselor
-    # view); super_admin viewing all schools passes school_id=None.
-    sid_uuid = uuid.UUID(sid) if sid else None
-    reg_by_day, attendees = get_webinar_windowed_registrations(
-        db, uuid.UUID(webinar_id), sid_uuid, window_start, window_end, start_dt
-    )
-    reg_data = [float(reg_by_day.get(d, 0)) for d in days]
-    registrations = TrendMetric(total=int(sum(reg_data)), data=reg_data, days=days)
+        # Registrations come from the DB (below), NOT PostHog. The remaining three
+        # series are PostHog engagement events.
+        # resource_viewed carries the origin workshop in properties.from (its
+        # webinar_id is empty), so match on `from` and add only the via='workshop'
+        # filter — the windowed helper matches from=<webinar_id> per window.
+        event_specs: list[phb.EventSpec] = [
+            {"key": "detail_views", "event": "workshop_detail_view"},
+            # video_view keys the webinar on properties.object_id (workshop → webinar id)
+            {"key": "video_watch_count", "event": "video_view", "match_prop": "object_id"},
+            {
+                "key": "resource_views",
+                "event": "resource_viewed",
+                "match_prop": "from",
+                "extra_filter": " AND properties.via = 'workshop'",
+            },
+        ]
 
-    result = WorkshopTimelineTrends(
-        webinar_id=webinar_id,
-        workshop_name=webinar["workshop_name"],
-        start_datetime=start_dt.isoformat(),
-        window_start=window_start.isoformat(),
-        window_end=window_end.isoformat(),
-        weeks_before=weeks_before,
-        weeks_after=weeks_after,
-        days=days,
-        registrations=registrations,
-        attendees=attendees,
-        detail_views=_trend("detail_views"),
-        video_watch_count=_trend("video_watch_count"),
-        resource_views=_trend("resource_views"),
-    )
-    ph._db_set(db, cache_key, result.model_dump())
-    return result
+        try:
+            raw = phb.get_windowed_trends_by_webinar(
+                api_key, project_id, webinar_windows, event_specs, sid, None
+            )
+        except Exception as exc:
+            stale = ph._db_get_stale(db, cache_key)
+            if stale:
+                return WorkshopTimelineTrends.model_validate(stale)
+            raise HTTPException(status_code=503, detail="PostHog unavailable") from exc
+
+        # Build each PostHog TrendMetric with zero-fill
+        def _trend(event_key: str) -> TrendMetric:
+            pairs = raw.get(event_key, {}).get(webinar_id, [])
+            day_count: dict[str, int] = {}
+            for d, cnt in pairs:
+                day_count[d] = day_count.get(d, 0) + cnt
+            data = [float(day_count.get(d, 0)) for d in days]
+            return TrendMetric(total=int(sum(data)), data=data, days=days)
+
+        # Registrations + attendees from the DB (authoritative), windowed by
+        # registration_time. Scoped to the school when one is resolved (counselor
+        # view); super_admin viewing all schools passes school_id=None.
+        sid_uuid = uuid.UUID(sid) if sid else None
+        reg_by_day, attendees = get_webinar_windowed_registrations(
+            db, uuid.UUID(webinar_id), sid_uuid, window_start, window_end, start_dt
+        )
+        reg_data = [float(reg_by_day.get(d, 0)) for d in days]
+        registrations = TrendMetric(total=int(sum(reg_data)), data=reg_data, days=days)
+
+        result = WorkshopTimelineTrends(
+            webinar_id=webinar_id,
+            workshop_name=webinar["workshop_name"],
+            start_datetime=start_dt.isoformat(),
+            window_start=window_start.isoformat(),
+            window_end=window_end.isoformat(),
+            weeks_before=weeks_before,
+            weeks_after=weeks_after,
+            days=days,
+            registrations=registrations,
+            attendees=attendees,
+            detail_views=_trend("detail_views"),
+            video_watch_count=_trend("video_watch_count"),
+            resource_views=_trend("resource_views"),
+        )
+        ph._db_set(db, cache_key, result.model_dump())
+        return result
 
 
 @router.get("/workshop-engagement", response_model=WorkshopEngagementCards)
@@ -844,130 +863,136 @@ def get_workshop_engagement(
     if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
         return WorkshopEngagementCards.model_validate(cached)
 
-    webinar, _start_dt, window_start, window_end = _resolve_webinar_window(
-        db, webinar_id, weeks_before, weeks_after, date_from, date_to
-    )
-    ws_date = window_start.isoformat()
-    we_date = window_end.isoformat()
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        # (refresh still bypasses this, so Refresh keeps recomputing.)
+        if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
+            return WorkshopEngagementCards.model_validate(cached)
 
-    # School scoping: CMM webinars are SHARED across schools, so events for one
-    # webinar_id span many schools. Without this clause the cards aggregate every
-    # school's activity — inflating the counts vs. the school-scoped Overview
-    # card and timeline tile (empty string for super_admin viewing all schools).
-    school_clause = ph._hogql_school_clause(sid)
+        webinar, _start_dt, window_start, window_end = _resolve_webinar_window(
+            db, webinar_id, weeks_before, weeks_after, date_from, date_to
+        )
+        ws_date = window_start.isoformat()
+        we_date = window_end.isoformat()
 
-    # Total plays = VIEWS (video_view, first play per session).
-    plays_hogql = (
-        "SELECT count() AS total_plays "
-        "FROM events "
-        f"WHERE event = 'video_view' "
-        f"  AND properties.object_id = '{webinar_id}'{school_clause} "
-        f"  AND timestamp >= toDate('{ws_date}') "
-        f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
-    )
-    # Watch-quality stats (minutes watched + avg %) come from the session-end
-    # summary, which is the only event carrying total_watch_seconds/percent.
-    video_hogql = (
-        "SELECT "
-        "  count() AS session_count, "
-        "  round(sum(toFloat(ifNull(properties.total_watch_seconds, '0'))) / 60) AS total_minutes_watched, "
-        "  avg(toFloat(ifNull(properties.percent_watched, '0'))) AS avg_percent_watched "
-        "FROM events "
-        f"WHERE event = 'video_session_end' "
-        f"  AND properties.object_id = '{webinar_id}'{school_clause} "
-        f"  AND timestamp >= toDate('{ws_date}') "
-        f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
-    )
-    # Resources-used breakdown (powers the "Resources used" card).
-    resources_hogql = (
-        "SELECT "
-        "  properties.asset_name AS resource_name, "
-        "  count() AS cnt "
-        "FROM events "
-        f"WHERE event = 'resource_viewed' "
-        f"  AND properties.via = 'workshop' "
-        f"  AND properties.from = '{webinar_id}'{school_clause} "
-        f"  AND timestamp >= toDate('{ws_date}') "
-        f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY "
-        "  AND properties.asset_name IS NOT NULL "
-        "  AND properties.asset_name != '' "
-        "GROUP BY resource_name "
-        "ORDER BY cnt DESC "
-        "LIMIT 20"
-    )
+        # School scoping: CMM webinars are SHARED across schools, so events for one
+        # webinar_id span many schools. Without this clause the cards aggregate every
+        # school's activity — inflating the counts vs. the school-scoped Overview
+        # card and timeline tile (empty string for super_admin viewing all schools).
+        school_clause = ph._hogql_school_clause(sid)
 
-    def _run(query: str):
+        # Total plays = VIEWS (video_view, first play per session).
+        plays_hogql = (
+            "SELECT count() AS total_plays "
+            "FROM events "
+            f"WHERE event = 'video_view' "
+            f"  AND properties.object_id = '{webinar_id}'{school_clause} "
+            f"  AND timestamp >= toDate('{ws_date}') "
+            f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
+        )
+        # Watch-quality stats (minutes watched + avg %) come from the session-end
+        # summary, which is the only event carrying total_watch_seconds/percent.
+        video_hogql = (
+            "SELECT "
+            "  count() AS session_count, "
+            "  round(sum(toFloat(ifNull(properties.total_watch_seconds, '0'))) / 60) AS total_minutes_watched, "
+            "  avg(toFloat(ifNull(properties.percent_watched, '0'))) AS avg_percent_watched "
+            "FROM events "
+            f"WHERE event = 'video_session_end' "
+            f"  AND properties.object_id = '{webinar_id}'{school_clause} "
+            f"  AND timestamp >= toDate('{ws_date}') "
+            f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
+        )
+        # Resources-used breakdown (powers the "Resources used" card).
+        resources_hogql = (
+            "SELECT "
+            "  properties.asset_name AS resource_name, "
+            "  count() AS cnt "
+            "FROM events "
+            f"WHERE event = 'resource_viewed' "
+            f"  AND properties.via = 'workshop' "
+            f"  AND properties.from = '{webinar_id}'{school_clause} "
+            f"  AND timestamp >= toDate('{ws_date}') "
+            f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY "
+            "  AND properties.asset_name IS NOT NULL "
+            "  AND properties.asset_name != '' "
+            "GROUP BY resource_name "
+            "ORDER BY cnt DESC "
+            "LIMIT 20"
+        )
+
+        def _run(query: str):
+            try:
+                return ph.get_hogql_query(api_key, project_id, query)
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f_plays = ex.submit(_run, plays_hogql)
+            f_video = ex.submit(_run, video_hogql)
+            f_res = ex.submit(_run, resources_hogql)
+            plays_rows = f_plays.result()
+            video_rows = f_video.result()
+            resource_rows = f_res.result()
+
+        # Outage handling is deferred until AFTER parsing (see the guard before
+        # _db_set): a PARTIAL failure (one read ok, one failed) must not overwrite a
+        # complete cache entry — critical on a forced refresh.
+
+        # -- Video aggregate stats — degrade gracefully to zeros on parse failure. --
+        # total_plays (views) and watch stats come from two separate reads.
+        total_plays = 0
         try:
-            return ph.get_hogql_query(api_key, project_id, query)
+            if plays_rows and plays_rows[0][0] is not None:
+                total_plays = int(plays_rows[0][0])
         except Exception:
-            return None
+            pass
+        video_stats = WorkshopVideoStats(
+            total_plays=total_plays, total_minutes_watched=0, avg_percent_watched=None
+        )
+        try:
+            if video_rows:
+                r = video_rows[0]
+                session_count = int(r[0]) if r[0] is not None else 0
+                total_minutes = int(r[1]) if r[1] is not None else 0
+                avg_pct = float(r[2]) if r[2] is not None and session_count > 0 else None
+                video_stats = WorkshopVideoStats(
+                    total_plays=total_plays,
+                    total_minutes_watched=total_minutes,
+                    avg_percent_watched=avg_pct,
+                )
+        except Exception:
+            pass
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        f_plays = ex.submit(_run, plays_hogql)
-        f_video = ex.submit(_run, video_hogql)
-        f_res = ex.submit(_run, resources_hogql)
-        plays_rows = f_plays.result()
-        video_rows = f_video.result()
-        resource_rows = f_res.result()
+        # -- Resources-used breakdown — degrade gracefully to empty on parse failure. --
+        resources_used: list[ResourceUsedRow] = []
+        try:
+            resources_used = [
+                ResourceUsedRow(resource_name=str(r[0]), count=int(r[1]))
+                for r in (resource_rows or [])
+                if r[0]
+            ]
+        except Exception:
+            pass
 
-    # Outage handling is deferred until AFTER parsing (see the guard before
-    # _db_set): a PARTIAL failure (one read ok, one failed) must not overwrite a
-    # complete cache entry — critical on a forced refresh.
+        result = WorkshopEngagementCards(
+            webinar_id=webinar_id,
+            workshop_name=webinar["workshop_name"],
+            video=video_stats,
+            resources_used=resources_used,
+        )
 
-    # -- Video aggregate stats — degrade gracefully to zeros on parse failure. --
-    # total_plays (views) and watch stats come from two separate reads.
-    total_plays = 0
-    try:
-        if plays_rows and plays_rows[0][0] is not None:
-            total_plays = int(plays_rows[0][0])
-    except Exception:
-        pass
-    video_stats = WorkshopVideoStats(
-        total_plays=total_plays, total_minutes_watched=0, avg_percent_watched=None
-    )
-    try:
-        if video_rows:
-            r = video_rows[0]
-            session_count = int(r[0]) if r[0] is not None else 0
-            total_minutes = int(r[1]) if r[1] is not None else 0
-            avg_pct = float(r[2]) if r[2] is not None and session_count > 0 else None
-            video_stats = WorkshopVideoStats(
-                total_plays=total_plays,
-                total_minutes_watched=total_minutes,
-                avg_percent_watched=avg_pct,
-            )
-    except Exception:
-        pass
+        # Total OR partial outage: at least one read failed. Don't overwrite a
+        # complete entry with partial/zeroed data (esp. on a forced refresh). Prefer
+        # the stale-but-complete entry; else return the partial WITHOUT caching it.
+        if plays_rows is None or video_rows is None or resource_rows is None:
+            stale = ph._db_get_stale(db, cache_key)
+            if stale:
+                return WorkshopEngagementCards.model_validate(stale)
+            return result
 
-    # -- Resources-used breakdown — degrade gracefully to empty on parse failure. --
-    resources_used: list[ResourceUsedRow] = []
-    try:
-        resources_used = [
-            ResourceUsedRow(resource_name=str(r[0]), count=int(r[1]))
-            for r in (resource_rows or [])
-            if r[0]
-        ]
-    except Exception:
-        pass
-
-    result = WorkshopEngagementCards(
-        webinar_id=webinar_id,
-        workshop_name=webinar["workshop_name"],
-        video=video_stats,
-        resources_used=resources_used,
-    )
-
-    # Total OR partial outage: at least one read failed. Don't overwrite a
-    # complete entry with partial/zeroed data (esp. on a forced refresh). Prefer
-    # the stale-but-complete entry; else return the partial WITHOUT caching it.
-    if plays_rows is None or video_rows is None or resource_rows is None:
-        stale = ph._db_get_stale(db, cache_key)
-        if stale:
-            return WorkshopEngagementCards.model_validate(stale)
+        ph._db_set(db, cache_key, result.model_dump())
         return result
-
-    ph._db_set(db, cache_key, result.model_dump())
-    return result
 
 
 

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Query
 
 from src.analytics import posthog as ph
 from src.analytics.postgres_queries import _parse_date_from, _parse_date_to
+from src.analytics.query_cache import single_flight
 from src.analytics.postgres_queries_admin import (
     get_active_schools_count,
     get_declining_schools,
@@ -93,23 +94,32 @@ def get_pulse(
     if (cached := ph._db_get(db, content_key, None)) is not None:
         content_views = int(cached)
     else:
-        content_hogql = (
-            "SELECT count() FROM events "
-            "WHERE event IN ('resource_card_click', 'topic_card_click', 'resource_viewed', 'topic_viewed') "
-            "AND timestamp >= now() - INTERVAL 7 DAY"
-        )
-        try:
-            rows = ph.get_hogql_query(api_key, project_id, content_hogql)
-            content_views = int(rows[0][0]) if rows else 0
-        except Exception:
-            stale = ph._db_get_stale(db, content_key)
-            content_views = int(stale) if stale is not None else 0
-        ph._db_set(db, content_key, content_views)
+        with single_flight(db, content_key):
+            # Re-check: a request we waited on may have just filled the cache.
+            if (cached := ph._db_get(db, content_key, None)) is not None:
+                content_views = int(cached)
+            else:
+                content_hogql = (
+                    "SELECT count() FROM events "
+                    "WHERE event IN ('resource_card_click', 'topic_card_click', 'resource_viewed', 'topic_viewed') "
+                    "AND timestamp >= now() - INTERVAL 7 DAY"
+                )
+                try:
+                    rows = ph.get_hogql_query(api_key, project_id, content_hogql)
+                    content_views = int(rows[0][0]) if rows else 0
+                except Exception:
+                    stale = ph._db_get_stale(db, content_key)
+                    content_views = int(stale) if stale is not None else 0
+                ph._db_set(db, content_key, content_views)
 
     # Query 2: top search terms + top resource searches in one batched HogQL
     # (two separate queries — PostHog GROUP BY can't pivot two events cleanly)
     search_key = ph._key(fn="pulse_top_searches", admin=True)
     resource_search_key = ph._key(fn="pulse_top_resource_searches", admin=True)
+    # These two keys are always computed and written together (one combined
+    # HogQL round trip below) — a single lock covers the pair instead of
+    # nesting two separate advisory locks.
+    combined_search_key = f"{search_key}:{resource_search_key}"
 
     top_search_terms: list[TopBreakdown]
     top_resource_searches: list[TopBreakdown]
@@ -121,29 +131,37 @@ def get_pulse(
         top_search_terms = [TopBreakdown.model_validate(r) for r in cached_st]
         top_resource_searches = [TopBreakdown.model_validate(r) for r in cached_rs]
     else:
-        try:
-            st_hogql = (
-                "SELECT properties.query, count() FROM events "
-                "WHERE event = 'search_query' AND timestamp >= now() - INTERVAL 7 DAY "
-                "AND isNotNull(properties.query) "
-                "GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
-            )
-            rs_hogql = (
-                "SELECT properties.query, count() FROM events "
-                "WHERE event = 'resource_library_searched' AND timestamp >= now() - INTERVAL 7 DAY "
-                "AND isNotNull(properties.query) "
-                "GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
-            )
-            st_rows = ph.get_hogql_query(api_key, project_id, st_hogql)
-            rs_rows = ph.get_hogql_query(api_key, project_id, rs_hogql)
-            top_search_terms = [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in st_rows if r[0]]
-            top_resource_searches = [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in rs_rows if r[0]]
-        except Exception:
-            top_search_terms = [TopBreakdown.model_validate(r) for r in (ph._db_get_stale(db, search_key) or [])]
-            top_resource_searches = [TopBreakdown.model_validate(r) for r in (ph._db_get_stale(db, resource_search_key) or [])]
+        with single_flight(db, combined_search_key):
+            # Re-check: a request we waited on may have just filled the cache.
+            cached_st = ph._db_get(db, search_key, None)
+            cached_rs = ph._db_get(db, resource_search_key, None)
+            if cached_st is not None and cached_rs is not None:
+                top_search_terms = [TopBreakdown.model_validate(r) for r in cached_st]
+                top_resource_searches = [TopBreakdown.model_validate(r) for r in cached_rs]
+            else:
+                try:
+                    st_hogql = (
+                        "SELECT properties.query, count() FROM events "
+                        "WHERE event = 'search_query' AND timestamp >= now() - INTERVAL 7 DAY "
+                        "AND isNotNull(properties.query) "
+                        "GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
+                    )
+                    rs_hogql = (
+                        "SELECT properties.query, count() FROM events "
+                        "WHERE event = 'resource_library_searched' AND timestamp >= now() - INTERVAL 7 DAY "
+                        "AND isNotNull(properties.query) "
+                        "GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
+                    )
+                    st_rows = ph.get_hogql_query(api_key, project_id, st_hogql)
+                    rs_rows = ph.get_hogql_query(api_key, project_id, rs_hogql)
+                    top_search_terms = [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in st_rows if r[0]]
+                    top_resource_searches = [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in rs_rows if r[0]]
+                except Exception:
+                    top_search_terms = [TopBreakdown.model_validate(r) for r in (ph._db_get_stale(db, search_key) or [])]
+                    top_resource_searches = [TopBreakdown.model_validate(r) for r in (ph._db_get_stale(db, resource_search_key) or [])]
 
-        ph._db_set(db, search_key, [t.model_dump() for t in top_search_terms])
-        ph._db_set(db, resource_search_key, [t.model_dump() for t in top_resource_searches])
+                ph._db_set(db, search_key, [t.model_dump() for t in top_search_terms])
+                ph._db_set(db, resource_search_key, [t.model_dump() for t in top_resource_searches])
 
     return PulseData(
         registrations_today=reg_counts["registrations_today"],
@@ -167,17 +185,22 @@ def get_schools_health(
     if (cached := ph._db_get(db, cache_key, None)) is not None:
         return SchoolsHealthData.model_validate(cached)
 
-    stalled = [StalledSchool(**s) for s in get_stalled_activations(db)]
-    quiet = [QuietSchool(**s) for s in get_quiet_schools(db)]
-    declining = [QuietSchool(**s) for s in get_declining_schools(db)]
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        if (cached := ph._db_get(db, cache_key, None)) is not None:
+            return SchoolsHealthData.model_validate(cached)
 
-    result = SchoolsHealthData(
-        stalled_activations=stalled,
-        quiet_schools=quiet,
-        declining_schools=declining,
-    )
-    ph._db_set(db, cache_key, result.model_dump())
-    return result
+        stalled = [StalledSchool(**s) for s in get_stalled_activations(db)]
+        quiet = [QuietSchool(**s) for s in get_quiet_schools(db)]
+        declining = [QuietSchool(**s) for s in get_declining_schools(db)]
+
+        result = SchoolsHealthData(
+            stalled_activations=stalled,
+            quiet_schools=quiet,
+            declining_schools=declining,
+        )
+        ph._db_set(db, cache_key, result.model_dump())
+        return result
 
 
 # ── /big-picture ──────────────────────────────────────────────────────────────
@@ -205,32 +228,38 @@ def get_big_picture(
         platform_dau = TrendMetric.model_validate(cached["dau"])
         platform_regs = TrendMetric.model_validate(cached["regs"])
     else:
-        date_clause = ph._hogql_date_clause(date_from, date_to)
-        hogql = (
-            "SELECT toStartOfDay(timestamp) as day, "
-            "  uniqIf(person_id, event = '$pageview') as dau, "
-            "  countIf(event = 'workshop_registration_complete') as regs "
-            "FROM events "
-            f"WHERE {date_clause} "
-            "GROUP BY day ORDER BY day"
-        )
-        try:
-            rows = ph.get_hogql_query(api_key, project_id, hogql)
-            days = [str(r[0])[:10] for r in rows]
-            dau_data = [float(r[1]) for r in rows]
-            reg_data = [float(r[2]) for r in rows]
-            platform_dau = TrendMetric(total=int(sum(dau_data)), data=dau_data, days=days)
-            platform_regs = TrendMetric(total=int(sum(reg_data)), data=reg_data, days=days)
-        except Exception:
-            stale = ph._db_get_stale(db, cache_key)
-            if stale:
-                platform_dau = TrendMetric.model_validate(stale["dau"])
-                platform_regs = TrendMetric.model_validate(stale["regs"])
+        with single_flight(db, cache_key):
+            # Re-check: a request we waited on may have just filled the cache.
+            if (cached := ph._db_get(db, cache_key, None)) is not None:
+                platform_dau = TrendMetric.model_validate(cached["dau"])
+                platform_regs = TrendMetric.model_validate(cached["regs"])
             else:
-                platform_dau = TrendMetric(total=0, data=[], days=[])
-                platform_regs = TrendMetric(total=0, data=[], days=[])
+                date_clause = ph._hogql_date_clause(date_from, date_to)
+                hogql = (
+                    "SELECT toStartOfDay(timestamp) as day, "
+                    "  uniqIf(person_id, event = '$pageview') as dau, "
+                    "  countIf(event = 'workshop_registration_complete') as regs "
+                    "FROM events "
+                    f"WHERE {date_clause} "
+                    "GROUP BY day ORDER BY day"
+                )
+                try:
+                    rows = ph.get_hogql_query(api_key, project_id, hogql)
+                    days = [str(r[0])[:10] for r in rows]
+                    dau_data = [float(r[1]) for r in rows]
+                    reg_data = [float(r[2]) for r in rows]
+                    platform_dau = TrendMetric(total=int(sum(dau_data)), data=dau_data, days=days)
+                    platform_regs = TrendMetric(total=int(sum(reg_data)), data=reg_data, days=days)
+                except Exception:
+                    stale = ph._db_get_stale(db, cache_key)
+                    if stale:
+                        platform_dau = TrendMetric.model_validate(stale["dau"])
+                        platform_regs = TrendMetric.model_validate(stale["regs"])
+                    else:
+                        platform_dau = TrendMetric(total=0, data=[], days=[])
+                        platform_regs = TrendMetric(total=0, data=[], days=[])
 
-        ph._db_set(db, cache_key, {"dau": platform_dau.model_dump(), "regs": platform_regs.model_dump()})
+                ph._db_set(db, cache_key, {"dau": platform_dau.model_dump(), "regs": platform_regs.model_dump()})
 
     return BigPictureData(
         total_schools=pg["total_schools"],
@@ -256,49 +285,54 @@ def get_whats_working(
     if (cached := ph._db_get(db, cache_key, None)) is not None:
         return WhatsWorkingData.model_validate(cached)
 
-    date_clause = ph._hogql_date_clause(date_from, date_to)
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        if (cached := ph._db_get(db, cache_key, None)) is not None:
+            return WhatsWorkingData.model_validate(cached)
 
-    def _run(hogql: str) -> list[TopBreakdown]:
-        rows = ph.get_hogql_query(api_key, project_id, hogql)
-        return [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in rows if r[0]]
+        date_clause = ph._hogql_date_clause(date_from, date_to)
 
-    try:
-        resources = _run(
-            f"SELECT properties.resource_name, count() FROM events "
-            f"WHERE event = 'resource_card_click' AND {date_clause} "
-            f"AND isNotNull(properties.resource_name) GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
-        )
-        topics = _run(
-            f"SELECT properties.topic_title, count() FROM events "
-            f"WHERE event = 'topic_card_click' AND {date_clause} "
-            f"AND isNotNull(properties.topic_title) GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
-        )
-        workshops = _run(
-            f"SELECT properties.workshop_name, count() FROM events "
-            f"WHERE event = 'workshop_registration_complete' AND {date_clause} "
-            f"AND isNotNull(properties.workshop_name) GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
-        )
-        zero_results = _run(
-            f"SELECT properties.query, count() FROM events "
-            f"WHERE event = 'search_query' AND {date_clause} "
-            # toInt64OrNull is unsupported in HogQL — toInt handles both string and numeric
-            f"AND toInt(ifNull(properties.result_count, '1')) = 0 "
-            f"AND isNotNull(properties.query) GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
-        )
-    except Exception:
-        stale = ph._db_get_stale(db, cache_key)
-        if stale:
-            return WhatsWorkingData.model_validate(stale)
-        return WhatsWorkingData(top_resources=[], top_topics=[], top_workshops=[], zero_result_searches=[])
+        def _run(hogql: str) -> list[TopBreakdown]:
+            rows = ph.get_hogql_query(api_key, project_id, hogql)
+            return [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in rows if r[0]]
 
-    result = WhatsWorkingData(
-        top_resources=resources,
-        top_topics=topics,
-        top_workshops=workshops,
-        zero_result_searches=zero_results,
-    )
-    ph._db_set(db, cache_key, result.model_dump())
-    return result
+        try:
+            resources = _run(
+                f"SELECT properties.resource_name, count() FROM events "
+                f"WHERE event = 'resource_card_click' AND {date_clause} "
+                f"AND isNotNull(properties.resource_name) GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
+            )
+            topics = _run(
+                f"SELECT properties.topic_title, count() FROM events "
+                f"WHERE event = 'topic_card_click' AND {date_clause} "
+                f"AND isNotNull(properties.topic_title) GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
+            )
+            workshops = _run(
+                f"SELECT properties.workshop_name, count() FROM events "
+                f"WHERE event = 'workshop_registration_complete' AND {date_clause} "
+                f"AND isNotNull(properties.workshop_name) GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
+            )
+            zero_results = _run(
+                f"SELECT properties.query, count() FROM events "
+                f"WHERE event = 'search_query' AND {date_clause} "
+                # toInt64OrNull is unsupported in HogQL — toInt handles both string and numeric
+                f"AND toInt(ifNull(properties.result_count, '1')) = 0 "
+                f"AND isNotNull(properties.query) GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
+            )
+        except Exception:
+            stale = ph._db_get_stale(db, cache_key)
+            if stale:
+                return WhatsWorkingData.model_validate(stale)
+            return WhatsWorkingData(top_resources=[], top_topics=[], top_workshops=[], zero_result_searches=[])
+
+        result = WhatsWorkingData(
+            top_resources=resources,
+            top_topics=topics,
+            top_workshops=workshops,
+            zero_result_searches=zero_results,
+        )
+        ph._db_set(db, cache_key, result.model_dump())
+        return result
 
 
 # ── /geographic ───────────────────────────────────────────────────────────────
@@ -312,10 +346,15 @@ def get_geographic(
     if (cached := ph._db_get(db, cache_key, None)) is not None:
         return GeographicData.model_validate(cached)
 
-    geo = get_geographic_data(db)
-    result = GeographicData(
-        by_state=[TopBreakdown(label=s["label"], count=s["count"]) for s in geo["by_state"]],
-        by_enrollment_band=[EnrollmentBandStat(**b) for b in geo["by_enrollment_band"]],
-    )
-    ph._db_set(db, cache_key, result.model_dump())
-    return result
+    with single_flight(db, cache_key):
+        # Re-check: a request we waited on may have just filled the cache.
+        if (cached := ph._db_get(db, cache_key, None)) is not None:
+            return GeographicData.model_validate(cached)
+
+        geo = get_geographic_data(db)
+        result = GeographicData(
+            by_state=[TopBreakdown(label=s["label"], count=s["count"]) for s in geo["by_state"]],
+            by_enrollment_band=[EnrollmentBandStat(**b) for b in geo["by_enrollment_band"]],
+        )
+        ph._db_set(db, cache_key, result.model_dump())
+        return result
