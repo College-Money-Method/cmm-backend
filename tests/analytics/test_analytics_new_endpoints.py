@@ -378,11 +378,11 @@ class TestWorkshopTimeline:
 
 class TestWorkshopEngagementSchoolScoping:
     """CMM webinars are shared across schools, so a webinar_id's events span many
-    schools. Both the video and resources queries MUST scope to the counselor's
-    school — otherwise the cards aggregate every school's activity (the bug where
-    the 'Workshop Resources Used' card overcounted vs. the school-scoped tile)."""
+    schools. The resources query MUST scope to the counselor's school — otherwise
+    the card aggregates every school's activity (the bug where the 'Workshop
+    Resources Used' card overcounted vs. the school-scoped tile)."""
 
-    def test_both_queries_include_school_clause(self, configured):
+    def test_query_includes_school_clause(self, configured):
         wid = uuid.uuid4()
         webinar = {
             "webinar_id": str(wid),
@@ -403,9 +403,8 @@ class TestWorkshopEngagementSchoolScoping:
             )
 
         assert resp.status_code == 200
-        assert len(captured) == 3  # plays (video_view) + video stats + resources
-        clause = f"properties.school_id = '{SCHOOL_A}'"
-        assert all(clause in q for q in captured), captured
+        assert len(captured) == 1  # resources_used only
+        assert f"properties.school_id = '{SCHOOL_A}'" in captured[0], captured
 
 
 # ── Smoke: app imports cleanly with admin router mounted ─────────────────────

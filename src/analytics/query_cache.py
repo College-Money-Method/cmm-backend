@@ -31,6 +31,39 @@ class AnalyticsQueryCache(Base):
     )
 
 
+# ── Served-cache-age tracking ──────────────────────────────────────────────────
+#
+# Endpoints report `cached_at` — when the numbers they return were ACTUALLY read
+# from PostHog — so the UI can label real data age and gate its Refresh button on
+# it. Every cache hit records the entry's `fetched_at` on the request-scoped
+# Session (`db.info`), and the endpoint reads the OLDEST one back at return time.
+#
+# Why `db.info` and not a ContextVar: these endpoints are sync (`def`), so FastAPI
+# runs them in a threadpool with a COPIED context — a ContextVar set inside would
+# never be visible to the caller. The Session is one object per request, shared by
+# every cache helper below, which makes it the natural carrier.
+_CACHE_HITS_KEY = "analytics_cache_hits"
+
+
+def _note_hit(db: Session, fetched_at: datetime) -> None:
+    """Record that a cache entry written at `fetched_at` was served this request."""
+    db.info.setdefault(_CACHE_HITS_KEY, []).append(fetched_at)
+
+
+def oldest_cache_hit(db: Session | None) -> datetime | None:
+    """Oldest cache entry served during this request — the true age of the
+    response. None when nothing came from cache: everything was just computed.
+
+    Tolerates a non-Session `db` (tests pass mocks, CLI callers pass None) by
+    reporting None rather than raising — a missing timestamp degrades to "just
+    now", which is the same thing a fresh compute reports."""
+    info = getattr(db, "info", None)
+    hits = info.get(_CACHE_HITS_KEY) if isinstance(info, dict) else None
+    if not isinstance(hits, list) or not hits:
+        return None
+    return min(hits)
+
+
 # ── Public helpers ─────────────────────────────────────────────────────────────
 
 def db_cache_get(db: Session, key: str, ttl: timedelta) -> dict | None:
@@ -38,8 +71,9 @@ def db_cache_get(db: Session, key: str, ttl: timedelta) -> dict | None:
     row = db.get(AnalyticsQueryCache, key)
     if row is None:
         return None
-    age = datetime.now(timezone.utc) - row.fetched_at.replace(tzinfo=timezone.utc)
-    if age <= ttl:
+    fetched_at = row.fetched_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - fetched_at <= ttl:
+        _note_hit(db, fetched_at)
         return row.payload
     return None  # stale — caller decides whether to serve it
 
@@ -47,7 +81,12 @@ def db_cache_get(db: Session, key: str, ttl: timedelta) -> dict | None:
 def db_cache_get_stale(db: Session, key: str) -> dict | None:
     """Return cached payload regardless of age (for stale-on-error serving)."""
     row = db.get(AnalyticsQueryCache, key)
-    return row.payload if row else None
+    if row is None:
+        return None
+    # Counts as a hit — and an old one, which is exactly what the UI should show
+    # (a PostHog outage is when "this data is 3 hours old" matters most).
+    _note_hit(db, row.fetched_at.replace(tzinfo=timezone.utc))
+    return row.payload
 
 
 def db_cache_set(db: Session, key: str, payload: dict) -> None:
