@@ -7,10 +7,24 @@ New hub + admin schemas are appended below.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
 # ── Shared primitives ─────────────────────────────────────────────────────────
+
+class CachedAtMixin(BaseModel):
+    """Adds `cached_at` — when the PostHog numbers in this response were actually
+    read. None means they were computed for THIS request (i.e. "just now").
+
+    The counselor-hub Refresh control reads it to label real data age and to
+    disable itself until the entry is old enough to be worth re-querying; without
+    it the client could only time from page-open, which made a 55-minute-old cache
+    read "Last refreshed a few seconds ago". Populated from the oldest cache entry
+    served during the request (query_cache.oldest_cache_hit)."""
+    cached_at: datetime | None = None
+
 
 class TrendMetric(BaseModel):
     total: int
@@ -60,7 +74,7 @@ class ContentEngagementTotals(BaseModel):
     video_views: int = 0        # video_view count (all videos, first play)
 
 
-class ContentData(BaseModel):
+class ContentData(CachedAtMixin):
     """Number-only content breakdowns (no time-series charts) — kept lightweight:
     top videos (views + avg % watched), resources (views), topics (views)."""
     videos: list[VideoBreakdownRow] = []   # video_view count + video_session_end avg %, by object_name
@@ -103,7 +117,7 @@ class TopicEngagementGrade(BaseModel):
     goals: list[TopicEngagementGoal] = []
 
 
-class TopicEngagementData(BaseModel):
+class TopicEngagementData(CachedAtMixin):
     """The school's published Grade → Goal → Topic hierarchy with per-topic
     engagement + video views, for the Content tab's Topic Engagement table.
 
@@ -158,7 +172,7 @@ class SiteTotals(BaseModel):
     resource_views: int = 0  # resource_viewed across all resources
 
 
-class WorkshopsDetailData(BaseModel):
+class WorkshopsDetailData(CachedAtMixin):
     webinars: list[WebinarDetail]
     totals: WorkshopsDetailTotals
     site_totals: SiteTotals = SiteTotals()
@@ -281,7 +295,7 @@ class ResourceUsedRow(BaseModel):
     count: int
 
 
-class WorkshopTimelineTrends(BaseModel):
+class WorkshopTimelineTrends(CachedAtMixin):
     """Per-webinar windowed engagement CHART — adjustable window around
     start_datetime. Served by GET /workshop-timeline. The resources-used summary
     card is a SEPARATE payload (WorkshopEngagementCards) so the two can be
@@ -301,7 +315,7 @@ class WorkshopTimelineTrends(BaseModel):
     resource_views: TrendMetric  # resource_viewed via=workshop AND from=<webinar_id>
 
 
-class WorkshopEngagementCards(BaseModel):
+class WorkshopEngagementCards(CachedAtMixin):
     """Resources-used summary card for a single workshop within the timeline
     window. Served by GET /workshop-engagement — split from the chart trends so
     each streams to the UI on its own. (The aggregate video-stats card it also

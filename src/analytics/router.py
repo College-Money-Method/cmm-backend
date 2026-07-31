@@ -10,12 +10,14 @@ import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
+from typing import TypeVar
 
 from fastapi import APIRouter, HTTPException, Query
 from src.analytics import posthog as ph
 from src.analytics import posthog_batched as phb
 from src.analytics.query_cache import single_flight
 from src.analytics.schemas import (
+    CachedAtMixin,
     ContentBreakdownPage,
     ContentData,
     ContentEngagementTotals,
@@ -72,6 +74,19 @@ def _check_configured() -> tuple[str, str]:
     if not settings.posthog_api_key or not settings.posthog_project_id:
         raise HTTPException(status_code=503, detail="PostHog analytics not configured")
     return settings.posthog_api_key, settings.posthog_project_id
+
+
+_M = TypeVar("_M", bound=CachedAtMixin)
+
+
+def _stamp_cache_age(model: _M, db) -> _M:
+    """Set `cached_at` to the oldest cache entry served this request.
+
+    Used on the early cache-hit / stale-serve returns, where the payload was
+    validated straight out of the cache and so carries the *previous* request's
+    value (None). Endpoints that assemble their model at a single point pass
+    cached_at= directly instead."""
+    return model.model_copy(update={"cached_at": ph.oldest_cache_hit(db)})
 
 
 # ── Existing endpoints (response shapes MUST NOT change) ──────────────────────
@@ -195,6 +210,7 @@ def get_content(
         resources=breakdowns["resources"],
         topics=breakdowns["topics"],
         totals=totals,
+        cached_at=ph.oldest_cache_hit(db),
     )
 
 
@@ -309,6 +325,7 @@ def get_topic_engagement(
     return TopicEngagementData(
         school_slug=school_slug, grades=out_grades,
         engagement=tree_eng, video_views=tree_vid,
+        cached_at=ph.oldest_cache_hit(db),
     )
 
 
@@ -574,6 +591,7 @@ def get_workshops_detail(
         webinars=webinars,
         totals=WorkshopsDetailTotals(**totals_dict),
         site_totals=site_totals,
+        cached_at=ph.oldest_cache_hit(db),
     )
 
 
@@ -745,13 +763,13 @@ def get_workshop_timeline(
         date_to=date_to,
     )
     if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
-        return WorkshopTimelineTrends.model_validate(cached)
+        return _stamp_cache_age(WorkshopTimelineTrends.model_validate(cached), db)
 
     with single_flight(db, cache_key):
         # Re-check: a request we waited on may have just filled the cache.
         # (refresh still bypasses this, so Refresh keeps recomputing.)
         if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
-            return WorkshopTimelineTrends.model_validate(cached)
+            return _stamp_cache_age(WorkshopTimelineTrends.model_validate(cached), db)
 
         webinar, start_dt, window_start, window_end = _resolve_webinar_window(
             db, webinar_id, weeks_before, weeks_after, date_from, date_to
@@ -787,7 +805,7 @@ def get_workshop_timeline(
         except Exception as exc:
             stale = ph._db_get_stale(db, cache_key)
             if stale:
-                return WorkshopTimelineTrends.model_validate(stale)
+                return _stamp_cache_age(WorkshopTimelineTrends.model_validate(stale), db)
             raise HTTPException(status_code=503, detail="PostHog unavailable") from exc
 
         # Build each PostHog TrendMetric with zero-fill
@@ -859,13 +877,13 @@ def get_workshop_engagement(
         date_to=date_to,
     )
     if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
-        return WorkshopEngagementCards.model_validate(cached)
+        return _stamp_cache_age(WorkshopEngagementCards.model_validate(cached), db)
 
     with single_flight(db, cache_key):
         # Re-check: a request we waited on may have just filled the cache.
         # (refresh still bypasses this, so Refresh keeps recomputing.)
         if (cached := ph._db_get(db, cache_key, sid, force=refresh)) is not None:
-            return WorkshopEngagementCards.model_validate(cached)
+            return _stamp_cache_age(WorkshopEngagementCards.model_validate(cached), db)
 
         webinar, _start_dt, window_start, window_end = _resolve_webinar_window(
             db, webinar_id, weeks_before, weeks_after, date_from, date_to
@@ -929,7 +947,7 @@ def get_workshop_engagement(
         if resource_rows is None:
             stale = ph._db_get_stale(db, cache_key)
             if stale:
-                return WorkshopEngagementCards.model_validate(stale)
+                return _stamp_cache_age(WorkshopEngagementCards.model_validate(stale), db)
             return result
 
         ph._db_set(db, cache_key, result.model_dump())

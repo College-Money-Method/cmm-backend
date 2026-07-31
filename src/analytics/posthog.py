@@ -6,6 +6,10 @@ TTL policy:
 
 On PostHog HTTP error or timeout, a stale DB entry (any age) is served if one
 exists, preventing blank dashboards during PostHog incidents.
+
+Cache hits are tracked per request; endpoints re-export the oldest one as their
+`cached_at` field (see query_cache.oldest_cache_hit, re-exported here) so the UI
+can show real data age instead of guessing from page-open time.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from typing import Any
 import httpx
 from sqlalchemy.orm import Session
 
-from src.analytics.query_cache import single_flight
+from src.analytics.query_cache import oldest_cache_hit, single_flight
 from src.analytics.schemas import FunnelStep, TopBreakdown, TrendMetric
 
 logger = logging.getLogger(__name__)
