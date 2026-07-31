@@ -275,13 +275,6 @@ class GeographicData(BaseModel):
 
 # ── Workshop-timeline analytics schemas ───────────────────────────────────────
 
-class WorkshopVideoStats(BaseModel):
-    """Aggregate video stats for a single workshop within the timeline window."""
-    total_plays: int
-    total_minutes_watched: int
-    avg_percent_watched: float | None
-
-
 class ResourceUsedRow(BaseModel):
     """Single resource breakdown row for workshop-timeline resources_used."""
     resource_name: str
@@ -290,8 +283,8 @@ class ResourceUsedRow(BaseModel):
 
 class WorkshopTimelineTrends(BaseModel):
     """Per-webinar windowed engagement CHART — adjustable window around
-    start_datetime. Served by GET /workshop-timeline. The video/resources summary
-    cards are a SEPARATE payload (WorkshopEngagementCards) so the two can be
+    start_datetime. Served by GET /workshop-timeline. The resources-used summary
+    card is a SEPARATE payload (WorkshopEngagementCards) so the two can be
     fetched + rendered independently ("whatever comes first")."""
     webinar_id: str
     workshop_name: str
@@ -309,12 +302,13 @@ class WorkshopTimelineTrends(BaseModel):
 
 
 class WorkshopEngagementCards(BaseModel):
-    """Video-engagement + resources-used summary cards for a single workshop
-    within the timeline window. Served by GET /workshop-engagement — split from
-    the chart trends so each streams to the UI on its own."""
+    """Resources-used summary card for a single workshop within the timeline
+    window. Served by GET /workshop-engagement — split from the chart trends so
+    each streams to the UI on its own. (The aggregate video-stats card it also
+    used to carry was dropped on 2026-07-31; workshop video views live in the
+    Workshop Engagement tiles + timeline series.)"""
     webinar_id: str
     workshop_name: str
-    video: WorkshopVideoStats    # aggregate video stats within window
     resources_used: list[ResourceUsedRow]  # resource_viewed breakdown by asset_name
 
 

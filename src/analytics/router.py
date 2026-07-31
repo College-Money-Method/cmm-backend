@@ -41,7 +41,6 @@ from src.analytics.schemas import (
     WorkshopsDetailData,
     WorkshopsDetailTotals,
     WorkshopTimelineTrends,
-    WorkshopVideoStats,
 )
 from src.analytics.postgres_queries import (
     get_library_published_counts,
@@ -841,12 +840,11 @@ def get_workshop_engagement(
     date_to: str | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> WorkshopEngagementCards:
-    """Video-engagement + resources-used summary CARDS for a workshop's window.
+    """Resources-used summary CARD for a workshop's window.
 
     Window resolution mirrors /workshop-timeline (explicit date range wins over
-    ±weeks). Split from it so the two PostHog reads here (video stats + resource
-    breakdown) stream to the UI independently of the chart — the client renders
-    whichever payload resolves first. The two reads run concurrently.
+    ±weeks). Split from it so this PostHog read streams to the UI independently
+    of the chart — the client renders whichever payload resolves first.
     """
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
@@ -876,33 +874,11 @@ def get_workshop_engagement(
         we_date = window_end.isoformat()
 
         # School scoping: CMM webinars are SHARED across schools, so events for one
-        # webinar_id span many schools. Without this clause the cards aggregate every
+        # webinar_id span many schools. Without this clause the card aggregates every
         # school's activity — inflating the counts vs. the school-scoped Overview
         # card and timeline tile (empty string for super_admin viewing all schools).
         school_clause = ph._hogql_school_clause(sid)
 
-        # Total plays = VIEWS (video_view, first play per session).
-        plays_hogql = (
-            "SELECT count() AS total_plays "
-            "FROM events "
-            f"WHERE event = 'video_view' "
-            f"  AND properties.object_id = '{webinar_id}'{school_clause} "
-            f"  AND timestamp >= toDate('{ws_date}') "
-            f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
-        )
-        # Watch-quality stats (minutes watched + avg %) come from the session-end
-        # summary, which is the only event carrying total_watch_seconds/percent.
-        video_hogql = (
-            "SELECT "
-            "  count() AS session_count, "
-            "  round(sum(toFloat(ifNull(properties.total_watch_seconds, '0'))) / 60) AS total_minutes_watched, "
-            "  avg(toFloat(ifNull(properties.percent_watched, '0'))) AS avg_percent_watched "
-            "FROM events "
-            f"WHERE event = 'video_session_end' "
-            f"  AND properties.object_id = '{webinar_id}'{school_clause} "
-            f"  AND timestamp >= toDate('{ws_date}') "
-            f"  AND timestamp <= toDate('{we_date}') + INTERVAL 1 DAY"
-        )
         # Resources-used breakdown (powers the "Resources used" card).
         resources_hogql = (
             "SELECT "
@@ -921,48 +897,14 @@ def get_workshop_engagement(
             "LIMIT 20"
         )
 
-        def _run(query: str):
-            try:
-                return ph.get_hogql_query(api_key, project_id, query)
-            except Exception:
-                return None
-
-        with ThreadPoolExecutor(max_workers=3) as ex:
-            f_plays = ex.submit(_run, plays_hogql)
-            f_video = ex.submit(_run, video_hogql)
-            f_res = ex.submit(_run, resources_hogql)
-            plays_rows = f_plays.result()
-            video_rows = f_video.result()
-            resource_rows = f_res.result()
+        try:
+            resource_rows = ph.get_hogql_query(api_key, project_id, resources_hogql)
+        except Exception:
+            resource_rows = None
 
         # Outage handling is deferred until AFTER parsing (see the guard before
-        # _db_set): a PARTIAL failure (one read ok, one failed) must not overwrite a
-        # complete cache entry — critical on a forced refresh.
-
-        # -- Video aggregate stats — degrade gracefully to zeros on parse failure. --
-        # total_plays (views) and watch stats come from two separate reads.
-        total_plays = 0
-        try:
-            if plays_rows and plays_rows[0][0] is not None:
-                total_plays = int(plays_rows[0][0])
-        except Exception:
-            pass
-        video_stats = WorkshopVideoStats(
-            total_plays=total_plays, total_minutes_watched=0, avg_percent_watched=None
-        )
-        try:
-            if video_rows:
-                r = video_rows[0]
-                session_count = int(r[0]) if r[0] is not None else 0
-                total_minutes = int(r[1]) if r[1] is not None else 0
-                avg_pct = float(r[2]) if r[2] is not None and session_count > 0 else None
-                video_stats = WorkshopVideoStats(
-                    total_plays=total_plays,
-                    total_minutes_watched=total_minutes,
-                    avg_percent_watched=avg_pct,
-                )
-        except Exception:
-            pass
+        # _db_set) so a failed read never overwrites a complete cache entry —
+        # critical on a forced refresh.
 
         # -- Resources-used breakdown — degrade gracefully to empty on parse failure. --
         resources_used: list[ResourceUsedRow] = []
@@ -978,14 +920,13 @@ def get_workshop_engagement(
         result = WorkshopEngagementCards(
             webinar_id=webinar_id,
             workshop_name=webinar["workshop_name"],
-            video=video_stats,
             resources_used=resources_used,
         )
 
-        # Total OR partial outage: at least one read failed. Don't overwrite a
-        # complete entry with partial/zeroed data (esp. on a forced refresh). Prefer
-        # the stale-but-complete entry; else return the partial WITHOUT caching it.
-        if plays_rows is None or video_rows is None or resource_rows is None:
+        # Outage: the read failed. Don't overwrite a complete entry with empty data
+        # (esp. on a forced refresh). Prefer the stale-but-complete entry; else
+        # return the empty result WITHOUT caching it.
+        if resource_rows is None:
             stale = ph._db_get_stale(db, cache_key)
             if stale:
                 return WorkshopEngagementCards.model_validate(stale)
