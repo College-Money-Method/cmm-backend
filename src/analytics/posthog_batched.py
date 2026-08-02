@@ -86,6 +86,23 @@ def _scope_where(date_from: str, date_to: str | None, school_id: str | None, cyc
     )
 
 
+def _event_names(spec: dict) -> list[str]:
+    """Validated event name(s) for a series/breakdown spec.
+
+    `event` accepts a single name or a list — a list means "count these events
+    together as one series" (e.g. site search = search_query +
+    global_search_performed, which fire from two different search surfaces)."""
+    raw = spec["event"]
+    events = raw if isinstance(raw, list) else [raw]
+    return [_ident(e, _EVENT_RE, "event") for e in events]
+
+
+def _event_match(events: list[str]) -> str:
+    if len(events) == 1:
+        return f"event = '{events[0]}'"
+    return "event IN (" + ", ".join(f"'{e}'" for e in events) + ")"
+
+
 def get_batched_trends(
     api_key: str,
     project_id: str,
@@ -100,7 +117,12 @@ def get_batched_trends(
 ) -> dict[str, TrendMetric]:
     """All daily trends for an endpoint in ONE HogQL query.
 
-    series item: {"key": str, "event": str, "math": "total" | "dau"}
+    series item: {"key": str, "event": str | list[str], "math": "total" | "dau",
+                  "extra_filter"?: str}
+    `event` as a list counts those events together as one series.
+    `extra_filter` is a CODE-SUPPLIED HogQL fragment starting with " AND " that
+    narrows this series only (e.g. " AND properties.$pathname LIKE '/school/%'").
+    Never build it from user input — it is interpolated verbatim.
     Returns {key: TrendMetric} with zero-filled aligned days.
     force_refresh: bypass the cache read (Refresh button) — re-query and overwrite.
     """
@@ -116,13 +138,17 @@ def get_batched_trends(
 
         days = _day_range(date_from, date_to)
         cols: list[str] = []
+        all_events: list[str] = []
         for s in series:
-            ev = _ident(s["event"], _EVENT_RE, "event")
+            events = _event_names(s)
+            all_events.extend(events)
+            # extra_filter already carries its leading " AND " (see docstring)
+            cond = _event_match(events) + (s.get("extra_filter") or "")
             if s.get("math") == "dau":
-                cols.append(f"uniqIf(person_id, event = '{ev}')")
+                cols.append(f"uniqIf(person_id, {cond})")
             else:
-                cols.append(f"countIf(event = '{ev}')")
-        events_in = ", ".join(f"'{_ident(s['event'], _EVENT_RE, 'event')}'" for s in series)
+                cols.append(f"countIf({cond})")
+        events_in = ", ".join(f"'{e}'" for e in dict.fromkeys(all_events))
         hogql = (
             f"SELECT toStartOfDay(timestamp) AS day, {', '.join(cols)} "
             "FROM events "
@@ -165,9 +191,14 @@ def get_batched_breakdowns(
 ) -> dict[str, list[TopBreakdown]]:
     """All breakdowns for an endpoint in ONE HogQL query (UNION ALL + kind col).
 
-    spec: {"key": str, "event": str, "prop": str, "math": "count" | "avg",
-           "math_prop"?: str, "limit"?: int, "order"?: "desc" | "label_num"}
-    order "label_num" keeps numeric-label order (milestone drop-off curves).
+    spec: {"key": str, "event": str | list[str], "prop": str,
+           "math": "count" | "avg", "math_prop"?: str, "limit"?: int,
+           "order"?: "desc" | "label_num", "extra_filter"?: str}
+    `event` as a list groups those events together in one breakdown.
+    order "label_num" keeps numeric-label order.
+    `extra_filter` is a CODE-SUPPLIED HogQL fragment starting with " AND " that
+    narrows this breakdown only (e.g. " AND properties.object_type = 'workshop'").
+    Never build it from user input — it is interpolated verbatim.
     force_refresh: bypass the cache read (Refresh button) — re-query and overwrite.
     """
     cache_key = ph._key(fn="batched_breakdowns", specs=specs, school_id=school_id, df=date_from, dt=date_to, cyc=cycle_name)
@@ -183,16 +214,18 @@ def get_batched_breakdowns(
         where = _scope_where(date_from, date_to, school_id, cycle_name)
         branches: list[str] = []
         for sp in specs:
-            ev = _ident(sp["event"], _EVENT_RE, "event")
+            match = _event_match(_event_names(sp))
             prop = _ident(sp["prop"], _PROP_RE, "property")
             if sp.get("math") == "avg":
                 mp = _ident(sp["math_prop"], _PROP_RE, "math property")
                 val = f"avg(toFloat(ifNull(properties.{mp}, '0')))"
             else:
                 val = "toFloat(count())"
+            # extra_filter already carries its leading " AND " (see docstring)
+            extra = sp.get("extra_filter") or ""
             branches.append(
                 f"SELECT '{sp['key']}' AS kind, toString(properties.{prop}) AS label, {val} AS val "
-                f"FROM events WHERE event = '{ev}' AND {where} "
+                f"FROM events WHERE {match} AND {where}{extra} "
                 f"AND isNotNull(properties.{prop}) GROUP BY label"
             )
         hogql = " UNION ALL ".join(branches)

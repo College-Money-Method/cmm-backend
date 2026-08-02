@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, distinct, func, select
+from sqlalchemy import Float, and_, distinct, func, select
 from sqlalchemy.orm import Session
 
 from src.schools.models import School
@@ -90,7 +90,10 @@ def get_geographic_data(db: Session) -> dict:
             School.enrollment_range,
             func.count(School.id).label("cnt"),
             func.avg(
-                func.coalesce(distinct_regs_sub.c.dist_regs, 0).cast(float)
+                # sqlalchemy.Float, NOT the Python `float` builtin — casting to a
+                # non-TypeEngine raises TypeError at query-build time and 500s the
+                # whole /admin/geographic endpoint (blanking by_state too).
+                func.coalesce(distinct_regs_sub.c.dist_regs, 0).cast(Float)
                 / func.nullif(School.enrollment_9_12, 0)
                 * 100
             ).label("avg_reach"),
@@ -105,12 +108,18 @@ def get_geographic_data(db: Session) -> dict:
             )
         )
         .group_by(School.enrollment_range)
-        .order_by(School.enrollment_range)
     )
 
     _label_map = {"< 250": "Small (< 250)", "250-500": "Medium (250-500)", ">500": "Large (> 500)"}
+    # Small → Medium → Large. Sorting on the raw enrollment_range text puts them
+    # in ASCII order ('250-500' < '< 250' < '>500'), which reads as nonsense.
+    _band_order = {"< 250": 0, "250-500": 1, ">500": 2}
+    rows = sorted(
+        db.execute(band_stmt).mappings().all(),
+        key=lambda r: _band_order.get(r["enrollment_range"], 99),
+    )
     by_band = []
-    for row in db.execute(band_stmt).mappings().all():
+    for row in rows:
         avg_reach = row["avg_reach"]
         by_band.append({
             "label": _label_map.get(row["enrollment_range"], row["enrollment_range"]),

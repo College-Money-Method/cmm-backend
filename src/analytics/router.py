@@ -64,6 +64,9 @@ router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 
 logger = logging.getLogger(__name__)
 
+# video_view / video_session_end carry object_type ∈ workshop|topic|resource|welcome
+_WORKSHOP_VIDEO_ONLY = " AND properties.object_type = 'workshop'"
+
 
 def _resolve_school(current_user: CounselorDep, school_id_param: str | None) -> str | None:
     """Admins can filter by any school or see all; counselors are locked to their school."""
@@ -106,14 +109,18 @@ def get_overview(
     api_key, project_id = _check_configured()
     sid = _resolve_school(current_user, school_id)
     opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db, force_refresh=refresh)
-    # ONE PostHog round trip for both series (was 2 sequential calls).
+    # ONE PostHog round trip for all series.
     # Note: school scoping is now the event-property super-prop for DAU too
     # (was person-property) — first-visit pageviews before registration are excluded.
+    # DAU is split by surface: an unqualified $pageview DAU silently mixed
+    # families on the Resource Center, counselors in the Hub, and CMM staff in
+    # /admin, so the single number answered nobody's question.
     trends = phb.get_batched_trends(api_key, project_id, [
-        {"key": "dau", "event": "$pageview", "math": "dau"},
+        {"key": "dau", "event": "$pageview", "math": "dau", "extra_filter": ph.SURFACE_RESOURCE_CENTER},
+        {"key": "hub_dau", "event": "$pageview", "math": "dau", "extra_filter": ph.SURFACE_HUB},
         {"key": "sign_ins", "event": "user_signed_in"},
     ], **opts)
-    return OverviewData(dau=trends["dau"], sign_ins=trends["sign_ins"])
+    return OverviewData(dau=trends["dau"], hub_dau=trends["hub_dau"], sign_ins=trends["sign_ins"])
 
 
 @router.get("/workshop", response_model=WorkshopData)
@@ -135,11 +142,15 @@ def get_workshop(
         {"key": "registrations_opened", "event": "workshop_register_open"},
         {"key": "registrations", "event": "workshop_registration_complete"},
     ], **opts)
+    # video_view / video_session_end fire for EVERY embedded video — topic
+    # videos, resource videos and the site welcome video included — so both
+    # workshop breakdowns must filter on object_type or they rank non-workshops.
     breakdowns = phb.get_batched_breakdowns(api_key, project_id, [
-        {"key": "top_videos", "event": "video_view", "prop": "object_name", "limit": 10},
+        {"key": "top_videos", "event": "video_view", "prop": "object_name", "limit": 10,
+         "extra_filter": _WORKSHOP_VIDEO_ONLY},
         {"key": "top_watchtime", "event": "video_session_end", "prop": "object_name",
-         "math": "avg", "math_prop": "total_watch_seconds", "limit": 10},
-        {"key": "milestone_dropoff", "event": "recording_progress", "prop": "milestone_pct", "order": "label_num"},
+         "math": "avg", "math_prop": "total_watch_seconds", "limit": 10,
+         "extra_filter": _WORKSHOP_VIDEO_ONLY},
     ], **opts)
     return WorkshopData(
         watch_recordings=trends["watch_recordings"],
@@ -147,7 +158,6 @@ def get_workshop(
         registrations=trends["registrations"],
         top_videos=breakdowns["top_videos"],
         top_watchtime=breakdowns["top_watchtime"],
-        milestone_dropoff=breakdowns["milestone_dropoff"],
     )
 
 
@@ -359,11 +369,11 @@ def get_search(
     opts = dict(school_id=sid, date_from=date_from, date_to=date_to, cycle_name=cycle_name, db=db, force_refresh=refresh)
     # TWO PostHog round trips total (was 4 sequential calls)
     trends = phb.get_batched_trends(api_key, project_id, [
-        {"key": "searches", "event": "search_query"},
+        {"key": "searches", "event": ph.SITE_SEARCH_EVENTS},
         {"key": "library_searches", "event": "resource_library_searched"},
     ], **opts)
     breakdowns = phb.get_batched_breakdowns(api_key, project_id, [
-        {"key": "top_queries", "event": "search_query", "prop": "query", "limit": 8},
+        {"key": "top_queries", "event": ph.SITE_SEARCH_EVENTS, "prop": "query", "limit": 8},
         {"key": "top_library_queries", "event": "resource_library_searched", "prop": "query", "limit": 8},
     ], **opts)
     return SearchData(

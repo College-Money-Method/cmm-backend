@@ -140,9 +140,13 @@ def get_pulse(
                 top_resource_searches = [TopBreakdown.model_validate(r) for r in cached_rs]
             else:
                 try:
+                    # Both search surfaces — the dialog (global_search_performed)
+                    # is where nearly all searching happens; search_query alone
+                    # left this card looking empty. See SITE_SEARCH_EVENTS.
+                    st_events = ", ".join(f"'{e}'" for e in ph.SITE_SEARCH_EVENTS)
                     st_hogql = (
-                        "SELECT properties.query, count() FROM events "
-                        "WHERE event = 'search_query' AND timestamp >= now() - INTERVAL 7 DAY "
+                        f"SELECT properties.query, count() FROM events "
+                        f"WHERE event IN ({st_events}) AND timestamp >= now() - INTERVAL 7 DAY "
                         "AND isNotNull(properties.query) "
                         "GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
                     )
@@ -219,8 +223,10 @@ def get_big_picture(
 
     pg = get_big_picture_counts(db, df_dt, dt_dt)
 
-    # ONE batched HogQL: daily DAU + daily registrations (no school filter)
-    cache_key = ph._key(fn="big_picture_posthog", df=date_from, dt=date_to)
+    # ONE batched HogQL: daily DAU + daily registrations across ALL schools (no
+    # school filter). CMM staff traffic in /admin is excluded — it is internal
+    # tool usage, not customer activity, and dwarfed real DAU on quiet days.
+    cache_key = ph._key(fn="big_picture_posthog", df=date_from, dt=date_to, surface="non_admin")
     platform_dau: TrendMetric
     platform_regs: TrendMetric
 
@@ -237,7 +243,7 @@ def get_big_picture(
                 date_clause = ph._hogql_date_clause(date_from, date_to)
                 hogql = (
                     "SELECT toStartOfDay(timestamp) as day, "
-                    "  uniqIf(person_id, event = '$pageview') as dau, "
+                    f"  uniqIf(person_id, event = '$pageview'{ph.SURFACE_EXCLUDE_ADMIN}) as dau, "
                     "  countIf(event = 'workshop_registration_complete') as regs "
                     "FROM events "
                     f"WHERE {date_clause} "
