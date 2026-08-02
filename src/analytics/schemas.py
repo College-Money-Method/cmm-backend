@@ -45,7 +45,10 @@ class TopBreakdown(BaseModel):
 # ── Existing endpoint response shapes (DO NOT CHANGE) ─────────────────────────
 
 class OverviewData(BaseModel):
-    dau: TrendMetric
+    # Split by surface — the same person can be active on both, and an
+    # unqualified $pageview DAU also swept in CMM staff browsing /admin.
+    dau: TrendMetric          # school Resource Center (/school/*) — families & students
+    hub_dau: TrendMetric | None = None   # Counselor Hub (/hub/*) — counselors
     sign_ins: TrendMetric
 
 
@@ -53,11 +56,10 @@ class WorkshopData(BaseModel):
     watch_recordings: TrendMetric
     registrations_opened: TrendMetric
     registrations: TrendMetric
+    # Both restricted to object_type='workshop' — video_view / video_session_end
+    # also fire for topic, resource and welcome videos.
     top_videos: list[TopBreakdown]       # video_view count by object_name
     top_watchtime: list[TopBreakdown]    # video_session_end avg total_watch_seconds by object_name
-    # recording_progress counts per milestone_pct (10..100), milestone order —
-    # shows where viewers stop watching recordings
-    milestone_dropoff: list[TopBreakdown] = []
 
 
 class VideoBreakdownRow(BaseModel):
@@ -151,6 +153,7 @@ class TopicEngagementData(CachedAtMixin):
 
 
 class SearchData(BaseModel):
+    # Site search = search_query (results page) + global_search_performed (dialog)
     searches: TrendMetric
     top_queries: list[TopBreakdown]
     # Resource Library keyword search (resource_library_searched event)

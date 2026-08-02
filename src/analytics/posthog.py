@@ -207,6 +207,27 @@ def _hogql_school_clause(school_id: str | None) -> str:
     return f" AND properties.school_id = '{sid}'"
 
 
+# ── Surface clauses ───────────────────────────────────────────────────────────
+# One PostHog project serves three very different audiences, all firing
+# $pageview with the same school_id super-property: families/students on the
+# school Resource Center (/school/:slug/*), counselors in the Hub (/hub/*), and
+# CMM staff in the admin app (/admin/*). Any "active users" metric has to say
+# which one it means, so these are the canonical path filters. Constants (never
+# user input) — safe to interpolate. Each starts with " AND ".
+
+# Site search fires from two surfaces: the global search dialog
+# (`global_search_performed`, reachable from every portal page) and the
+# full-page search results route (`search_query`). Counting only the latter
+# misses almost every search — always query them together.
+SITE_SEARCH_EVENTS = ["search_query", "global_search_performed"]
+
+SURFACE_RESOURCE_CENTER = " AND properties.$pathname LIKE '/school/%'"
+SURFACE_HUB = " AND properties.$pathname LIKE '/hub%'"
+# Everything except the internal admin app — CMM staff browsing /admin is not
+# customer activity and would otherwise inflate platform-wide DAU.
+SURFACE_EXCLUDE_ADMIN = " AND properties.$pathname NOT LIKE '/admin%'"
+
+
 # ── HogQL helper ──────────────────────────────────────────────────────────────
 
 def get_hogql_query(

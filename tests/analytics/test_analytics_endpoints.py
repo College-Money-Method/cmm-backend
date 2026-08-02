@@ -87,8 +87,27 @@ def test_overview_admin_all_schools(mock_posthog_configured):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert "dau" in body and "sign_ins" in body
+    assert "dau" in body and "hub_dau" in body and "sign_ins" in body
     assert body["dau"]["total"] == 42
+
+
+def test_overview_dau_split_by_surface(mock_posthog_configured):
+    """`dau` is Resource Center only and `hub_dau` is the Hub — a single
+    unqualified $pageview DAU also swept in CMM staff browsing /admin."""
+    series_seen = []
+
+    def spy(api_key, project_id, series, **kwargs):
+        series_seen.extend(series)
+        return {s["key"]: SAMPLE_TREND for s in series}
+
+    with patch("src.analytics.posthog_batched.get_batched_trends", side_effect=spy):
+        resp = admin_client().get("/api/v1/analytics/overview")
+
+    assert resp.status_code == 200
+    by_key = {s["key"]: s for s in series_seen}
+    assert by_key["dau"]["extra_filter"] == " AND properties.$pathname LIKE '/school/%'"
+    assert by_key["hub_dau"]["extra_filter"] == " AND properties.$pathname LIKE '/hub%'"
+    assert "extra_filter" not in by_key["sign_ins"]
 
 
 def test_overview_admin_with_school_id(mock_posthog_configured):
@@ -147,13 +166,8 @@ def test_overview_counselor_ignores_school_param(mock_posthog_configured):
 # ── /workshop ─────────────────────────────────────────────────────────────────
 
 def test_workshop_endpoint_shape(mock_posthog_configured):
-    dropoff = [TopBreakdown(label="10%", count=40), TopBreakdown(label="50%", count=25)]
-
-    def breakdowns(api_key, project_id, specs, **kwargs):
-        return {sp["key"]: (dropoff if sp["key"] == "milestone_dropoff" else SAMPLE_QUERIES) for sp in specs}
-
     with patch("src.analytics.posthog_batched.get_batched_trends", side_effect=fake_trends()), \
-         patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=breakdowns):
+         patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=fake_breakdowns()):
         resp = admin_client().get("/api/v1/analytics/workshop")
 
     assert resp.status_code == 200
@@ -161,20 +175,29 @@ def test_workshop_endpoint_shape(mock_posthog_configured):
     assert "watch_recordings" in body
     assert "registrations_opened" in body
     assert "registrations" in body
-    assert "funnel" not in body  # removed — replaced by milestone_dropoff
+    assert "funnel" not in body
+    assert "milestone_dropoff" not in body  # removed — recording drop-off card retired
     assert "top_videos" in body
     assert "top_watchtime" in body
-    assert body["milestone_dropoff"][0]["label"] == "10%"
-    assert body["milestone_dropoff"][0]["count"] == 40
 
 
-def test_workshop_milestone_dropoff_empty_when_no_data(mock_posthog_configured):
-    with patch("src.analytics.posthog_batched.get_batched_trends", side_effect=fake_trends(EMPTY_TREND)), \
-         patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=fake_breakdowns([])):
+def test_workshop_video_breakdowns_filter_to_workshop_videos(mock_posthog_configured):
+    """video_view/video_session_end also fire for topic, resource and welcome
+    videos — without the object_type filter the workshop cards rank those."""
+    specs_seen = []
+
+    def breakdowns(api_key, project_id, specs, **kwargs):
+        specs_seen.extend(specs)
+        return {sp["key"]: SAMPLE_QUERIES for sp in specs}
+
+    with patch("src.analytics.posthog_batched.get_batched_trends", side_effect=fake_trends()), \
+         patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=breakdowns):
         resp = admin_client().get("/api/v1/analytics/workshop")
 
     assert resp.status_code == 200
-    assert resp.json()["milestone_dropoff"] == []
+    assert {sp["key"] for sp in specs_seen} == {"top_videos", "top_watchtime"}
+    for sp in specs_seen:
+        assert sp["extra_filter"] == " AND properties.object_type = 'workshop'"
 
 
 # ── /content ──────────────────────────────────────────────────────────────────
@@ -259,6 +282,29 @@ def test_search_endpoint_shape(mock_posthog_configured):
     assert body["top_queries"][0]["label"] == "FAFSA"
 
 
+def test_search_counts_both_search_surfaces(mock_posthog_configured):
+    """Site search fires from the global dialog AND the results page; counting
+    only search_query missed nearly every search."""
+    seen = []
+
+    def trend_spy(api_key, project_id, specs, **kwargs):
+        seen.extend(specs)
+        return {sp["key"]: SAMPLE_TREND for sp in specs}
+
+    def breakdown_spy(api_key, project_id, specs, **kwargs):
+        seen.extend(specs)
+        return {sp["key"]: SAMPLE_QUERIES for sp in specs}
+
+    with patch("src.analytics.posthog_batched.get_batched_trends", side_effect=trend_spy), \
+         patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=breakdown_spy):
+        resp = admin_client().get("/api/v1/analytics/search")
+
+    assert resp.status_code == 200
+    by_key = {s["key"]: s for s in seen}
+    for key in ("searches", "top_queries"):
+        assert by_key[key]["event"] == ["search_query", "global_search_performed"]
+
+
 # ── Date range forwarding ─────────────────────────────────────────────────────
 
 def test_date_params_forwarded_to_posthog(mock_posthog_configured):
@@ -315,3 +361,57 @@ def test_batched_breakdowns_orders_and_limits(mock_posthog_configured):
 
     assert [b.label for b in result["top"]] == ["Big", "Mid"]  # desc, limited to 2
     assert [b.label for b in result["ms"]] == ["10%", "50%", "100%"]  # milestone order
+
+
+def test_batched_trends_applies_extra_filter_and_event_lists(mock_posthog_configured):
+    """Per-series extra_filter narrows only its own column; an `event` list
+    counts several events as one series (site search across two surfaces)."""
+    from src.analytics.posthog_batched import get_batched_trends
+
+    seen = {}
+    with patch("src.analytics.posthog.get_hogql_query",
+               side_effect=lambda k, p, q: seen.setdefault("q", q) and []):
+        get_batched_trends(
+            "key", "123",
+            [
+                {"key": "dau", "event": "$pageview", "math": "dau",
+                 "extra_filter": " AND properties.$pathname LIKE '/school/%'"},
+                {"key": "searches", "event": ["search_query", "global_search_performed"]},
+            ],
+            date_from="2026-06-09", date_to="2026-06-09",
+        )
+
+    q = seen["q"]
+    assert "uniqIf(person_id, event = '$pageview' AND properties.$pathname LIKE '/school/%')" in q
+    assert "countIf(event IN ('search_query', 'global_search_performed'))" in q
+    # every referenced event must survive the outer event IN (...) prefilter
+    for ev in ("$pageview", "search_query", "global_search_performed"):
+        assert f"'{ev}'" in q.split("GROUP BY")[0]
+
+
+def test_batched_breakdowns_applies_extra_filter(mock_posthog_configured):
+    from src.analytics.posthog_batched import get_batched_breakdowns
+
+    seen = {}
+    with patch("src.analytics.posthog.get_hogql_query",
+               side_effect=lambda k, p, q: seen.setdefault("q", q) and []):
+        get_batched_breakdowns(
+            "key", "123",
+            [{"key": "top_videos", "event": "video_view", "prop": "object_name",
+              "extra_filter": " AND properties.object_type = 'workshop'"}],
+            date_from="2026-06-09", date_to="2026-06-09",
+        )
+
+    assert " AND properties.object_type = 'workshop' AND isNotNull(properties.object_name)" in seen["q"]
+
+
+def test_batched_helpers_reject_bad_event_names_in_lists(mock_posthog_configured):
+    """List form must validate every name — not just the first."""
+    from src.analytics.posthog_batched import get_batched_trends
+
+    with pytest.raises(ValueError):
+        get_batched_trends(
+            "key", "123",
+            [{"key": "x", "event": ["search_query", "evil'; DROP"]}],
+            date_from="2026-06-09", date_to="2026-06-09",
+        )
