@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import random
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -97,7 +98,7 @@ def db_cache_get_stale(db: Session, key: str) -> dict | None:
 
 
 def db_cache_set(db: Session, key: str, payload: dict) -> None:
-    """Upsert a cache entry."""
+    """Upsert a cache entry, then occasionally purge long-abandoned rows."""
     row = db.get(AnalyticsQueryCache, key)
     if row is None:
         row = AnalyticsQueryCache(key=key, payload=payload)
@@ -109,6 +110,43 @@ def db_cache_set(db: Session, key: str, payload: dict) -> None:
         db.commit()
     except Exception:
         db.rollback()
+    # Opportunistic TTL cleanup: on a small fraction of writes, sweep out rows no
+    # request has refreshed in a long time so the table can't grow without bound.
+    # Actively-used keys are rewritten every TTL (30–60 min) and never age out;
+    # only keys nobody queries anymore reach _MAX_AGE. Runs on writes (not a
+    # scheduler/cron) to stay infra-free — write volume is what fills the table,
+    # so it's also what should drain it. Best-effort: never fails a cache write.
+    if random.random() < _CLEANUP_PROBABILITY:
+        _purge_stale(db)
+
+
+# How long an untouched entry lives before opportunistic cleanup removes it. Well
+# beyond every TTL, so this only reaps abandoned keys — and generous enough that
+# stale-on-error serving (db_cache_get_stale, any age) still has a fallback for
+# recently-active keys during a PostHog outage.
+_MAX_AGE = timedelta(days=7)
+
+# Fraction of writes that trigger a purge sweep. Low so the extra DELETE is
+# negligible per request, but with regular analytics traffic the table is still
+# swept many times a day.
+_CLEANUP_PROBABILITY = 0.02
+
+
+def _purge_stale(db: Session) -> None:
+    """Delete cache rows older than _MAX_AGE. Best-effort; swallows errors so a
+    failed sweep never surfaces to the caller that just wrote its entry."""
+    cutoff = datetime.now(timezone.utc) - _MAX_AGE
+    try:
+        result = db.execute(
+            text("DELETE FROM analytics_query_cache WHERE fetched_at < :cutoff"),
+            {"cutoff": cutoff},
+        )
+        db.commit()
+        if result.rowcount:
+            logger.info("analytics cache: purged %d stale rows", result.rowcount)
+    except Exception:
+        db.rollback()
+        logger.warning("analytics cache: stale-row purge failed", exc_info=True)
 
 
 # ── Cross-process single-flight (request coalescing) ────────────────────────
