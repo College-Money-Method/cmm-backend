@@ -69,3 +69,26 @@ def resolve_asset_rows(db: Session, rows: list[TopBreakdown]) -> list[RankedCont
         else:
             out.append(RankedContentRow(id=r.label, name=name, count=int(r.count)))
     return out
+
+
+# Sentinel object_id the school welcome video fires video_view with — it is NOT a
+# ContentAsset, so it has no resource page (see school/index.tsx welcome embed).
+_WELCOME_VIDEO_ID = "welcome-video"
+
+
+def resolve_video_rows(db: Session, rows: list[TopBreakdown]) -> list[RankedContentRow]:
+    """Resolve the "Other Videos" list (video_view grouped by object_id).
+
+    Resource-embedded videos carry the resource's asset id, so they resolve to the
+    current asset name AND link exactly like the Top Resources card. The welcome
+    video carries a fixed sentinel id (no ContentAsset) — it renders as a plain
+    "Welcome Video" row, unlinked. Reuses resolve_asset_rows for the asset lookup;
+    order is preserved (already ranked by count)."""
+    resolved = resolve_asset_rows(db, rows)
+    out: list[RankedContentRow] = []
+    for orig, res in zip(rows, resolved):
+        if orig.label == _WELCOME_VIDEO_ID:
+            out.append(RankedContentRow(id=None, name="Welcome Video", count=int(orig.count)))
+        else:
+            out.append(res)
+    return out
