@@ -178,6 +178,18 @@ class WebinarDetail(BaseModel):
     resource_views: int = 0
 
 
+class HubWebinarItem(BaseModel):
+    """Lightweight webinar entry for the hub workshop selector — the same
+    school+cycle scoped set as WorkshopsDetailData.webinars but WITHOUT the
+    PostHog aggregates, so the list is a fast DB-only call the client caches in
+    localStorage (webinars are scheduled once per cycle)."""
+
+    webinar_id: str
+    workshop_name: str
+    start_datetime: str | None
+    sequence_number: int | None = None
+
+
 class WorkshopsDetailTotals(BaseModel):
     registered: int
     attended_live: int

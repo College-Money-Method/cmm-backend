@@ -38,6 +38,7 @@ from src.analytics.schemas import (
     TopicEngagementTopic,
     TrendMetric,
     VideoBreakdownRow,
+    HubWebinarItem,
     WebinarDetail,
     WorkshopData,
     WorkshopEngagementCards,
@@ -618,6 +619,39 @@ def get_workshops_detail(
         site_totals=site_totals,
         cached_at=ph.oldest_cache_hit(db),
     )
+
+
+@router.get("/hub/webinars", response_model=list[HubWebinarItem])
+def list_hub_webinars(
+    current_user: CounselorDep,
+    db: DbDep,
+    school_id: str | None = Query(default=None),
+    cycle_id: uuid.UUID | None = Query(default=None),
+    date_from: str = Query(default="-30d"),
+    date_to: str | None = Query(default=None),
+) -> list[HubWebinarItem]:
+    """Lightweight webinar list for the hub workshop selector.
+
+    Returns the SAME school+cycle scoped set as /workshops-detail (via
+    PortalMapping) but WITHOUT the PostHog aggregates — a fast DB-only call the
+    client caches in localStorage (webinars are scheduled once per cycle). When
+    cycle_id is given the range is ignored for row selection (webinars are scoped
+    by their cycle)."""
+    sid = _resolve_school(current_user, school_id)
+    if not sid:
+        raise HTTPException(status_code=400, detail="school_id is required for hub webinars")
+    rows = get_webinars_for_school_in_range(
+        db, uuid.UUID(sid), date_from, date_to, cycle_id=cycle_id
+    )
+    return [
+        HubWebinarItem(
+            webinar_id=r["webinar_id"],
+            workshop_name=r["workshop_name"],
+            start_datetime=r["start_datetime"],
+            sequence_number=r.get("sequence_number"),
+        )
+        for r in rows
+    ]
 
 
 @router.get("/reach", response_model=ReachData)
