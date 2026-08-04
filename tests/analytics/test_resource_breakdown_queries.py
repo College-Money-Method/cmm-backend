@@ -6,7 +6,11 @@ Grouping by asset_name merged distinct assets that share a title (live data had
 
 import uuid
 
-from src.analytics.resource_breakdown_queries import get_school_slug, resolve_asset_rows
+from src.analytics.resource_breakdown_queries import (
+    get_school_slug,
+    resolve_asset_rows,
+    resolve_video_rows,
+)
 from src.analytics.schemas import TopBreakdown
 
 
@@ -75,6 +79,38 @@ class TestResolveAssetRows:
         db = _FakeSession([])
         assert resolve_asset_rows(db, []) == []
         assert db.queries == 0
+
+
+class TestResolveVideoRows:
+    """The "Other Videos" list: resource videos link to their page (like the
+    resources card); the welcome video is a plain, unlinked row."""
+
+    def test_resource_video_links_like_a_resource(self):
+        aid = uuid.uuid4()
+        db = _FakeSession([(aid, "College Costs 101")])
+        rows = resolve_video_rows(db, [TopBreakdown(label=str(aid), count=15.0)])
+        assert rows[0].id == str(aid)          # linkable to /resources/{id}
+        assert rows[0].name == "College Costs 101"
+        assert rows[0].count == 15
+
+    def test_welcome_video_is_named_and_unlinked(self):
+        db = _FakeSession([])
+        rows = resolve_video_rows(db, [TopBreakdown(label="welcome-video", count=7.0)])
+        assert rows[0].id is None              # no resource page
+        assert rows[0].name == "Welcome Video"
+        assert rows[0].count == 7
+
+    def test_mixed_order_preserved(self):
+        aid = uuid.uuid4()
+        db = _FakeSession([(aid, "Scholarships")])
+        rows = resolve_video_rows(db, [
+            TopBreakdown(label="welcome-video", count=9.0),
+            TopBreakdown(label=str(aid), count=4.0),
+        ])
+        assert [(r.name, r.id) for r in rows] == [
+            ("Welcome Video", None),
+            ("Scholarships", str(aid)),
+        ]
 
 
 class TestGetSchoolSlug:

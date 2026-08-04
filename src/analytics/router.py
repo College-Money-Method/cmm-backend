@@ -55,7 +55,11 @@ from src.analytics.postgres_queries import (
     get_webinars_for_school_in_range,
     get_workshops_detail_totals,
 )
-from src.analytics.resource_breakdown_queries import get_school_slug, resolve_asset_rows
+from src.analytics.resource_breakdown_queries import (
+    get_school_slug,
+    resolve_asset_rows,
+    resolve_video_rows,
+)
 from src.analytics.topic_engagement_queries import get_school_topic_tree, get_topic_metrics
 from src.auth.deps import CounselorDep
 from src.config import settings
@@ -67,6 +71,10 @@ logger = logging.getLogger(__name__)
 
 # video_view / video_session_end carry object_type ∈ workshop|topic|resource|welcome
 _WORKSHOP_VIDEO_ONLY = " AND properties.object_type = 'workshop'"
+_TOPIC_VIDEO_ONLY = " AND properties.object_type = 'topic'"
+# Resource-embedded + welcome videos — the "Other Videos" card, i.e. everything
+# not covered by the topic ("Topic Video Views") or workshop breakdowns.
+_OTHER_VIDEO_ONLY = " AND properties.object_type IN ('resource', 'welcome')"
 
 
 def _resolve_school(current_user: CounselorDep, school_id_param: str | None) -> str | None:
@@ -181,13 +189,20 @@ def get_content(
     # Videos: show all (only a handful of workshop recordings per cycle). Resources
     # & topics: top 10 in the card; the "View all" popup paginates via /content-breakdown.
     breakdowns = phb.get_batched_breakdowns(api_key, project_id, [
-        {"key": "video_views", "event": "video_view", "prop": "object_name", "limit": 50},
+        {"key": "video_views", "event": "video_view", "prop": "object_name", "limit": 50,
+         "extra_filter": _TOPIC_VIDEO_ONLY},
         {"key": "video_pct", "event": "video_session_end", "prop": "object_name",
-         "math": "avg", "math_prop": "percent_watched", "limit": 100},
+         "math": "avg", "math_prop": "percent_watched", "limit": 100,
+         "extra_filter": _TOPIC_VIDEO_ONLY},
         # Grouped by asset_id, NOT asset_name: names collide across assets and
         # change over time. resolve_asset_rows() supplies the current names.
         {"key": "resources", "event": "resource_viewed", "prop": "asset_id", "limit": 10},
         {"key": "topics", "event": "topic_viewed", "prop": "topic_title", "limit": 10},
+        # Resource-embedded + welcome videos for the "Other Videos" card. Grouped
+        # by object_id (NOT object_name) so resource videos carry their asset id
+        # and link like the Top Resources card — resolve_video_rows names them.
+        {"key": "other_videos", "event": "video_view", "prop": "object_id", "limit": 10,
+         "extra_filter": _OTHER_VIDEO_ONLY},
     ], **opts)
     pct_by_name = {r.label: r.count for r in breakdowns["video_pct"]}
     videos = [
@@ -198,11 +213,15 @@ def get_content(
     # Aggregate totals for the "Content Engagement" summary tiles — the TRUE
     # totals across all rows (the breakdowns above are truncated to top-N).
     # One extra lightweight round trip: a single count-by-event aggregate.
+    # video_views counts ONLY Topic Page videos (object_type = 'topic') — the
+    # "Topic Video Views" tile is topic-scoped, not all Resource Center videos.
+    # (Resource + welcome video plays are surfaced as the named "Other Videos"
+    # list, not a tile, so they're not aggregated here.)
     totals_hogql = (
         "SELECT "
         "countIf(event = 'topic_viewed') AS topic_engagement, "
         "countIf(event = 'resource_viewed') AS resources_used, "
-        "countIf(event = 'video_view') AS video_views "
+        "countIf(event = 'video_view' AND properties.object_type = 'topic') AS video_views "
         "FROM events "
         f"WHERE {ph._hogql_date_clause(date_from, date_to)}{ph._hogql_school_clause(sid)}{ph._hogql_cycle_clause(cycle_name)} "
         "AND event IN ('topic_viewed', 'resource_viewed', 'video_view')"
@@ -224,6 +243,7 @@ def get_content(
         videos=videos,
         resources=resolve_asset_rows(db, breakdowns["resources"]),
         topics=breakdowns["topics"],
+        other_videos=resolve_video_rows(db, breakdowns["other_videos"]),
         totals=totals,
         school_slug=get_school_slug(db, sid),
         cached_at=ph.oldest_cache_hit(db),

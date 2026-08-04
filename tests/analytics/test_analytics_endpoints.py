@@ -217,6 +217,10 @@ def test_content_endpoint_shape(mock_posthog_configured):
     assert resp.status_code == 200
     body = resp.json()
     assert "videos" in body and "resources" in body and "topics" in body
+    # Other Videos card — resolved to named rows (id/name/count), NOT raw labels.
+    # SAMPLE_QUERIES labels aren't UUIDs, so they resolve to unlinked "removed" rows.
+    assert body["other_videos"][0]["count"] == 30
+    assert body["other_videos"][0]["id"] is None
     # videos merge the count breakdown (view_count) with the avg-% breakdown
     assert body["videos"][0]["name"] == "FAFSA"
     assert body["videos"][0]["view_count"] == 30
@@ -225,8 +229,38 @@ def test_content_endpoint_shape(mock_posthog_configured):
     assert body["resources"][0] == {"id": "0f8f-asset", "name": "FAFSA Checklist", "count": 30}
     assert body["school_slug"] == "lincoln-high"
     assert body["topics"][0]["label"] == "FAFSA"
-    # Content Engagement summary tiles: topic_engagement, resources_used, video_views.
+    # Content Engagement totals — video_views is topic-scoped (object_type='topic').
     assert body["totals"] == {"topic_engagement": 12, "resources_used": 34, "video_views": 56}
+
+
+def test_content_video_views_scoped_to_topic(mock_posthog_configured):
+    """The "Topic Video Views" tile + video breakdowns count only Topic Page
+    videos (object_type='topic'), not all Resource Center videos."""
+    seen = {}
+    captured_hogql = []
+
+    def spy(api_key, project_id, specs, **kwargs):
+        seen.update({sp["key"]: sp for sp in specs})
+        return {sp["key"]: [] for sp in specs}
+
+    def hogql(api_key, project_id, query, **kwargs):
+        captured_hogql.append(query)
+        return [[0, 0, 0]]
+
+    with patch("src.analytics.posthog_batched.get_batched_breakdowns", side_effect=spy), \
+         patch("src.analytics.posthog.get_hogql_query", side_effect=hogql):
+        resp = admin_client().get("/api/v1/analytics/content")
+
+    assert resp.status_code == 200
+    # Video breakdowns filter to topic videos.
+    assert seen["video_views"]["extra_filter"] == " AND properties.object_type = 'topic'"
+    assert seen["video_pct"]["extra_filter"] == " AND properties.object_type = 'topic'"
+    # Other Videos card is the complement: resource-embedded + welcome videos.
+    assert seen["other_videos"]["extra_filter"] == " AND properties.object_type IN ('resource', 'welcome')"
+    # Totals video_views count is topic-scoped in HogQL.
+    assert any(
+        "video_view' AND properties.object_type = 'topic'" in q for q in captured_hogql
+    )
 
 
 def test_content_groups_resources_by_asset_id(mock_posthog_configured):
