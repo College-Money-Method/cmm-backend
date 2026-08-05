@@ -58,7 +58,6 @@ from src.analytics.postgres_queries import (
 from src.analytics.resource_breakdown_queries import (
     get_school_slug,
     resolve_asset_rows,
-    resolve_video_rows,
 )
 from src.analytics.topic_engagement_queries import get_school_topic_tree, get_topic_metrics
 from src.auth.deps import CounselorDep
@@ -72,9 +71,6 @@ logger = logging.getLogger(__name__)
 # video_view / video_session_end carry object_type ∈ workshop|topic|resource|welcome
 _WORKSHOP_VIDEO_ONLY = " AND properties.object_type = 'workshop'"
 _TOPIC_VIDEO_ONLY = " AND properties.object_type = 'topic'"
-# Resource-embedded + welcome videos — the "Other Videos" card, i.e. everything
-# not covered by the topic ("Topic Video Views") or workshop breakdowns.
-_OTHER_VIDEO_ONLY = " AND properties.object_type IN ('resource', 'welcome')"
 
 
 def _resolve_school(current_user: CounselorDep, school_id_param: str | None) -> str | None:
@@ -198,11 +194,6 @@ def get_content(
         # change over time. resolve_asset_rows() supplies the current names.
         {"key": "resources", "event": "resource_viewed", "prop": "asset_id", "limit": 10},
         {"key": "topics", "event": "topic_viewed", "prop": "topic_title", "limit": 10},
-        # Resource-embedded + welcome videos for the "Other Videos" card. Grouped
-        # by object_id (NOT object_name) so resource videos carry their asset id
-        # and link like the Top Resources card — resolve_video_rows names them.
-        {"key": "other_videos", "event": "video_view", "prop": "object_id", "limit": 10,
-         "extra_filter": _OTHER_VIDEO_ONLY},
     ], **opts)
     pct_by_name = {r.label: r.count for r in breakdowns["video_pct"]}
     videos = [
@@ -215,8 +206,6 @@ def get_content(
     # One extra lightweight round trip: a single count-by-event aggregate.
     # video_views counts ONLY Topic Page videos (object_type = 'topic') — the
     # "Topic Video Views" tile is topic-scoped, not all Resource Center videos.
-    # (Resource + welcome video plays are surfaced as the named "Other Videos"
-    # list, not a tile, so they're not aggregated here.)
     totals_hogql = (
         "SELECT "
         "countIf(event = 'topic_viewed') AS topic_engagement, "
@@ -243,7 +232,6 @@ def get_content(
         videos=videos,
         resources=resolve_asset_rows(db, breakdowns["resources"]),
         topics=breakdowns["topics"],
-        other_videos=resolve_video_rows(db, breakdowns["other_videos"]),
         totals=totals,
         school_slug=get_school_slug(db, sid),
         cached_at=ph.oldest_cache_hit(db),

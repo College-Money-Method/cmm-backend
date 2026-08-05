@@ -96,11 +96,6 @@ class ContentData(CachedAtMixin):
     videos: list[VideoBreakdownRow] = []   # video_view count + video_session_end avg %, by object_name
     resources: list[RankedContentRow] = []  # resource_viewed by asset_id, named from Postgres
     topics: list[TopBreakdown] = []        # topic_viewed by topic_title
-    # Resource-embedded + welcome videos (object_type IN ('resource','welcome'))
-    # for the "Other Videos" card — grouped by object_id and resolved to named,
-    # linkable rows (resource videos link to their resource page; the welcome
-    # video renders unlinked). NOT surfaced by the topic/workshop breakdowns.
-    other_videos: list[RankedContentRow] = []
     # Aggregate totals for the "Content Engagement" summary tiles above the cards.
     totals: ContentEngagementTotals = Field(default_factory=ContentEngagementTotals)
     # Link base for the resource rows: /school/{school_slug}/resources/{id}.
