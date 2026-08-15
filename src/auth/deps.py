@@ -51,6 +51,7 @@ async def get_current_user(
         role=role_record.role,
         school_id=role_record.school_id,
         school_role=role_record.school_role,
+        email=getattr(supabase_user, "email", None),
     )
 
 

@@ -1,0 +1,165 @@
+[
+  {
+    "id": "bold_italic_marks",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            { "type": "text", "text": "Hello " },
+            { "type": "text", "text": "world", "marks": [{ "type": "bold" }] },
+            { "type": "text", "text": "!" }
+          ]
+        }
+      ]
+    },
+    "replacements": {},
+    "resolveOptions": {},
+    "expectedHref": null,
+    "expectedPlainText": "Hello world!"
+  },
+  {
+    "id": "merge_tag_substitution",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            { "type": "mergeTag", "attrs": { "tag": "first_name" } },
+            { "type": "text", "text": " welcome!" }
+          ]
+        }
+      ]
+    },
+    "replacements": { "first_name": "Jordan" },
+    "resolveOptions": {},
+    "expectedHref": null,
+    "expectedPlainText": "Jordan welcome!"
+  },
+  {
+    "id": "merge_tag_missing_passthrough",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [{ "type": "mergeTag", "attrs": { "tag": "missing_tag" } }]
+        }
+      ]
+    },
+    "replacements": {},
+    "resolveOptions": {},
+    "expectedHref": null,
+    "expectedPlainText": "{{missing_tag}}"
+  },
+  {
+    "id": "internal_topic_link_with_school_slug",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "Read more",
+              "marks": [{ "type": "link", "attrs": { "href": "/topic/fafsa-basics" } }]
+            }
+          ]
+        }
+      ]
+    },
+    "replacements": {},
+    "resolveOptions": { "origin": "https://next.collegemoneymethod.com", "schoolSlug": "lincoln-high" },
+    "expectedHref": "https://next.collegemoneymethod.com/school/lincoln-high/topic/fafsa-basics",
+    "expectedPlainText": "Read more (https://next.collegemoneymethod.com/school/lincoln-high/topic/fafsa-basics)"
+  },
+  {
+    "id": "internal_resources_link_no_school_slug",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "Resources",
+              "marks": [{ "type": "link", "attrs": { "href": "/resources/42" } }]
+            }
+          ]
+        }
+      ]
+    },
+    "replacements": {},
+    "resolveOptions": { "origin": "https://next.collegemoneymethod.com" },
+    "expectedHref": "https://next.collegemoneymethod.com/resources/42",
+    "expectedPlainText": "Resources (https://next.collegemoneymethod.com/resources/42)"
+  },
+  {
+    "id": "template_variable_link_href",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "View workshop details",
+              "marks": [{ "type": "link", "attrs": { "href": "{{workshop_detail_url}}" } }]
+            }
+          ]
+        }
+      ]
+    },
+    "replacements": {
+      "workshop_detail_url": "https://next.collegemoneymethod.com/school/lincoln-high/workshop/2026-09-01"
+    },
+    "resolveOptions": {},
+    "expectedHref": "https://next.collegemoneymethod.com/school/lincoln-high/workshop/2026-09-01",
+    "expectedPlainText": "View workshop details (https://next.collegemoneymethod.com/school/lincoln-high/workshop/2026-09-01)"
+  },
+  {
+    "id": "external_link_passthrough",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "Zoom",
+              "marks": [{ "type": "link", "attrs": { "href": "https://zoom.us/j/123456" } }]
+            }
+          ]
+        }
+      ]
+    },
+    "replacements": {},
+    "resolveOptions": {},
+    "expectedHref": "https://zoom.us/j/123456",
+    "expectedPlainText": "Zoom (https://zoom.us/j/123456)"
+  },
+  {
+    "id": "multiline_resource_list_merge_tag",
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [{ "type": "mergeTag", "attrs": { "tag": "resources_list" } }]
+        }
+      ]
+    },
+    "replacements": {
+      "resources_list": "https://example.com/a\n- MyinTuition Cost Estimator (https://example.com/b)\nJust plain text line"
+    },
+    "resolveOptions": {},
+    "expectedHref": null,
+    "expectedPlainText": "https://example.com/a\n- MyinTuition Cost Estimator (https://example.com/b)\nJust plain text line"
+  }
+]
