@@ -116,6 +116,10 @@ def _contact_out_from_role(
         school_name=school_name,
         title=role_record.title or None,
         school_role=role_record.school_role or None,
+        # No Contact row available here (see docstring) — a brand-new contact
+        # can't have opted in yet, so default False. Subsequent GETs go through
+        # `_contact_out`, which reads the real value.
+        auto_emails=False,
     )
 
 
@@ -144,6 +148,7 @@ def _contact_out(
         title=role_record.title if role_record else None,
         school_role=contact.role,
         auth_email=auth_email,
+        auto_emails=contact.auto_emails,
     )
 
 
@@ -579,6 +584,14 @@ def update_contact(
             raise HTTPException(status_code=403, detail="Hub admin access required")
         if role_record.school_id != user.school_id:
             raise HTTPException(status_code=403, detail="Access restricted to your own school")
+        # Defense in depth: a non-admin (hub_user/viewer) can never change any
+        # role — including their own — regardless of what the frontend shows.
+        # The UI hides the role Select for self-edit, but that alone is not a
+        # security boundary.
+        if user.role != "hub_admin" and body.role is not None:
+            raise HTTPException(
+                status_code=403, detail="Only hub admins may change hub permissions"
+            )
         update_data = {}
         if user.role == "hub_admin":
             # Directors: name, title, and access role (limited to counselor/director).
@@ -599,6 +612,17 @@ def update_contact(
             # Counselors/viewers may only update the title of teammates.
             if body.title is not None:
                 update_data["title"] = body.title
+        # Self-edit: any hub user may toggle their OWN auto_emails opt-in,
+        # regardless of role. Additive to the role-based branches above and
+        # scoped strictly to this one field — checked against `user.user_id`
+        # (self), not the broader same-school check used elsewhere in this
+        # branch, so it can never be used to edit another teammate's fields.
+        if (
+            contact.user_id is not None
+            and contact.user_id == user.user_id
+            and body.auto_emails is not None
+        ):
+            update_data["auto_emails"] = body.auto_emails
 
     if "school_id" in update_data and update_data["school_id"] is not None:
         school = db.query(School).filter(School.id == update_data["school_id"]).first()
@@ -612,6 +636,8 @@ def update_contact(
         contact.last_name = update_data["last_name"]
     if "school_id" in update_data:
         contact.school_id = update_data["school_id"]
+    if "auto_emails" in update_data:
+        contact.auto_emails = update_data["auto_emails"]
 
     # Login-backed fields (role/title) live on the UserRole; mirror name to Supabase
     # + the profiles table. Hub permission (role) is decoupled from the school_role label.

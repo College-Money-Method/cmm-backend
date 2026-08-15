@@ -20,6 +20,9 @@ class CurrentUser(BaseModel):
     role: Literal["super_admin", "hub_admin", "hub_user", "viewer"]
     school_id: uuid.UUID | None = None
     school_role: str | None = None  # cosmetic Airtable title, e.g. "Director"
+    # The email on the Supabase auth user (what the person logs in with). Used
+    # as the test-send fallback target when the admin has no Contact row.
+    email: str | None = None
 
 
 class ContactCreate(BaseModel):
@@ -43,6 +46,9 @@ class ContactUpdate(BaseModel):
     school_id: uuid.UUID | None = None
     role: Literal["hub_admin", "hub_user", "viewer"] | None = None
     title: str | None = None
+    # Self-service opt-in to automated emails (Phase 2) — any hub user may
+    # toggle this on their OWN contact row, independent of their access role.
+    auto_emails: bool | None = None
 
 
 class ContactOut(BaseModel):
@@ -67,6 +73,10 @@ class ContactOut(BaseModel):
     # contacts.email but never auth.users.email, so login keeps using the old
     # address. The detail UI surfaces the mismatch + a "match auth email" action.
     auth_email: str | None = None
+    # Whether this contact has opted in to receiving automated emails (Phase 2).
+    # Defaults False on rows built from a bare role record (no Contact object,
+    # e.g. right after create-contact) — see `_contact_out_from_role`.
+    auto_emails: bool = False
 
 
 class ContactListResponse(BaseModel):

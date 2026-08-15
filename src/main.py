@@ -29,6 +29,11 @@ import src.communications.models  # noqa: F401
 import src.communications.schedule_model  # noqa: F401
 import src.communications.template_default_date_model  # noqa: F401
 import src.content.translation_models  # noqa: F401
+import src.emails.models  # noqa: F401
+import src.emails.broadcast_models  # noqa: F401
+import src.emails.automation_models  # noqa: F401
+import src.emails.email_template_models  # noqa: F401
+import src.emails.automation_ledger_models  # noqa: F401
 
 from src.auth.router import router as auth_router
 from src.config import settings
@@ -51,13 +56,22 @@ from src.surveys.config_router import router as survey_configs_router
 from src.zoom.webhook_router import router as zoom_webhook_router
 from src.content.translation_router import router as translation_router
 from src.content.video_cc_router import router as video_cc_router
+from src.emails.webhook_router import router as emails_webhook_router
+from src.emails.unsubscribe_router import router as emails_unsubscribe_router
+from src.emails.broadcast_router import router as emails_broadcast_router
+from src.emails.automation_router import router as emails_automation_router
+from src.emails.template_router import router as emails_template_router
+from src.emails.scheduler import init_scheduler, shutdown_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: ensure Supabase client is created. Shutdown: nothing."""
+    """Startup: ensure Supabase client is created, start the in-process
+    email-automation scheduler. Shutdown: stop the scheduler."""
     get_supabase()
+    init_scheduler(app)
     yield
+    shutdown_scheduler()
 
 
 app = FastAPI(
@@ -95,6 +109,11 @@ app.include_router(survey_configs_router)
 app.include_router(zoom_webhook_router)
 app.include_router(translation_router)
 app.include_router(video_cc_router)
+app.include_router(emails_webhook_router)
+app.include_router(emails_unsubscribe_router)
+app.include_router(emails_broadcast_router)
+app.include_router(emails_automation_router)
+app.include_router(emails_template_router)
 
 
 @app.get("/health")
