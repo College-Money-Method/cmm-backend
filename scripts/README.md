@@ -119,6 +119,7 @@ scripts/
 | Script | Description | Run |
 |--------|-------------|-----|
 | `export_topics_content_revisions.py` | Export topic content revisions to `output/topics_revisions/`. | `uv run python -m scripts.export.export_topics_content_revisions [--database-url <url>]` |
+| `generate_topic_illustration_prompts.py` | Build one standalone CMM illustration prompt per topic (title → SUBJECT, description + key takeaways → CONCEPT) from `input/cmm-topic-illustration-prompt-template.md` → `output/topic_illustration_prompts/`. Reads **PROD** (`.env.prod`), read-only. **Calls OpenAI once per topic** for per-topic art direction (scene, props, labels) — `--provider none` skips it and writes placeholders. | `uv run python -m scripts.export.generate_topic_illustration_prompts [--dry-run] [--slug <slug>] [--status all] [--provider none] [--scene "…"] [--skip-existing]` |
 
 ## db_ops/ — Database / release / infra ops
 
