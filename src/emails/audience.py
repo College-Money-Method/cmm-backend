@@ -15,6 +15,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.auth.models import UserRole
 from src.schools.models import Contact, School
 
 
@@ -57,7 +58,12 @@ def resolve_audience(
         stmt = stmt.where(School.id == school_id)
 
     if role_filter == "hub_admin":
-        stmt = stmt.where(Contact.role == "hub_admin")
+        # "hub_admin" is an app role in user_roles (scoped by school), NOT
+        # Contact.role (which holds the Airtable job title Director/Counselor).
+        stmt = stmt.join(
+            UserRole,
+            (UserRole.user_id == Contact.user_id) & (UserRole.school_id == Contact.school_id),
+        ).where(UserRole.role == "hub_admin")
 
     if opt_in_filter != "all":
         stmt = stmt.where(Contact.auto_emails.is_(True))

@@ -51,7 +51,7 @@ def make_client(monkeypatch):
         tables = [
             t
             for n, t in Base.metadata.tables.items()
-            if n in ("contacts", "schools", "cohorts", "grade_sets", "broadcast", "email_send_log", "email_suppression")
+            if n in ("contacts", "schools", "cohorts", "grade_sets", "broadcast", "email_send_log", "email_suppression", "user_roles")
         ]
         Base.metadata.create_all(engine, tables=tables)
         SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)

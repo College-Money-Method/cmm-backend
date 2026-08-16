@@ -61,6 +61,7 @@ from src.emails.unsubscribe_router import router as emails_unsubscribe_router
 from src.emails.broadcast_router import router as emails_broadcast_router
 from src.emails.automation_router import router as emails_automation_router
 from src.emails.template_router import router as emails_template_router
+from src.emails.preview_router import router as emails_preview_router
 from src.emails.scheduler import init_scheduler, shutdown_scheduler
 
 
@@ -114,6 +115,7 @@ app.include_router(emails_unsubscribe_router)
 app.include_router(emails_broadcast_router)
 app.include_router(emails_automation_router)
 app.include_router(emails_template_router)
+app.include_router(emails_preview_router)
 
 
 @app.get("/health")

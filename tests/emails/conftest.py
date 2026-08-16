@@ -52,6 +52,7 @@ SCHEDULER_TEST_TABLES = (
     "content_assets",
     "workshop_resources",
     "asset_types",
+    "user_roles",
 )
 
 

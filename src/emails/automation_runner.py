@@ -58,7 +58,7 @@ from src.config import settings
 from src.db.base import get_session_factory
 from src.emails.automation_ledger_models import AutomationSendLedger
 from src.emails.automation_models import EmailAutomation
-from src.emails.broadcast_send import resolve_counselor_name
+from src.emails.counselor_resolver import contact_is_school_counselor, resolve_counselor_name
 from src.emails.email_template_models import EmailTemplate
 from src.emails.link_resolver import resolve_plain_text
 from src.emails.renderer import render_email
@@ -208,7 +208,9 @@ def _process_due_mapping(db: Session, automation: EmailAutomation, mapping: Port
         ).all()
     )
 
-    base_counselor_name = resolve_counselor_name(db, school.id)
+    base_counselor_first, base_counselor_last, base_counselor_name = resolve_counselor_name(
+        db, school.id
+    )
     family_label = school.nickname or (f"{school.name} families" if school.name else "families")
     resources = [{"id": str(a.id), "name": a.name, "link": a.link} for a in workshop.content_assets]
     subject = automation.subject_override or template.subject
@@ -217,13 +219,20 @@ def _process_due_mapping(db: Session, automation: EmailAutomation, mapping: Port
 
     sent = 0
     for contact in recipients:
-        counselor_name = (
-            contact.full_name if contact.role == "hub_admin" and contact.full_name else base_counselor_name
-        )
+        if contact.full_name and contact_is_school_counselor(contact, school.id):
+            counselor_first = contact.first_name or ""
+            counselor_last = contact.last_name or ""
+            counselor_name = contact.full_name
+        else:
+            counselor_first = base_counselor_first
+            counselor_last = base_counselor_last
+            counselor_name = base_counselor_name
         replacements = build_workshop_merge_replacements(
             school_name=school.name,
             family_label=family_label,
             counselor_name=counselor_name,
+            counselor_first_name=counselor_first,
+            counselor_last_name=counselor_last,
             school_slug=school.slug,
             resource_center_url=school.school_resource_center_url,
             resource_center_password=school.cmm_website_password,

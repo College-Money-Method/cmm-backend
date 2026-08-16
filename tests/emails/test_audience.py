@@ -15,6 +15,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from src.auth.models import UserRole
 from src.db.base import Base
 from src.emails.audience import resolve_audience
 from src.main import app  # noqa: F401 — importing registers every model for FK/mapper metadata
@@ -26,12 +27,20 @@ CUSTOMER_SCHOOL_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 PROSPECT_SCHOOL_ID = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 ACTIVATED_PROSPECT_SCHOOL_ID = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
 
+# Auth user ids for the hub_admin/hub_user contacts (letter-only, same reason).
+USER_CUSTOMER_ADMIN = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+USER_CUSTOMER_USER = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+USER_ACTIVATED_ADMIN = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+USER_PROSPECT_ADMIN = uuid.UUID("abababab-abab-abab-abab-abababababab")
+
 
 @pytest.fixture
 def db_session():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     tables = [
-        t for n, t in Base.metadata.tables.items() if n in ("contacts", "schools", "cohorts", "grade_sets")
+        t
+        for n, t in Base.metadata.tables.items()
+        if n in ("contacts", "schools", "cohorts", "grade_sets", "user_roles")
     ]
     Base.metadata.create_all(engine, tables=tables)
     SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -55,29 +64,49 @@ def _seed_standard_fixture(db) -> None:
     )
     db.add(School(id=PROSPECT_SCHOOL_ID, name="Prospect High", is_current_customer=False))
 
+    # Contact.role holds the Airtable job title (display only). The hub_admin
+    # *app role* that the role filter keys on lives in user_roles, linked by
+    # user_id — seeded alongside each contact below.
     db.add(
         Contact(
-            school_id=CUSTOMER_SCHOOL_ID, email="admin@customer.example", role="hub_admin", auto_emails=True
-        )
-    )
-    db.add(
-        Contact(
-            school_id=CUSTOMER_SCHOOL_ID, email="user@customer.example", role="hub_user", auto_emails=False
-        )
-    )
-    db.add(
-        Contact(
-            school_id=ACTIVATED_PROSPECT_SCHOOL_ID,
-            email="admin@activated.example",
-            role="hub_admin",
+            school_id=CUSTOMER_SCHOOL_ID,
+            user_id=USER_CUSTOMER_ADMIN,
+            email="admin@customer.example",
+            role="Director",
             auto_emails=True,
         )
     )
     db.add(
         Contact(
-            school_id=PROSPECT_SCHOOL_ID, email="admin@prospect.example", role="hub_admin", auto_emails=True
+            school_id=CUSTOMER_SCHOOL_ID,
+            user_id=USER_CUSTOMER_USER,
+            email="user@customer.example",
+            role="Counselor",
+            auto_emails=False,
         )
     )
+    db.add(
+        Contact(
+            school_id=ACTIVATED_PROSPECT_SCHOOL_ID,
+            user_id=USER_ACTIVATED_ADMIN,
+            email="admin@activated.example",
+            role="Director",
+            auto_emails=True,
+        )
+    )
+    db.add(
+        Contact(
+            school_id=PROSPECT_SCHOOL_ID,
+            user_id=USER_PROSPECT_ADMIN,
+            email="admin@prospect.example",
+            role="Director",
+            auto_emails=True,
+        )
+    )
+    db.add(UserRole(user_id=USER_CUSTOMER_ADMIN, school_id=CUSTOMER_SCHOOL_ID, role="hub_admin"))
+    db.add(UserRole(user_id=USER_CUSTOMER_USER, school_id=CUSTOMER_SCHOOL_ID, role="hub_user"))
+    db.add(UserRole(user_id=USER_ACTIVATED_ADMIN, school_id=ACTIVATED_PROSPECT_SCHOOL_ID, role="hub_admin"))
+    db.add(UserRole(user_id=USER_PROSPECT_ADMIN, school_id=PROSPECT_SCHOOL_ID, role="hub_admin"))
     db.commit()
 
 

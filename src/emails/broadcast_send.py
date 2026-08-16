@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from src.db.deps import get_db
 from src.emails.broadcast_models import Broadcast
+from src.emails.counselor_resolver import contact_is_school_counselor, resolve_counselor_name
 from src.emails.renderer import render_email
 from src.emails.ses_client import send_email
 from src.emails.unsubscribe import build_unsubscribe_url
@@ -27,21 +28,25 @@ logger = logging.getLogger(__name__)
 _EMPTY_MERGE_TAGS = {
     "school_name": "",
     "counselor_name": "",
+    "counselor_first_name": "",
+    "counselor_last_name": "",
     "family_label": "families",
     "resource_center_url": "",
     "resource_center_password": "",
 }
 
 
-def build_merge_tag_replacements(contact: Contact, school: School | None) -> dict[str, str]:
-    """Build the ``{{tag}}`` -> value map for one contact, mirroring the
-    frontend's ``COMM_MERGE_TAGS`` set (school_name, counselor_name,
-    family_label, resource_center_url, resource_center_password).
+def build_merge_tag_replacements(school: School | None) -> dict[str, str]:
+    """Build the school-level ``{{tag}}`` -> value map, mirroring the frontend's
+    ``COMM_MERGE_TAGS`` set (school_name, counselor_name, counselor_first_name,
+    counselor_last_name, family_label, resource_center_url,
+    resource_center_password).
 
-    ``counselor_name`` is the contact's own name when they ARE the hub_admin
-    for their school; otherwise it looks up the school's hub_admin contact.
-    Falls back to "" when no hub_admin contact exists (e.g. a school with no
-    counselor on file yet) so rendering never fails for a missing tag.
+    Counselor tags are seeded empty here and resolved by ``_merge_tags_for``
+    (which has DB access) — they depend on the school's counselor (a contact with
+    a hub login), not on any ``Contact.role``. ``counselor_name`` keeps its
+    original key (the full name) for backward compatibility with existing
+    templates.
     """
     school_name = school.name if school else ""
     resource_center_url = (school.school_resource_center_url if school else None) or ""
@@ -49,37 +54,32 @@ def build_merge_tag_replacements(contact: Contact, school: School | None) -> dic
     nickname = school.nickname if school else None
     family_label = nickname or (f"{school_name} families" if school_name else "families")
 
-    counselor_name = ""
-    if contact.role == "hub_admin" and contact.full_name:
-        counselor_name = contact.full_name
-
     return {
         "school_name": school_name,
-        "counselor_name": counselor_name,
+        "counselor_name": "",
+        "counselor_first_name": "",
+        "counselor_last_name": "",
         "family_label": family_label,
         "resource_center_url": resource_center_url,
         "resource_center_password": resource_center_password,
     }
 
 
-def resolve_counselor_name(db: Session, school_id: uuid.UUID | None) -> str:
-    """Look up the school's hub_admin contact's name for a contact that is
-    not itself the hub_admin (e.g. a family contact needs their school's
-    counselor name)."""
-    if school_id is None:
-        return ""
-    stmt = select(Contact.full_name).where(
-        Contact.school_id == school_id,
-        Contact.role == "hub_admin",
-        Contact.deleted_at.is_(None),
-    )
-    return db.scalar(stmt) or ""
-
-
-def _merge_tags_for(db: Session, contact: Contact, school: School | None) -> dict[str, str]:
-    replacements = build_merge_tag_replacements(contact, school)
-    if not replacements["counselor_name"] and school is not None:
-        replacements["counselor_name"] = resolve_counselor_name(db, school.id)
+def _merge_tags_for(db: Session, contact: Contact | None, school: School | None) -> dict[str, str]:
+    """Fill the counselor tags: when the ``contact`` is itself a counselor
+    (can log into the hub), use their own name; otherwise look up the school's
+    representative counselor. Empty strings when no counselor is on file."""
+    replacements = build_merge_tag_replacements(school)
+    school_id = school.id if school else None
+    if contact is not None and contact_is_school_counselor(contact, school_id):
+        replacements["counselor_first_name"] = contact.first_name or ""
+        replacements["counselor_last_name"] = contact.last_name or ""
+        replacements["counselor_name"] = contact.full_name or ""
+    else:
+        first, last, full = resolve_counselor_name(db, school_id)
+        replacements["counselor_first_name"] = first
+        replacements["counselor_last_name"] = last
+        replacements["counselor_name"] = full
     return replacements
 
 
