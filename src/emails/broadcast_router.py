@@ -16,16 +16,18 @@ from sqlalchemy.orm import Session
 
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
-from src.emails.audience import resolve_audience
+from src.emails.audience import resolve_audience, resolve_contacts_by_ids
 from src.emails.broadcast_models import Broadcast
 from src.emails.analytics import engagement_for_broadcast
 from src.emails.broadcast_schemas import (
+    AudienceContactRow,
     AudiencePreviewOut,
     BroadcastCreate,
     BroadcastDetailOut,
     BroadcastOut,
     EmailEngagementOut,
     RecipientStatusRow,
+    SendBroadcastRequest,
     SendTestResultOut,
 )
 from src.emails.broadcast_send import send_broadcast_batch, send_test
@@ -78,6 +80,30 @@ def preview_audience(
         non_opted_in_count=non_opted_in,
         warning=opt_in_filter == "all" and non_opted_in > 0,
     )
+
+
+@router.get("/audience-preview/contacts", response_model=list[AudienceContactRow])
+def preview_audience_contacts(
+    _admin: AdminDep,
+    db: DbDep,
+    school_scope: str = Query(...),
+    role_filter: str = Query("all"),
+    opt_in_filter: str = Query("opted_in"),
+) -> list[AudienceContactRow]:
+    """Full resolved recipient list for the editable recipient-list preview, so
+    the admin can review exactly who will receive the broadcast (and deselect or
+    search-add contacts) before sending."""
+    matched = resolve_audience(db, school_scope, role_filter, opt_in_filter)
+    return [
+        AudienceContactRow(
+            id=c.id,
+            full_name=c.full_name or "",
+            email=c.email or "",
+            school_name=c.school.name if c.school else None,
+            opted_in=c.auto_emails,
+        )
+        for c in matched
+    ]
 
 
 @router.post("", response_model=BroadcastOut, status_code=status.HTTP_201_CREATED)
@@ -151,12 +177,21 @@ def get_broadcast_analytics(broadcast_id: uuid.UUID, _admin: AdminDep, db: DbDep
 
 @router.post("/{broadcast_id}/send", status_code=status.HTTP_202_ACCEPTED)
 def send_broadcast(
-    broadcast_id: uuid.UUID, _admin: AdminDep, db: DbDep, background_tasks: BackgroundTasks
+    broadcast_id: uuid.UUID,
+    _admin: AdminDep,
+    db: DbDep,
+    background_tasks: BackgroundTasks,
+    payload: SendBroadcastRequest | None = None,
 ) -> dict[str, str]:
     """Resolve the audience now (snapshot), flip status to "sending", and hand
     the recipient list off to a background task so the request returns
     immediately — no queue infra per YAGNI, matches the existing
-    ``submissions_router`` background-task convention."""
+    ``submissions_router`` background-task convention.
+
+    When ``payload.recipient_contact_ids`` is provided, that admin-edited set is
+    sent to (still customer-scoped, unsubscribe-suppressed) instead of
+    re-resolving from the stored filters — so the recipient-list preview's
+    add/remove edits are honored."""
     broadcast = _get_broadcast_or_404(db, broadcast_id)
 
     # Atomically claim the send: flip draft->sending in one guarded UPDATE and
@@ -177,7 +212,12 @@ def send_broadcast(
         )
     db.commit()
 
-    contacts = resolve_audience(db, broadcast.school_scope, broadcast.role_filter, broadcast.opt_in_filter)
+    if payload and payload.recipient_contact_ids is not None:
+        contacts = resolve_contacts_by_ids(db, payload.recipient_contact_ids)
+    else:
+        contacts = resolve_audience(
+            db, broadcast.school_scope, broadcast.role_filter, broadcast.opt_in_filter
+        )
     contact_ids = [c.id for c in contacts]
 
     background_tasks.add_task(send_broadcast_batch, broadcast.id, contact_ids)

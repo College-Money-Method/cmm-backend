@@ -55,6 +55,25 @@ class AudiencePreviewOut(BaseModel):
     warning: bool
 
 
+class AudienceContactRow(BaseModel):
+    """One resolved recipient shown in the editable recipient-list preview."""
+
+    id: uuid.UUID
+    full_name: str
+    email: str
+    school_name: str | None = None
+    opted_in: bool
+
+
+class SendBroadcastRequest(BaseModel):
+    """Optional body for the send endpoint. When ``recipient_contact_ids`` is
+    provided, exactly those contacts are sent to (still customer-scoped and
+    unsubscribe-suppressed); when omitted, the audience is re-resolved from the
+    broadcast's stored filters (backward compatible)."""
+
+    recipient_contact_ids: list[uuid.UUID] | None = None
+
+
 class SendTestResultOut(BaseModel):
     sent_to: str
     used_sample_contact: bool

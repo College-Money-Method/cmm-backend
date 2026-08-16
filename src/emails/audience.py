@@ -69,3 +69,28 @@ def resolve_audience(
         stmt = stmt.where(Contact.auto_emails.is_(True))
 
     return list(db.scalars(stmt).all())
+
+
+def resolve_contacts_by_ids(db: Session, contact_ids: list[uuid.UUID]) -> list[Contact]:
+    """Resolve an explicit, admin-edited recipient set to Contact rows.
+
+    Applies the same non-negotiable server-side guards as ``resolve_audience``
+    (customer school only, not deactivated, has an email) so a forged or stale
+    id can never reach a non-customer school's contacts — but does NOT apply the
+    opt-in filter: the admin has explicitly chosen these recipients. Unsubscribe
+    suppression is still enforced downstream at send time.
+    """
+    if not contact_ids:
+        return []
+    is_customer_school = School.is_current_customer.is_(True) | School.is_cmm_website_activated.is_(True)
+    stmt = (
+        select(Contact)
+        .join(School, Contact.school_id == School.id)
+        .where(
+            Contact.id.in_(contact_ids),
+            is_customer_school,
+            Contact.deleted_at.is_(None),
+            Contact.email.is_not(None),
+        )
+    )
+    return list(db.scalars(stmt).all())
