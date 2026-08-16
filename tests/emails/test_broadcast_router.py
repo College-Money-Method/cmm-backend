@@ -3,9 +3,11 @@
 Follows the in-memory SQLite + TestClient + dependency_overrides pattern from
 tests/emails/test_unsubscribe.py / tests/auth/test_contact_auto_emails_self_edit.py.
 The real send path (background task) runs synchronously in TestClient (FastAPI
-executes background tasks before returning the response in tests), and
-`email_send_enabled` defaults to False, so sends land as dry_run rows with no
-boto3 calls — exercising the real dry-run pipeline end to end.
+executes background tasks before returning the response in tests). Each client
+seeds an ``AppConfig`` row with ``email_sandbox_mode=True``, so recipients
+outside the team domain (all seeded contacts use ``@example.com``) land as
+``sandboxed`` rows with no boto3 calls — exercising the real send pipeline end
+to end without touching SES.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from src.app_config.models import AppConfig
 from src.auth.deps import get_current_user
 from src.auth.schemas import CurrentUser
 from src.db.base import Base
@@ -58,12 +61,15 @@ def make_client(monkeypatch):
         tables = [
             t
             for n, t in Base.metadata.tables.items()
-            if n in ("contacts", "schools", "cohorts", "grade_sets", "broadcast", "email_send_log", "email_suppression", "user_roles")
+            if n in ("contacts", "schools", "cohorts", "grade_sets", "broadcast", "email_send_log", "email_suppression", "user_roles", "app_config")
         ]
         Base.metadata.create_all(engine, tables=tables)
         SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
         seed = SessionLocal()
+        # Sandbox on: every seeded contact is @example.com (outside the team
+        # domain), so sends are withheld and logged as "sandboxed" — no SES.
+        seed.add(AppConfig(email_sandbox_mode=True))
         seed.add(School(id=SCHOOL_ID, name="Test High", is_current_customer=True))
         seed.add(
             Contact(
@@ -232,10 +238,10 @@ def test_non_super_admin_cannot_preview_audience_contacts(make_client, role: str
     assert resp.status_code == 403
 
 
-# ── Send (dry-run) ───────────────────────────────────────────────────────────
+# ── Send (sandboxed) ─────────────────────────────────────────────────────────
 
 
-def test_send_broadcast_dry_run_creates_one_log_row_per_recipient_with_merge_substitution(make_client):
+def test_send_broadcast_sandboxed_creates_one_log_row_per_recipient_with_merge_substitution(make_client):
     client = make_client("super_admin")
     broadcast = _create_broadcast(client)
 
@@ -251,7 +257,9 @@ def test_send_broadcast_dry_run_creates_one_log_row_per_recipient_with_merge_sub
             .all()
         )
         assert len(logs) == 4
-        assert {log.status for log in logs} == {"dry_run"}
+        # All recipients are @example.com (outside the team domain) and sandbox
+        # mode is on, so every send is withheld and logged as "sandboxed".
+        assert {log.status for log in logs} == {"sandboxed"}
         # Merge tag resolved per recipient — {{school_name}} -> "Test High"
         assert all("Test High" in (log.rendered_html or "") for log in logs)
 
@@ -432,7 +440,7 @@ def test_get_broadcast_detail_reports_status_counts(make_client):
     resp = client.get(f"/api/v1/emails/broadcasts/{broadcast['id']}")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["dry_run_count"] == 4
+    assert body["sandboxed_count"] == 4
     assert body["sent_count"] == 0
     assert len(body["recipients"]) == 4
 

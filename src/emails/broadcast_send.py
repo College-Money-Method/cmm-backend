@@ -17,7 +17,7 @@ from src.db.deps import get_db
 from src.emails.broadcast_models import Broadcast
 from src.emails.counselor_resolver import contact_is_school_counselor, resolve_counselor_name
 from src.emails.renderer import render_email
-from src.emails.ses_client import send_email
+from src.emails.ses_client import _sandbox_enabled, send_email
 from src.emails.unsubscribe import build_unsubscribe_url
 from src.schools.models import Contact, School
 
@@ -89,8 +89,9 @@ def send_to_contact(
     contact: Contact | None,
     school: School | None,
     override_to: str | None = None,
+    sandbox_enabled: bool | None = None,
 ) -> None:
-    """Render and send (or dry-run log) the broadcast to a single contact.
+    """Render and send (or sandbox-log) the broadcast to a single contact.
     Never raises — a per-recipient failure is logged by ``send_email`` as a
     "failed" row and must not abort the rest of the batch.
 
@@ -98,6 +99,8 @@ def send_to_contact(
     own email (used by test sends to reach an admin who has no Contact row).
     ``contact`` may be None for a context-less test send — merge tags then
     render empty and no unsubscribe link is attached.
+    ``sandbox_enabled`` is the once-per-batch sandbox decision; None (single
+    sends) lets ``send_email`` read it from the DB.
     """
     to = override_to or (contact.email if contact else None)
     if not to:
@@ -127,6 +130,7 @@ def send_to_contact(
             source="broadcast",
             broadcast_id=broadcast.id,
             unsubscribe_url=unsubscribe_url,
+            sandbox_enabled=sandbox_enabled,
         )
     except Exception:  # noqa: BLE001 - a single recipient failure must not abort the batch
         logger.exception("Broadcast %s: send failed for a recipient", broadcast.id)
@@ -153,9 +157,12 @@ def send_broadcast_batch(broadcast_id: uuid.UUID, contact_ids: list[uuid.UUID]) 
                     )
                 ).all()
             }
+            # Resolve the sandbox flag ONCE for the whole batch — avoids a
+            # per-recipient config query on a large fan-out.
+            sandbox_enabled = _sandbox_enabled(db)
             for contact in contacts:
                 school = schools_by_id.get(contact.school_id) if contact.school_id else None
-                send_to_contact(db, broadcast, contact, school)
+                send_to_contact(db, broadcast, contact, school, sandbox_enabled=sandbox_enabled)
 
             broadcast.status = "sent"
             db.add(broadcast)

@@ -116,15 +116,11 @@ class Settings(BaseSettings):
     # object at send time, unlike interactive routes) e.g. "https://next.collegemoneymethod.com".
     app_public_url: str = ""
     ses_from_email: str = "noreply@collegemoneymethod.com"
-    # Safe-by-default kill-switch: False skips the real SES API call and logs a
-    # dry-run EmailSendLog row instead. Only prod sets this True via env var.
-    email_send_enabled: bool = False
-    # Sandbox guard for live testing: when True (and email_send_enabled is also
-    # True), only recipients on `email_sandbox_domain` are actually sent; every
-    # other recipient is logged status="sandboxed" with no SES call. Lets you run
-    # a real send against production infra without reaching real families.
-    email_sandbox_mode: bool = False
-    email_sandbox_domain: str = "collegemoneymethod.com"
+    # NOTE: outbound email is always attempted. The only safety guard is the
+    # runtime "email sandbox mode" flag stored on the global app config
+    # (AppConfig.email_sandbox_mode) — see src/emails/ses_client.py. When on,
+    # only recipients on the team domain are sent; everyone else is logged, not
+    # sent. Typically on in local/dev, off in production.
     # Signing secret for the public CAN-SPAM unsubscribe link (src/emails/unsubscribe.py).
     # Falls back to the Supabase service role key when unset so dev/test need no new
     # env var; prod should still set a dedicated key to keep the two secrets isolated.

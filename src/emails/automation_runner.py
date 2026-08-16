@@ -62,7 +62,7 @@ from src.emails.counselor_resolver import contact_is_school_counselor, resolve_c
 from src.emails.email_template_models import EmailTemplate
 from src.emails.link_resolver import resolve_plain_text
 from src.emails.renderer import render_email
-from src.emails.ses_client import send_email
+from src.emails.ses_client import _sandbox_enabled, send_email
 from src.emails.unsubscribe import build_unsubscribe_url
 from src.emails.workshop_merge_tags import build_workshop_merge_replacements
 from src.schools.models import Contact, School
@@ -120,10 +120,13 @@ def _due_window(automation: EmailAutomation, now: datetime) -> tuple[datetime, d
 
 def _run_automations_check(db: Session) -> int:
     automations = list(db.scalars(select(EmailAutomation).where(EmailAutomation.enabled.is_(True))).all())
-    return sum(_run_one_automation(db, automation) for automation in automations)
+    # Resolve the sandbox flag ONCE per run — threaded down to every send so a
+    # large recipient fan-out never re-queries the config per email.
+    sandbox_enabled = _sandbox_enabled(db)
+    return sum(_run_one_automation(db, automation, sandbox_enabled) for automation in automations)
 
 
-def _run_one_automation(db: Session, automation: EmailAutomation) -> int:
+def _run_one_automation(db: Session, automation: EmailAutomation, sandbox_enabled: bool) -> int:
     now = datetime.now(timezone.utc)
     lower, upper = _due_window(automation, now)
 
@@ -146,10 +149,14 @@ def _run_one_automation(db: Session, automation: EmailAutomation) -> int:
         ).all()
     )
 
-    return sum(_process_due_mapping(db, automation, mapping) for mapping in due_mappings)
+    return sum(
+        _process_due_mapping(db, automation, mapping, sandbox_enabled) for mapping in due_mappings
+    )
 
 
-def _process_due_mapping(db: Session, automation: EmailAutomation, mapping: PortalMapping) -> int:
+def _process_due_mapping(
+    db: Session, automation: EmailAutomation, mapping: PortalMapping, sandbox_enabled: bool
+) -> int:
     """Send `automation` to every opted-in contact of `mapping.school_id`,
     then record the (automation, mapping) pair in the ledger — only after the
     full recipient batch is attempted, so a partial batch never gets falsely
@@ -265,6 +272,7 @@ def _process_due_mapping(db: Session, automation: EmailAutomation, mapping: Port
                 source=source,
                 unsubscribe_url=unsubscribe_url,
                 automation_id=automation.id,
+                sandbox_enabled=sandbox_enabled,
             )
             sent += 1
         except Exception:  # noqa: BLE001 - one recipient failure must not abort the batch

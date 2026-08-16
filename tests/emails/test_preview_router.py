@@ -1,14 +1,16 @@
 """HTTP-level tests for the template preview + send-test endpoints (super_admin
 only). Uses the shared in-memory SQLite fixture (`scheduler_sessionmaker`) so
 the workshop/webinar/portal_mapping tables — needed by the workshop-template
-preview path — compile under SQLite. `email_send_enabled` defaults to False, so
-the send-test lands as a dry_run EmailSendLog row with no boto3 call.
+preview path — compile under SQLite. Sandbox mode is forced off and the SES
+client is mocked, so send-test exercises the real send pipeline and lands as a
+"sent" EmailSendLog row with no live boto3 call.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -51,10 +53,15 @@ def make_client(scheduler_sessionmaker, monkeypatch):
     """Factory: TestClient acting as `role`, with a school, an admin (hub_admin)
     contact, and one workshop/webinar mapped to the school.
 
-    Forces ``email_send_enabled`` off so send-test lands as a dry_run row via the
-    real pipeline — never a live SES call — regardless of the local .env."""
+    Forces sandbox off and mocks the SES client so send-test lands as a "sent"
+    row via the real pipeline — never a live SES call — regardless of the local
+    .env."""
 
-    monkeypatch.setattr("src.config.settings.email_send_enabled", False)
+    monkeypatch.setattr("src.emails.ses_client._sandbox_enabled", lambda db: False)
+    monkeypatch.setattr("src.config.settings.ses_from_email", "noreply@collegemoneymethod.com")
+    mock_ses = MagicMock()
+    mock_ses.send_raw_email.return_value = {"MessageId": "test-message-id"}
+    monkeypatch.setattr("src.emails.ses_client._create_ses_client", lambda: mock_ses)
 
     def _build(role: str) -> TestClient:
         SessionLocal: sessionmaker = scheduler_sessionmaker
@@ -294,7 +301,7 @@ def test_send_test_sends_to_admin_and_logs(make_client):
         logs = db.query(EmailSendLog).all()
         assert len(logs) == 1
         assert logs[0].recipient_email == "admin@collegemoneymethod.com"
-        assert logs[0].status == "dry_run"
+        assert logs[0].status == "sent"
     finally:
         db.close()
 

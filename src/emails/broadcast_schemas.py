@@ -44,6 +44,7 @@ class RecipientStatusRow(BaseModel):
 class BroadcastDetailOut(BroadcastOut):
     sent_count: int = 0
     dry_run_count: int = 0
+    sandboxed_count: int = 0
     suppressed_count: int = 0
     failed_count: int = 0
     recipients: list[RecipientStatusRow] = Field(default_factory=list)

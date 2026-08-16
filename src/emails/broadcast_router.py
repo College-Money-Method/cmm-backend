@@ -151,6 +151,7 @@ def get_broadcast(broadcast_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> Broad
         **base.model_dump(),
         sent_count=counts.get("sent", 0),
         dry_run_count=counts.get("dry_run", 0),
+        sandboxed_count=counts.get("sandboxed", 0),
         suppressed_count=counts.get("suppressed", 0),
         failed_count=counts.get("failed", 0),
         recipients=[

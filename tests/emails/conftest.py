@@ -19,6 +19,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import src.main  # noqa: F401 - imports every model module, registering them with Base.metadata
+from src.app_config.models import AppConfig
 from src.db.base import Base
 
 
@@ -53,6 +54,7 @@ SCHEDULER_TEST_TABLES = (
     "workshop_resources",
     "asset_types",
     "user_roles",
+    "app_config",
 )
 
 
@@ -68,4 +70,14 @@ def scheduler_sessionmaker():
     test_metadata.tables["webinars"].c.duration_minutes.computed = None
 
     test_metadata.create_all(engine)
-    return sessionmaker(bind=engine, expire_on_commit=False)
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+    # Sandbox on for the test env: seeded recipients are @example.com (outside
+    # the team domain), so the send pipeline withholds them and logs "sandboxed"
+    # instead of calling SES — the network-safe default for scheduler tests.
+    seed = SessionLocal()
+    seed.add(AppConfig(email_sandbox_mode=True))
+    seed.commit()
+    seed.close()
+
+    return SessionLocal

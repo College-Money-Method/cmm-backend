@@ -1,4 +1,4 @@
-"""AWS SES client and email-send orchestration (suppression + dry-run + real send).
+"""AWS SES client and email-send orchestration (suppression + sandbox + real send).
 
 Mirrors ``src.storage.s3_client``'s ``@lru_cache`` boto3-client-factory pattern.
 ``send_email`` is the single entry point every sender (broadcast, pre-workshop,
@@ -6,8 +6,9 @@ followup) must call — it enforces two un-bypassable checks, in order, before
 ever talking to SES:
 
   1. Suppression — an address that bounced/complained/unsubscribed is skipped.
-  2. Dry-run — when ``settings.email_send_enabled`` is False (dev default),
-     the send is logged but no boto3 call is made.
+  2. Sandbox — when the global ``AppConfig.email_sandbox_mode`` flag is on, a
+     recipient outside the team domain (``SANDBOX_DOMAIN``) is logged
+     (status="sandboxed") but never sent, on ANY environment.
 """
 
 from __future__ import annotations
@@ -26,10 +27,15 @@ from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.app_config.models import AppConfig
 from src.config import settings
 from src.emails.models import EmailSendLog, EmailSuppression
 
 logger = logging.getLogger(__name__)
+
+# The team domain that email sandbox mode allows through. Recipients here are
+# real teammates, safe to send to while sandboxing; everyone else is withheld.
+SANDBOX_DOMAIN = "collegemoneymethod.com"
 
 
 @lru_cache
@@ -61,8 +67,17 @@ def _is_suppressed(db: Session, to: str) -> bool:
 
 
 def _in_sandbox_domain(to: str) -> bool:
-    """True when `to` is on the configured sandbox domain (case-insensitive)."""
-    return to.strip().lower().endswith("@" + settings.email_sandbox_domain.lower())
+    """True when `to` is on the team sandbox domain (case-insensitive)."""
+    return to.strip().lower().endswith("@" + SANDBOX_DOMAIN)
+
+
+def _sandbox_enabled(db: Session) -> bool:
+    """Read the runtime email-sandbox flag from the global app config.
+
+    Missing config row (fresh DB) resolves to False — i.e. production sending —
+    matching the column default. Isolated as its own function so tests can patch
+    it without seeding an AppConfig row."""
+    return bool(db.scalar(select(AppConfig.email_sandbox_mode)))
 
 
 def _build_raw_message(
@@ -127,14 +142,16 @@ def send_email(
     broadcast_id: uuid.UUID | None = None,
     automation_id: uuid.UUID | None = None,
     unsubscribe_url: str | None = None,
+    sandbox_enabled: bool | None = None,
 ) -> EmailSendLog:
-    """Send one email, or log it, depending on suppression / dry-run state.
+    """Send one email, or log it, depending on suppression / sandbox state.
 
     Checks run in this order, both un-bypassable by any caller:
       1. Suppression: ``to`` has an active ``EmailSuppression`` row -> log
          status "suppressed", no network call.
-      2. Dry-run: ``settings.email_send_enabled`` is False -> log status
-         "dry_run" with the rendered HTML attached, no boto3 call.
+      2. Sandbox: ``AppConfig.email_sandbox_mode`` is on and ``to`` is outside
+         ``SANDBOX_DOMAIN`` -> log status "sandboxed" with the rendered HTML
+         attached, no boto3 call.
       3. Otherwise, call SES ``send_raw_email`` through the shared
          Configuration Set and log "sent" (or "failed" on a boto3 error).
 
@@ -145,6 +162,11 @@ def send_email(
     ``unsubscribe_url``, when given, is attached as a one-click
     ``List-Unsubscribe`` header on the raw message — every sender that resolves
     a per-recipient unsubscribe link gets CAN-SPAM compliance for free.
+
+    ``sandbox_enabled`` lets a batch sender resolve the global flag ONCE per
+    batch and pass the decision in, avoiding a per-recipient config query on a
+    large fan-out. Left as None (single/ad-hoc sends), the flag is read from the
+    DB here.
     """
     if _is_suppressed(db, to):
         logger.info("Skipping send to suppressed recipient (source=%s)", source)
@@ -158,26 +180,11 @@ def send_email(
             automation_id=automation_id,
         )
 
-    if not settings.email_send_enabled:
-        logger.info(
-            "email_send_enabled=False — dry-run mode, no SES call made (source=%s)",
-            source,
-        )
-        return _log_send(
-            db,
-            to=to,
-            subject=subject,
-            status="dry_run",
-            source=source,
-            rendered_html=html,
-            broadcast_id=broadcast_id,
-            automation_id=automation_id,
-        )
-
-    if settings.email_sandbox_mode and not _in_sandbox_domain(to):
+    in_sandbox = _sandbox_enabled(db) if sandbox_enabled is None else sandbox_enabled
+    if in_sandbox and not _in_sandbox_domain(to):
         logger.info(
             "email_sandbox_mode — recipient outside %s, not sent (source=%s)",
-            settings.email_sandbox_domain,
+            SANDBOX_DOMAIN,
             source,
         )
         return _log_send(
