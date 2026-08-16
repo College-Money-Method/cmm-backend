@@ -13,7 +13,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -28,6 +28,14 @@ router = APIRouter(prefix="/api/v1/emails/automations", tags=["emails"])
 AutomationType = Literal["pre_workshop_reminder", "post_workshop_reminder"]
 OffsetUnit = Literal["days", "hours"]
 OffsetDirection = Literal["before", "after"]
+
+# A pre-workshop reminder fires *before* the workshop, a post-workshop reminder
+# *after* — the direction is fully determined by the type. Enforced here so the
+# rule holds regardless of client (the admin UI also derives it from type).
+_REQUIRED_DIRECTION: dict[str, OffsetDirection] = {
+    "pre_workshop_reminder": "before",
+    "post_workshop_reminder": "after",
+}
 
 
 class EmailAutomationOut(BaseModel):
@@ -52,6 +60,13 @@ class EmailAutomationCreate(BaseModel):
     template_id: uuid.UUID | None = None
     subject_override: str | None = None
     enabled: bool = False
+
+    @model_validator(mode="after")
+    def _direction_matches_type(self) -> "EmailAutomationCreate":
+        required = _REQUIRED_DIRECTION[self.type]
+        if self.offset_direction != required:
+            raise ValueError(f"{self.type} requires offset_direction '{required}'")
+        return self
 
 
 class EmailAutomationUpdate(BaseModel):
@@ -153,6 +168,14 @@ def update_automation(
         _validate_template_id(db, updates["template_id"])
     for field, value in updates.items():
         setattr(automation, field, value)
+    # Validate the direction/type invariant against the merged state so a patch
+    # touching only one of the two fields can't leave the row inconsistent.
+    required = _REQUIRED_DIRECTION[automation.type]
+    if automation.offset_direction != required:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{automation.type} requires offset_direction '{required}'",
+        )
     db.add(automation)
     db.commit()
     db.refresh(automation)

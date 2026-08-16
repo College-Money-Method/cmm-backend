@@ -315,6 +315,53 @@ def test_create_automation_rejects_invalid_enum_values(make_client, field: str, 
     assert resp.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "automation_type,bad_direction",
+    [
+        ("pre_workshop_reminder", "after"),
+        ("post_workshop_reminder", "before"),
+    ],
+)
+def test_create_automation_rejects_direction_mismatched_with_type(
+    make_client, automation_type: str, bad_direction: str
+):
+    client = make_client("super_admin")
+    resp = client.post(
+        "/api/v1/emails/automations",
+        json={
+            "name": "Mismatched Direction",
+            "type": automation_type,
+            "offset_value": 3,
+            "offset_unit": "days",
+            "offset_direction": bad_direction,
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_patch_type_without_direction_rejected_when_inconsistent(make_client):
+    # AUTOMATION_ID is a pre_workshop_reminder/before row; switching only the
+    # type to post_workshop_reminder would leave direction "before" — invalid.
+    client = make_client("super_admin")
+    resp = client.patch(
+        f"/api/v1/emails/automations/{AUTOMATION_ID}",
+        json={"type": "post_workshop_reminder"},
+    )
+    assert resp.status_code == 422
+
+
+def test_patch_type_with_matching_direction_succeeds(make_client):
+    client = make_client("super_admin")
+    resp = client.patch(
+        f"/api/v1/emails/automations/{AUTOMATION_ID}",
+        json={"type": "post_workshop_reminder", "offset_direction": "after"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["type"] == "post_workshop_reminder"
+    assert body["offset_direction"] == "after"
+
+
 # ── Patch ────────────────────────────────────────────────────────────────────
 
 
