@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from src.emails import automation_runner
 from src.emails.automation_ledger_models import AutomationSendLedger
 from src.emails.automation_models import EmailAutomation
 from src.emails.automation_runner import run_automations_check
@@ -105,3 +106,60 @@ def test_second_run_sends_zero_emails_for_already_ledgered_mapping(db_session):
 
     logs_after_second = db_session.query(EmailSendLog).filter(EmailSendLog.source == "pre_workshop").all()
     assert len(logs_after_second) == 1  # unchanged — no duplicate send
+
+
+def test_batch_where_every_send_fails_releases_claim_and_retries(db_session, monkeypatch):
+    """A provider outage must not burn the mapping: the claim is released so a
+    later run redelivers, and that retry is still exactly-once."""
+    def _boom(*args, **kwargs):
+        raise RuntimeError("SES unavailable")
+
+    monkeypatch.setattr("src.emails.automation_runner.send_email", _boom)
+    assert run_automations_check(db_session) == 0
+
+    mapping = db_session.query(PortalMapping).filter(PortalMapping.webinar_id == WEBINAR_ID).one()
+    assert (
+        db_session.query(AutomationSendLedger)
+        .filter(
+            AutomationSendLedger.automation_id == AUTOMATION_ID,
+            AutomationSendLedger.portal_mapping_id == mapping.id,
+        )
+        .one_or_none()
+        is None
+    )
+
+    monkeypatch.undo()
+    assert run_automations_check(db_session) == 1
+    assert len(db_session.query(EmailSendLog).filter(EmailSendLog.source == "pre_workshop").all()) == 1
+
+    assert run_automations_check(db_session) == 0  # claim now held — no duplicate
+
+
+def test_claim_is_committed_before_the_first_send(db_session):
+    """Guards the concurrency fix: the ledger row must already be visible when
+    the first email goes out, because `send_email` commits its own log row and
+    would otherwise release any row lock held over the batch."""
+    mapping = db_session.query(PortalMapping).filter(PortalMapping.webinar_id == WEBINAR_ID).one()
+    seen_claim: list[bool] = []
+
+    real_send = automation_runner.send_email
+
+    def _spy(db, *args, **kwargs):
+        seen_claim.append(
+            db.query(AutomationSendLedger)
+            .filter(
+                AutomationSendLedger.automation_id == AUTOMATION_ID,
+                AutomationSendLedger.portal_mapping_id == mapping.id,
+            )
+            .one_or_none()
+            is not None
+        )
+        return real_send(db, *args, **kwargs)
+
+    automation_runner.send_email = _spy
+    try:
+        assert run_automations_check(db_session) == 1
+    finally:
+        automation_runner.send_email = real_send
+
+    assert seen_claim == [True]

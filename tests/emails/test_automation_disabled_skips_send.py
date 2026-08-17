@@ -120,8 +120,9 @@ def test_opted_out_contact_receives_no_reminder_with_no_override(opted_out_conta
     logs = opted_out_contact_session.query(EmailSendLog).filter(EmailSendLog.source == "pre_workshop").all()
     assert logs == []
 
-    # The mapping is still ledgered — the automation ran, template resolved,
-    # there were just zero eligible (opted-in) recipients in the batch.
+    # No ledger row: a batch with zero eligible recipients made no progress, so
+    # the claim is not taken and a contact that opts in tomorrow still gets the
+    # email while the mapping stays inside its due window.
     mapping = opted_out_contact_session.query(PortalMapping).filter(PortalMapping.webinar_id == WEBINAR_ID).one()
     ledger_row = (
         opted_out_contact_session.query(AutomationSendLedger)
@@ -131,4 +132,19 @@ def test_opted_out_contact_receives_no_reminder_with_no_override(opted_out_conta
         )
         .one_or_none()
     )
-    assert ledger_row is not None
+    assert ledger_row is None
+
+
+def test_contact_opting_in_later_still_receives_reminder(opted_out_contact_session):
+    """The zero-recipient run must not burn the mapping — flipping the opt-in
+    before the due window closes still delivers."""
+    assert run_automations_check(opted_out_contact_session) == 0
+
+    contact = opted_out_contact_session.query(Contact).filter(Contact.id == OPTED_OUT_CONTACT_ID).one()
+    contact.auto_emails = True
+    opted_out_contact_session.commit()
+
+    assert run_automations_check(opted_out_contact_session) == 1
+    logs = opted_out_contact_session.query(EmailSendLog).filter(EmailSendLog.source == "pre_workshop").all()
+    assert len(logs) == 1
+    assert logs[0].recipient_email == "family@example.com"
