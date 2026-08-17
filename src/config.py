@@ -103,6 +103,29 @@ class Settings(BaseSettings):
     environment: str = "development"
     frontend_url: str = "http://localhost:5173"
 
+    # SES (automation email sender)
+    # Shared Configuration Set (bounce/complaint events -> SNS -> webhook_router).
+    ses_configuration_set_name: str = ""
+    # ARN of the SNS topic that fronts the SES event destination. The webhook
+    # rejects any SNS message whose TopicArn != this, so a merely AWS-signed
+    # message published from a different (e.g. attacker-owned) topic cannot
+    # confirm a subscription or write suppression/event rows. Empty disables the
+    # check (dev/test, where no SNS subscription targets the webhook at all).
+    ses_sns_topic_arn: str = ""
+    # Absolute origin used to build school-scoped links in emails (no `request`
+    # object at send time, unlike interactive routes) e.g. "https://next.collegemoneymethod.com".
+    app_public_url: str = ""
+    ses_from_email: str = "noreply@collegemoneymethod.com"
+    # NOTE: outbound email is always attempted. The only safety guard is the
+    # runtime "email sandbox mode" flag stored on the global app config
+    # (AppConfig.email_sandbox_mode) — see src/emails/ses_client.py. When on,
+    # only recipients on the team domain are sent; everyone else is logged, not
+    # sent. Typically on in local/dev, off in production.
+    # Signing secret for the public CAN-SPAM unsubscribe link (src/emails/unsubscribe.py).
+    # Falls back to the Supabase service role key when unset so dev/test need no new
+    # env var; prod should still set a dedicated key to keep the two secrets isolated.
+    unsubscribe_secret_key: str = ""
+
     # Airtable sync — offboarding safety. When False, the counselor revoke pass
     # runs in log-only mode (reports what WOULD be revoked without acting). Flip
     # to True after reviewing the first-deploy logs to enable live revocation.

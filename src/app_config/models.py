@@ -36,5 +36,14 @@ class AppConfig(Base):
     # Feature flags
     survey_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
 
+    # Email sandbox mode. When True, outbound email only reaches recipients on
+    # the team domain (collegemoneymethod.com); every other recipient is logged
+    # (status="sandboxed") but never sent — on ANY environment. Off = normal
+    # production sending to real recipients. Default False; typically turned on
+    # in local/dev and left off in production.
+    email_sandbox_mode: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
+
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)

@@ -16,6 +16,7 @@ class AppConfigUpdate(BaseModel):
     welcome_video_caption: str | None = None
     topic_overview_video_url: str | None = None
     survey_enabled: bool | None = None
+    email_sandbox_mode: bool | None = None
 
 
 class AppConfigOut(BaseModel):
@@ -25,6 +26,7 @@ class AppConfigOut(BaseModel):
     welcome_video_caption: str | None
     topic_overview_video_url: str | None
     survey_enabled: bool
+    email_sandbox_mode: bool
     updated_at: datetime | None
 
     model_config = {"from_attributes": True}
