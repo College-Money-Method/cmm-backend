@@ -194,11 +194,11 @@ def _process_due_mapping(
         return 0
 
     template = db.get(EmailTemplate, automation.template_id) if automation.template_id else None
-    if template is None or template.category != "workshop_automation":
+    if template is None or template.category != "workshop":
         # No (valid) template configured yet — skip and leave no ledger row so
         # this mapping is retried automatically once a template is picked.
         logger.info(
-            "automation %s: no workshop_automation template configured, skipping (will retry)", automation.id
+            "automation %s: no workshop template configured, skipping (will retry)", automation.id
         )
         return 0
 

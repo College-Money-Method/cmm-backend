@@ -55,7 +55,7 @@ def db_session(scheduler_sessionmaker):
     session.add(
         EmailTemplate(
             id=TEMPLATE_ID,
-            category="workshop_automation",
+            category="workshop",
             name="Global announcement",
             subject="Reminder: {{workshop_name}}",
             body_json='{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"See you at {{workshop_name}} on {{date}}."}]}]}',

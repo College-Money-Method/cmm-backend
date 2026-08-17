@@ -220,7 +220,7 @@ def _seed_template(client: TestClient, category: str) -> uuid.UUID:
 
 def test_create_automation_accepts_valid_workshop_template(make_client):
     client = make_client("super_admin")
-    template_id = _seed_template(client, "workshop_automation")
+    template_id = _seed_template(client, "workshop")
     resp = client.post(
         "/api/v1/emails/automations",
         json={
@@ -254,7 +254,7 @@ def test_create_automation_rejects_unknown_template_id(make_client):
 
 def test_create_automation_rejects_wrong_category_template(make_client):
     client = make_client("super_admin")
-    template_id = _seed_template(client, "broadcast")
+    template_id = _seed_template(client, "general")
     resp = client.post(
         "/api/v1/emails/automations",
         json={

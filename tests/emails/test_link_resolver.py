@@ -117,6 +117,36 @@ class TestResolveMergeTag:
         assert nodes[2] == {"type": "hardBreak"}
         assert nodes[3] == {"type": "text", "text": "Plain line"}
 
+    def test_chip_marks_carry_onto_replacement_text(self):
+        node = {
+            "type": "mergeTag",
+            "attrs": {"tag": "first_name"},
+            "marks": [{"type": "bold"}, {"type": "italic"}],
+        }
+        nodes = resolve_merge_tag(node, {"first_name": "Jordan"})
+        assert nodes == [
+            {"type": "text", "text": "Jordan", "marks": [{"type": "bold"}, {"type": "italic"}]}
+        ]
+
+    def test_chip_marks_carry_onto_every_line_but_not_hard_breaks(self):
+        node = {"type": "mergeTag", "attrs": {"tag": "list_tag"}, "marks": [{"type": "bold"}]}
+        nodes = resolve_merge_tag(node, {"list_tag": "One\nTwo"})
+        assert nodes == [
+            {"type": "text", "text": "One", "marks": [{"type": "bold"}]},
+            {"type": "hardBreak"},
+            {"type": "text", "text": "Two", "marks": [{"type": "bold"}]},
+        ]
+
+    def test_line_generated_link_wins_over_inherited_link(self):
+        node = {
+            "type": "mergeTag",
+            "attrs": {"tag": "link_tag"},
+            "marks": [{"type": "link", "attrs": {"href": "https://outer.example"}}, {"type": "bold"}],
+        }
+        nodes = resolve_merge_tag(node, {"link_tag": "https://example.com/a"})
+        assert nodes[0]["marks"][0]["attrs"]["href"] == "https://example.com/a"
+        assert {"type": "bold"} in nodes[0]["marks"]
+
 
 class TestResolveTiptapDoc:
     def test_resolves_merge_tag_inline_within_paragraph(self):
@@ -137,3 +167,24 @@ class TestResolveTiptapDoc:
             {"type": "text", "text": "Jordan"},
             {"type": "text", "text": "!"},
         ]
+
+    def test_internal_link_on_a_chip_is_resolved_before_it_is_inherited(self):
+        doc = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "mergeTag",
+                            "attrs": {"tag": "name"},
+                            "marks": [{"type": "link", "attrs": {"href": "/topic/x"}}],
+                        }
+                    ],
+                }
+            ],
+        }
+        resolved = resolve_tiptap_doc(doc, {"name": "Jordan"}, origin="https://x.com", school_slug="lincoln-high")
+        node = resolved["content"][0]["content"][0]
+        assert node["text"] == "Jordan"
+        assert node["marks"][0]["attrs"]["href"] == "https://x.com/school/lincoln-high/topic/x"

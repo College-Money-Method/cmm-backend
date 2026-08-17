@@ -59,7 +59,7 @@ def _seed_common(session, *, automation_enabled: bool, auto_emails: bool) -> Non
     session.add(
         EmailTemplate(
             id=TEMPLATE_ID,
-            category="workshop_automation",
+            category="workshop",
             name="Global announcement",
             subject="Reminder: {{workshop_name}}",
             body_json='{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"See you at {{workshop_name}} on {{date}}."}]}]}',

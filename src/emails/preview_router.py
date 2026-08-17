@@ -26,17 +26,18 @@ from src.emails.link_resolver import resolve_plain_text
 from src.emails.renderer import render_email
 from src.emails.ses_client import send_email
 from src.emails.template_preview import build_preview_context
+from src.cycles.models import Cycle
 from src.schools.models import Contact
 from src.workshops.models import PortalMapping, Webinar
 
 router = APIRouter(prefix="/api/v1/emails/preview", tags=["emails"])
 
-TemplateCategory = Literal["broadcast", "workshop_automation"]
+TemplateCategory = Literal["general", "workshop"]
 
 # Maps a template category to the EmailSendLog.source its test send logs under
 # (must satisfy the ck_email_send_log_source check constraint). Test sends carry
 # no broadcast_id/automation_id, so they never affect any campaign's analytics.
-_SOURCE_BY_CATEGORY = {"broadcast": "broadcast", "workshop_automation": "pre_workshop"}
+_SOURCE_BY_CATEGORY = {"general": "broadcast", "workshop": "pre_workshop"}
 
 
 class PreviewContextIn(BaseModel):
@@ -44,7 +45,7 @@ class PreviewContextIn(BaseModel):
     subject: str = Field(min_length=1)
     body_json: dict
     school_id: uuid.UUID
-    # Required for workshop_automation (fills date/time/workshop tags); ignored
+    # Required for workshop (fills date/time/workshop tags); ignored
     # for broadcast.
     webinar_id: uuid.UUID | None = None
     # Optional; only affects counselor_name when the contact IS the hub_admin.
@@ -87,12 +88,18 @@ def _render(db: Session, payload: PreviewContextIn) -> tuple[str, str, str]:
 def list_school_webinars(
     _admin: AdminDep, db: DbDep, school_id: uuid.UUID = Query(...)
 ) -> list[PreviewWebinarOut]:
-    """Webinars mapped to a school (via PortalMapping), newest first — feeds the
-    workshop-template preview's webinar picker."""
+    """Current-cycle webinars mapped to a school (via PortalMapping), newest
+    first — feeds the workshop-template preview's webinar picker.
+
+    Scoped to the current cycle the same way the school portal list is: the
+    inner join to Cycle also drops webinars with no cycle assigned, so stray or
+    test webinars never reach the picker.
+    """
     webinars = db.scalars(
         select(Webinar)
         .join(PortalMapping, PortalMapping.webinar_id == Webinar.id)
-        .where(PortalMapping.school_id == school_id)
+        .join(Cycle, Cycle.id == Webinar.cycle_id)
+        .where(PortalMapping.school_id == school_id, Cycle.is_current.is_(True))
         .options(selectinload(Webinar.workshop), selectinload(Webinar.cycle))
         .order_by(Webinar.start_datetime.desc())
     ).all()

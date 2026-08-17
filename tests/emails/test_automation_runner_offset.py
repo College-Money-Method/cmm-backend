@@ -47,12 +47,12 @@ def _seed_base(session, *, school_id, contact_id, workshop_id, webinar_id, start
 
 @pytest.fixture
 def template(scheduler_sessionmaker):
-    """A shared workshop_automation template, seeded once per test session."""
+    """A shared workshop template, seeded once per test session."""
     session = scheduler_sessionmaker()
     session.add(
         EmailTemplate(
             id=TEMPLATE_ID,
-            category="workshop_automation",
+            category="workshop",
             name="Automation template",
             subject="Re: {{workshop_name}}",
             body_json='{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"{{workshop_name}} on {{date}}."}]}]}',

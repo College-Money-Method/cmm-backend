@@ -131,22 +131,38 @@ def _merge_line_to_nodes(line: str) -> list[dict]:
     return [{"type": "text", "text": line}]
 
 
+def _apply_outer_marks(node: dict, outer_marks: list[dict]) -> dict:
+    """Add the merge tag's own marks to one replacement node.
+
+    A link the line generated itself wins over an inherited link, so the
+    resource URL is never overwritten by formatting applied around the chip.
+    """
+    if not outer_marks or node.get("type") == "hardBreak":
+        return node
+    own = node.get("marks", [])
+    own_types = {mark.get("type") for mark in own}
+    inherited = [mark for mark in outer_marks if mark.get("type") not in own_types]
+    return {**node, "marks": [*own, *inherited]} if inherited else node
+
+
 def resolve_merge_tag(node: dict, replacements: dict[str, str]) -> list[dict]:
     """Resolve a mergeTag node into the inline nodes that replace it.
 
     A multi-line value (e.g. ``{{resources_list}}``) expands to one line per
     row, separated by hardBreak nodes. Rows shaped like "Name (url)" become
-    hyperlinks on the name; bare-URL lines link the URL itself.
+    hyperlinks on the name; bare-URL lines link the URL itself. Marks applied
+    to the chip itself (bold, italic, …) carry onto every line it expands to.
     """
     tag = node.get("attrs", {}).get("tag")
     value = replacements.get(tag, f"{{{{{tag}}}}}") if tag is not None else ""
     lines = value.split("\n")
+    outer_marks = node.get("marks") or []
 
     nodes: list[dict] = []
     for i, line in enumerate(lines):
         if i > 0:
             nodes.append({"type": "hardBreak"})
-        nodes.extend(_merge_line_to_nodes(line))
+        nodes.extend(_apply_outer_marks(n, outer_marks) for n in _merge_line_to_nodes(line))
     return nodes
 
 
@@ -157,14 +173,16 @@ def resolve_node(
     origin: str | None = None,
     school_slug: str | None = None,
 ) -> dict | list[dict]:
-    if node.get("type") == "mergeTag":
-        return resolve_merge_tag(node, replacements)
-
     out = dict(node)
 
     marks = out.get("marks")
     if marks:
         out["marks"] = resolve_marks(marks, replacements, origin=origin, school_slug=school_slug)
+
+    # After its own marks are resolved, so formatting/links applied to the chip
+    # carry onto the text that replaces it.
+    if out.get("type") == "mergeTag":
+        return resolve_merge_tag(out, replacements)
 
     content = out.get("content")
     if content:

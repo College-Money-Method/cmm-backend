@@ -7,10 +7,10 @@ by super admins and are one-time **prefill** sources (copy subject + body),
 never a live link — a Broadcast or EmailAutomation that "used" a template at
 creation time keeps its own independent copy of the content afterward.
 
-``category`` scopes which picker a template shows up in: ``"broadcast"``
-templates prefill the Broadcast composer; ``"workshop_automation"`` templates
-are the (required) content source for automation sends (see
-``automation_runner.py``).
+``category`` scopes which picker a template shows up in: ``"general"``
+templates prefill one-off sends (the Broadcast composer, counselor
+communications); ``"workshop"`` templates are the (required) content source for
+automation sends (see ``automation_runner.py``).
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class EmailTemplate(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "category IN ('broadcast', 'workshop_automation')", name="ck_email_template_category"
+            "category IN ('general', 'workshop')", name="ck_email_template_category"
         ),
         Index("idx_email_template_category", "category"),
     )

@@ -114,7 +114,7 @@ def _automation_out(db: Session, automation: EmailAutomation) -> EmailAutomation
 
 
 def _validate_template_id(db: Session, template_id: uuid.UUID | None) -> None:
-    """Reject a template_id that doesn't resolve to a workshop_automation
+    """Reject a template_id that doesn't resolve to a workshop
     template. Scheduler requires this category; a dangling FK would silently
     skip every send at runtime, so fail fast at the write boundary."""
     if template_id is None:
@@ -125,10 +125,10 @@ def _validate_template_id(db: Session, template_id: uuid.UUID | None) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="template_id does not reference an existing email template",
         )
-    if template.category != "workshop_automation":
+    if template.category != "workshop":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="template_id must reference a workshop_automation template",
+            detail="template_id must reference a workshop template",
         )
 
 

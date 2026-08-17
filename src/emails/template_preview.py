@@ -58,23 +58,23 @@ def build_preview_context(
 ) -> PreviewContext:
     """Resolve the merge-tag context for a preview/test render.
 
-    ``broadcast`` needs only a school (``counselor_name``/``family_label`` come
+    ``general`` needs only a school (``counselor_name``/``family_label`` come
     from the school's representative counselor — a chosen ``contact`` overrides
     ``counselor_name`` when they ARE a counselor, i.e. can log into the hub).
-    ``workshop_automation`` additionally requires a webinar to fill the
+    ``workshop`` additionally requires a webinar to fill the
     date/time/workshop tags.
     """
     school = _load_school(db, school_id)
     contact = _load_contact(db, contact_id)
 
-    if category == "broadcast":
+    if category == "general":
         return PreviewContext(_merge_tags_for(db, contact, school), school.slug)
 
-    # workshop_automation
+    # workshop
     if webinar_id is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="webinar_id is required for a workshop_automation preview",
+            detail="webinar_id is required for a workshop preview",
         )
     webinar = db.get(Webinar, webinar_id)
     if webinar is None:

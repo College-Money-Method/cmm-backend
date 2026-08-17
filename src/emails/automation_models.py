@@ -42,7 +42,7 @@ class EmailAutomation(Base):
     offset_value: Mapped[int] = mapped_column(Integer, nullable=False, default=7, server_default="7")
     offset_unit: Mapped[str] = mapped_column(Text, nullable=False, default="days", server_default="days")
     offset_direction: Mapped[str] = mapped_column(Text, nullable=False, default="before", server_default="before")
-    # Required by the scheduler at send time (must be category="workshop_automation");
+    # Required by the scheduler at send time (must be category="workshop");
     # nullable here only so a freshly-created automation can be saved before a
     # template is picked — the runner skips (and retries later) until it's set.
     template_id: Mapped[uuid.UUID | None] = mapped_column(

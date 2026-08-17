@@ -23,6 +23,7 @@ from src.db.deps import get_db
 from src.auth.models import UserRole
 from src.emails.models import EmailSendLog
 from src.main import app
+from src.cycles.models import Cycle
 from src.schools.models import Contact, School
 from src.workshops.models import PortalMapping, Webinar, Workshop
 
@@ -31,6 +32,12 @@ ADMIN_CONTACT_ID = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 SCHOOL_ID = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
 WORKSHOP_ID = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
 WEBINAR_ID = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+CURRENT_CYCLE_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+OLD_CYCLE_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+# Mapped to the same school but outside the current cycle — never offered by the
+# preview's workshop picker.
+OLD_WEBINAR_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
+CYCLELESS_WEBINAR_ID = uuid.UUID("44444444-4444-4444-4444-444444444444")
 # A counselor with a hub login but a hub_user (not hub_admin) app role — still
 # a counselor of the hub, so their own name must fill the counselor tags.
 COUNSELOR_USER_ID = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
@@ -109,16 +116,42 @@ def make_client(scheduler_sessionmaker, monkeypatch):
                 auto_emails=True,
             )
         )
+        seed.add(Cycle(id=CURRENT_CYCLE_ID, name="2025-26", is_current=True))
+        seed.add(Cycle(id=OLD_CYCLE_ID, name="2024-25", is_current=False))
         seed.add(Workshop(id=WORKSHOP_ID, name="FAFSA Basics"))
         seed.add(
             Webinar(
                 id=WEBINAR_ID,
                 workshop_id=WORKSHOP_ID,
+                cycle_id=CURRENT_CYCLE_ID,
                 start_datetime=datetime(2026, 4, 3, 18, 0, tzinfo=timezone.utc),
                 registration_url="https://zoom.example.com/register",
             )
         )
         seed.add(PortalMapping(id=uuid.uuid4(), school_id=SCHOOL_ID, webinar_id=WEBINAR_ID))
+        # Same school, same workshop, but a prior cycle — the picker must not
+        # offer it, so the exclusion is exercised by every list assertion below.
+        seed.add(
+            Webinar(
+                id=OLD_WEBINAR_ID,
+                workshop_id=WORKSHOP_ID,
+                cycle_id=OLD_CYCLE_ID,
+                start_datetime=datetime(2025, 4, 3, 18, 0, tzinfo=timezone.utc),
+                registration_url="https://zoom.example.com/register-old",
+            )
+        )
+        seed.add(PortalMapping(id=uuid.uuid4(), school_id=SCHOOL_ID, webinar_id=OLD_WEBINAR_ID))
+        # No cycle assigned at all — a stray/test webinar, also excluded.
+        seed.add(
+            Webinar(
+                id=CYCLELESS_WEBINAR_ID,
+                workshop_id=WORKSHOP_ID,
+                start_datetime=datetime(2026, 5, 3, 18, 0, tzinfo=timezone.utc),
+            )
+        )
+        seed.add(
+            PortalMapping(id=uuid.uuid4(), school_id=SCHOOL_ID, webinar_id=CYCLELESS_WEBINAR_ID)
+        )
         seed.commit()
         seed.close()
 
@@ -145,7 +178,7 @@ def make_client(scheduler_sessionmaker, monkeypatch):
 
 def _broadcast_payload(**overrides) -> dict:
     payload = {
-        "category": "broadcast",
+        "category": "general",
         "subject": "Hello {{school_name}}",
         "body_json": BROADCAST_DOC,
         "school_id": str(SCHOOL_ID),
@@ -156,7 +189,7 @@ def _broadcast_payload(**overrides) -> dict:
 
 def _workshop_payload(**overrides) -> dict:
     payload = {
-        "category": "workshop_automation",
+        "category": "workshop",
         "subject": "Reminder: {{workshop_name}}",
         "body_json": WORKSHOP_DOC,
         "school_id": str(SCHOOL_ID),
@@ -285,6 +318,18 @@ def test_list_school_webinars_returns_mapped_webinar(make_client):
     assert len(rows) == 1
     assert rows[0]["webinar_id"] == str(WEBINAR_ID)
     assert rows[0]["workshop_name"] == "FAFSA Basics"
+    assert rows[0]["cycle_name"] == "2025-26"
+
+
+def test_list_school_webinars_excludes_other_cycles_and_cycleless(make_client):
+    """The school also has a prior-cycle webinar and a cycle-less one mapped to
+    it; neither may reach the picker."""
+    client = make_client("super_admin")
+    resp = client.get("/api/v1/emails/preview/webinars", params={"school_id": str(SCHOOL_ID)})
+    assert resp.status_code == 200, resp.text
+    ids = {row["webinar_id"] for row in resp.json()}
+    assert str(OLD_WEBINAR_ID) not in ids
+    assert str(CYCLELESS_WEBINAR_ID) not in ids
 
 
 # ── Send test ────────────────────────────────────────────────────────────────

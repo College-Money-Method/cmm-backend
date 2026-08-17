@@ -2,8 +2,8 @@
 (same authz level as `broadcast_router`).
 
 CMM-branded, reusable templates managed in the Emails hub. `category` scopes
-which picker a template appears in (`"broadcast"` composer prefill vs
-`"workshop_automation"` automation content source) and is immutable once set
+which picker a template appears in (`"general"` one-off-send prefill vs
+`"workshop"` automation content source) and is immutable once set
 — editing a template never retroactively changes which picker it belongs to.
 """
 
@@ -25,7 +25,7 @@ from src.emails.email_template_models import EmailTemplate
 
 router = APIRouter(prefix="/api/v1/emails/templates", tags=["emails"])
 
-TemplateCategory = Literal["broadcast", "workshop_automation"]
+TemplateCategory = Literal["general", "workshop"]
 
 
 class EmailTemplateCreate(BaseModel):

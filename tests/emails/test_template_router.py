@@ -44,7 +44,7 @@ def make_client(monkeypatch):
         seed.add(
             EmailTemplate(
                 id=BROADCAST_TEMPLATE_ID,
-                category="broadcast",
+                category="general",
                 name="Broadcast Template",
                 subject="News from CMM",
                 body_json='{"type":"doc","content":[]}',
@@ -53,7 +53,7 @@ def make_client(monkeypatch):
         seed.add(
             EmailTemplate(
                 id=AUTOMATION_TEMPLATE_ID,
-                category="workshop_automation",
+                category="workshop",
                 name="Automation Template",
                 subject="Reminder: {{workshop_name}}",
                 body_json='{"type":"doc","content":[]}',
@@ -98,7 +98,7 @@ def test_non_super_admin_cannot_create_template(make_client, role: str):
     client = make_client(role)
     resp = client.post(
         "/api/v1/emails/templates",
-        json={"category": "broadcast", "name": "X", "subject": "X", "body_json": SAMPLE_BODY},
+        json={"category": "general", "name": "X", "subject": "X", "body_json": SAMPLE_BODY},
     )
     assert resp.status_code == 403
 
@@ -115,12 +115,12 @@ def test_list_returns_all_templates(make_client):
 
 def test_list_filters_by_category(make_client):
     client = make_client("super_admin")
-    resp = client.get("/api/v1/emails/templates", params={"category": "workshop_automation"})
+    resp = client.get("/api/v1/emails/templates", params={"category": "workshop"})
     assert resp.status_code == 200
     body = resp.json()
     assert len(body) == 1
     assert body[0]["id"] == str(AUTOMATION_TEMPLATE_ID)
-    assert body[0]["category"] == "workshop_automation"
+    assert body[0]["category"] == "workshop"
 
 
 # ── Create ───────────────────────────────────────────────────────────────────
@@ -130,12 +130,12 @@ def test_create_template_succeeds(make_client):
     client = make_client("super_admin")
     resp = client.post(
         "/api/v1/emails/templates",
-        json={"category": "broadcast", "name": "New Template", "subject": "Hi", "body_json": SAMPLE_BODY},
+        json={"category": "general", "name": "New Template", "subject": "Hi", "body_json": SAMPLE_BODY},
     )
     assert resp.status_code == 201
     body = resp.json()
     assert body["name"] == "New Template"
-    assert body["category"] == "broadcast"
+    assert body["category"] == "general"
     assert body["body_json"] == SAMPLE_BODY
 
 
@@ -183,17 +183,17 @@ def test_patch_category_field_is_ignored_and_category_stays_immutable(make_clien
     client = make_client("super_admin")
     resp = client.patch(
         f"/api/v1/emails/templates/{BROADCAST_TEMPLATE_ID}",
-        json={"category": "workshop_automation", "name": "Still Broadcast"},
+        json={"category": "workshop", "name": "Still Broadcast"},
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["category"] == "broadcast"
+    assert body["category"] == "general"
     assert body["name"] == "Still Broadcast"
 
     db = client._session_local()
     try:
         template = db.get(EmailTemplate, BROADCAST_TEMPLATE_ID)
-        assert template.category == "broadcast"
+        assert template.category == "general"
     finally:
         db.close()
 
