@@ -35,23 +35,31 @@ Concurrency
 Prod runs multiple worker processes (uvicorn WEB_CONCURRENCY>1, plus ECS
 autoscaling), each booting its own in-process scheduler, so this job can fire
 concurrently across processes. Exactly-once sending per (automation, mapping)
-is enforced by a `SELECT ... FOR UPDATE SKIP LOCKED` claim on the mapping row
-in `_process_due_mapping`, followed by a ledger-absence re-check: the first
-process to claim a mapping holds the lock through its whole recipient batch
-and inserts the ledger row before committing; a concurrent process's SKIP
-LOCKED returns nothing (row locked) or, once the first commits, finds the
-ledger row already present — either way it skips. (SQLite ignores FOR UPDATE,
-fine for the single-connection test fixtures.) A crash mid-batch, before the
-ledger insert commits, can still cause a partial duplicate on the next run —
-accepted documented edge case, not worth distributed-transaction machinery.
+is enforced by claim-before-send: `_process_due_mapping` inserts the ledger
+row and COMMITS it before the first email goes out, letting the
+`uq_automation_send_ledger` unique constraint arbitrate. The loser of a race
+gets an `IntegrityError` on that commit, rolls back, and skips.
+
+A row lock cannot do this job here: `send_email` commits its own
+`EmailSendLog` row on the same session per recipient, which would release any
+`SELECT ... FOR UPDATE` lock taken by this module after the very first
+recipient and let a concurrent worker re-send the rest of the batch.
+
+The trade-off is that a crash mid-batch leaves the claim committed, so the
+remaining recipients are never retried. That is deliberate: a partial miss
+beats duplicate mail to schools. The one claim we *do* release is a batch
+where every single send raised (see `_release_claim`) — that is a transient
+provider failure, not progress, so the next run retries it.
 """
 
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config import settings
@@ -154,34 +162,43 @@ def _run_one_automation(db: Session, automation: EmailAutomation, sandbox_enable
     )
 
 
+def _claim_mapping(db: Session, automation_id: uuid.UUID, mapping_id: uuid.UUID) -> bool:
+    """Take the (automation, mapping) claim by committing its ledger row.
+
+    Returns False when another worker got there first — the
+    `uq_automation_send_ledger` unique constraint turns the concurrent insert
+    into an `IntegrityError`, which is the whole arbitration mechanism (see
+    module docstring on why a row lock cannot be used here)."""
+    db.add(AutomationSendLedger(automation_id=automation_id, portal_mapping_id=mapping_id))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.info("automation %s: mapping %s already claimed, skipping", automation_id, mapping_id)
+        return False
+    return True
+
+
+def _release_claim(db: Session, automation_id: uuid.UUID, mapping_id: uuid.UUID) -> None:
+    """Undo a claim whose batch delivered nothing, so the next run retries it."""
+    db.execute(
+        delete(AutomationSendLedger).where(
+            AutomationSendLedger.automation_id == automation_id,
+            AutomationSendLedger.portal_mapping_id == mapping_id,
+        )
+    )
+    db.commit()
+
+
 def _process_due_mapping(
     db: Session, automation: EmailAutomation, mapping: PortalMapping, sandbox_enabled: bool
 ) -> int:
-    """Send `automation` to every opted-in contact of `mapping.school_id`,
-    then record the (automation, mapping) pair in the ledger — only after the
-    full recipient batch is attempted, so a partial batch never gets falsely
-    marked done.
+    """Send `automation` to every opted-in contact of `mapping.school_id`.
 
-    Claims the mapping with a row lock first (see module docstring): if
-    another worker process already holds it, or the ledger row was inserted
-    since the outer query read it, skip without sending."""
-    claimed = db.execute(
-        select(PortalMapping.id).where(PortalMapping.id == mapping.id).with_for_update(skip_locked=True)
-    ).first()
-    if claimed is None:
-        logger.info("automation %s: mapping %s locked by another worker, skipping", automation.id, mapping.id)
-        return 0
-
-    already_sent = db.scalar(
-        select(AutomationSendLedger.id).where(
-            AutomationSendLedger.automation_id == automation.id,
-            AutomationSendLedger.portal_mapping_id == mapping.id,
-        )
-    )
-    if already_sent is not None:
-        logger.info("automation %s: mapping %s already in ledger, skipping", automation.id, mapping.id)
-        return 0
-
+    Everything that can disqualify the batch (missing webinar/school/workshop,
+    unconfigured template, no eligible recipients) is resolved BEFORE the
+    ledger claim, so those skips leave no row behind and are retried on the
+    next run while the mapping stays inside its due window."""
     webinar = db.get(Webinar, mapping.webinar_id)
     school = db.get(School, mapping.school_id)
     if webinar is None or school is None:
@@ -214,6 +231,19 @@ def _process_due_mapping(
             )
         ).all()
     )
+    if not recipients:
+        # Nobody eligible yet (no contacts imported, or none opted in). Leave
+        # no ledger row so a contact added later still gets the email, as long
+        # as the mapping is still inside its due window.
+        logger.info(
+            "automation %s: no opted-in recipients for school %s, skipping (will retry)",
+            automation.id,
+            school.id,
+        )
+        return 0
+
+    if not _claim_mapping(db, automation.id, mapping.id):
+        return 0
 
     base_counselor_first, base_counselor_last, base_counselor_name = resolve_counselor_name(
         db, school.id
@@ -280,6 +310,14 @@ def _process_due_mapping(
                 "automation %s: send failed for contact %s (workshop %s)", automation.id, contact.id, workshop.id
             )
 
-    db.add(AutomationSendLedger(automation_id=automation.id, portal_mapping_id=mapping.id))
-    db.commit()
+    if sent == 0:
+        # Every recipient raised — a transient provider/network failure rather
+        # than real progress. Drop the claim so the next run retries the batch.
+        logger.warning(
+            "automation %s: all %d sends failed for mapping %s, releasing claim for retry",
+            automation.id,
+            len(recipients),
+            mapping.id,
+        )
+        _release_claim(db, automation.id, mapping.id)
     return sent
