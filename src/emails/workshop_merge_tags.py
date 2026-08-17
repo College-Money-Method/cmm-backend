@@ -20,6 +20,8 @@ import unicodedata
 import uuid
 from datetime import datetime
 
+from src.emails.school_links import resource_center_url
+
 
 def _slugify(text: str) -> str:
     """Mirrors ``app/lib/content-headings.ts::slugify`` exactly:
@@ -100,7 +102,6 @@ def build_workshop_merge_replacements(
     start_datetime: datetime | None,
     suggested_grades: str | None,
     cycle_name: str | None,
-    resource_center_url: str | None = None,
     resource_center_password: str | None = None,
     registration_url: str | None = None,
     resources: list[dict] | None = None,
@@ -138,7 +139,7 @@ def build_workshop_merge_replacements(
         "counselor_name": counselor_name,
         "counselor_first_name": counselor_first_name,
         "counselor_last_name": counselor_last_name,
-        "resource_center_url": resource_center_url or "",
+        "resource_center_url": resource_center_url(resolved_origin, school_slug),
         "resource_center_password": resource_center_password or "",
         "workshop_name": workshop_name,
         "date": _format_date(start_datetime),
