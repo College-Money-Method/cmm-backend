@@ -98,7 +98,6 @@ def build_preview_context(
         counselor_first_name=counselor_first,
         counselor_last_name=counselor_last,
         school_slug=school.slug,
-        resource_center_url=school.school_resource_center_url,
         resource_center_password=school.cmm_website_password,
         workshop_name=workshop.name,
         webinar_id=webinar.id,

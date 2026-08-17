@@ -17,6 +17,7 @@ from src.db.deps import get_db
 from src.emails.broadcast_models import Broadcast
 from src.emails.counselor_resolver import contact_is_school_counselor, resolve_counselor_name
 from src.emails.renderer import render_email
+from src.emails.school_links import resource_center_url
 from src.emails.ses_client import _sandbox_enabled, send_email
 from src.emails.unsubscribe import build_unsubscribe_url
 from src.schools.models import Contact, School
@@ -48,8 +49,11 @@ def build_merge_tag_replacements(school: School | None) -> dict[str, str]:
     original key (the full name) for backward compatibility with existing
     templates.
     """
+    # Imported lazily so tests can monkeypatch `settings.app_public_url` freely
+    # without import-order surprises (same reason as renderer.py).
+    from src.config import settings
+
     school_name = school.name if school else ""
-    resource_center_url = (school.school_resource_center_url if school else None) or ""
     resource_center_password = (school.cmm_website_password if school else None) or ""
     nickname = school.nickname if school else None
     family_label = nickname or (f"{school_name} families" if school_name else "families")
@@ -60,7 +64,9 @@ def build_merge_tag_replacements(school: School | None) -> dict[str, str]:
         "counselor_first_name": "",
         "counselor_last_name": "",
         "family_label": family_label,
-        "resource_center_url": resource_center_url,
+        "resource_center_url": resource_center_url(
+            settings.app_public_url, school.slug if school else None
+        ),
         "resource_center_password": resource_center_password,
     }
 
