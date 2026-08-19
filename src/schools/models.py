@@ -147,7 +147,11 @@ class Contact(Base):
     role: Mapped[str | None] = mapped_column(Text)
     magic_link: Mapped[str | None] = mapped_column(Text)
     receive_comms: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    # Two independent opt-ins, both self-managed by the counselor on the Hub Team
+    # page: `auto_emails` governs scheduler-driven workshop automations,
+    # `broadcast_emails` governs one-off admin broadcasts. Neither implies the other.
     auto_emails: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    broadcast_emails: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     softr_access: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # Set when a contact is removed entirely from Airtable (soft-deactivation).
     # Row is kept so the provisioned auth account can be reconciled/revoked.

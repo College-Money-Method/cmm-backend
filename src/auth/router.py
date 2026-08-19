@@ -31,6 +31,7 @@ from supabase import create_client
 from src.config import settings
 from src.db.client import get_supabase
 from src.db.deps import DbDep
+from src.emails.email_preferences import sync_unsubscribe_suppression
 from src.schools.models import Contact, School
 
 router = APIRouter(tags=["auth"])
@@ -118,8 +119,9 @@ def _contact_out_from_role(
         school_role=role_record.school_role or None,
         # No Contact row available here (see docstring) — a brand-new contact
         # can't have opted in yet, so default False. Subsequent GETs go through
-        # `_contact_out`, which reads the real value.
+        # `_contact_out`, which reads the real values.
         auto_emails=False,
+        broadcast_emails=False,
     )
 
 
@@ -149,6 +151,7 @@ def _contact_out(
         school_role=contact.role,
         auth_email=auth_email,
         auto_emails=contact.auto_emails,
+        broadcast_emails=contact.broadcast_emails,
     )
 
 
@@ -612,17 +615,16 @@ def update_contact(
             # Counselors/viewers may only update the title of teammates.
             if body.title is not None:
                 update_data["title"] = body.title
-        # Self-edit: any hub user may toggle their OWN auto_emails opt-in,
-        # regardless of role. Additive to the role-based branches above and
-        # scoped strictly to this one field — checked against `user.user_id`
-        # (self), not the broader same-school check used elsewhere in this
-        # branch, so it can never be used to edit another teammate's fields.
-        if (
-            contact.user_id is not None
-            and contact.user_id == user.user_id
-            and body.auto_emails is not None
-        ):
-            update_data["auto_emails"] = body.auto_emails
+        # Self-edit: any hub user may toggle their OWN email opt-ins, regardless
+        # of role. Additive to the role-based branches above and scoped strictly
+        # to these two fields — checked against `user.user_id` (self), not the
+        # broader same-school check used elsewhere in this branch, so it can
+        # never be used to edit another teammate's fields.
+        if contact.user_id is not None and contact.user_id == user.user_id:
+            if body.auto_emails is not None:
+                update_data["auto_emails"] = body.auto_emails
+            if body.broadcast_emails is not None:
+                update_data["broadcast_emails"] = body.broadcast_emails
 
     if "school_id" in update_data and update_data["school_id"] is not None:
         school = db.query(School).filter(School.id == update_data["school_id"]).first()
@@ -638,6 +640,13 @@ def update_contact(
         contact.school_id = update_data["school_id"]
     if "auto_emails" in update_data:
         contact.auto_emails = update_data["auto_emails"]
+    if "broadcast_emails" in update_data:
+        contact.broadcast_emails = update_data["broadcast_emails"]
+    if "auto_emails" in update_data or "broadcast_emails" in update_data:
+        # An `EmailSuppression` row blocks every send whatever the opt-ins say,
+        # so opting back in here has to lift an earlier unsubscribe — otherwise
+        # the contact keeps receiving nothing while the Hub shows them opted in.
+        sync_unsubscribe_suppression(db, contact)
 
     # Login-backed fields (role/title) live on the UserRole; mirror name to Supabase
     # + the profiles table. Hub permission (role) is decoupled from the school_role label.

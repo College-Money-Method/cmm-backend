@@ -46,9 +46,12 @@ class ContactUpdate(BaseModel):
     school_id: uuid.UUID | None = None
     role: Literal["hub_admin", "hub_user", "viewer"] | None = None
     title: str | None = None
-    # Self-service opt-in to automated emails (Phase 2) — any hub user may
-    # toggle this on their OWN contact row, independent of their access role.
+    # Self-service email opt-ins — any hub user may toggle these on their OWN
+    # contact row, independent of their access role. The two are independent:
+    # `auto_emails` covers scheduler-driven workshop updates, `broadcast_emails`
+    # covers one-off program announcements.
     auto_emails: bool | None = None
+    broadcast_emails: bool | None = None
 
 
 class ContactOut(BaseModel):
@@ -73,10 +76,11 @@ class ContactOut(BaseModel):
     # contacts.email but never auth.users.email, so login keeps using the old
     # address. The detail UI surfaces the mismatch + a "match auth email" action.
     auth_email: str | None = None
-    # Whether this contact has opted in to receiving automated emails (Phase 2).
-    # Defaults False on rows built from a bare role record (no Contact object,
-    # e.g. right after create-contact) — see `_contact_out_from_role`.
+    # The two email opt-ins. Default False on rows built from a bare role record
+    # (no Contact object, e.g. right after create-contact) — see
+    # `_contact_out_from_role`.
     auto_emails: bool = False
+    broadcast_emails: bool = False
 
 
 class ContactListResponse(BaseModel):

@@ -50,6 +50,10 @@ class EmailAutomation(Base):
     )
     # Optional override of the resolved template's subject line.
     subject_override: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # From identity for this automation's sends. NULL falls back to
+    # settings.ses_from_email — see emails/sender.py.
+    sender_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sender_email: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True, onupdate=func.now())
 

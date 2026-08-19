@@ -15,21 +15,33 @@ OptInFilter = Literal["opted_in", "all"]
 class BroadcastCreate(BaseModel):
     subject: str = Field(min_length=1)
     body_json: dict
-    # "all_customers" or a school_id (uuid) string — validated against real
-    # schools at send/preview time, not here (a stale/forged id just matches
-    # nothing once resolve_audience's customer-school restriction applies).
-    school_scope: str = Field(min_length=1)
+    # Targeted school / cohort ids. Both empty = every customer school; otherwise
+    # the union of the two. Ids are validated against real schools at
+    # send/preview time, not here (a stale/forged id just matches nothing once
+    # resolve_audience's customer-school restriction applies).
+    school_ids: list[str] = Field(default_factory=list)
+    cohort_ids: list[str] = Field(default_factory=list)
     role_filter: RoleFilter = "all"
     opt_in_filter: OptInFilter = "opted_in"
+    # From identity. Blank = the configured default; the domain is validated
+    # against the sending allowlist in the router (see emails/sender.py).
+    sender_name: str | None = None
+    sender_email: str | None = None
+    # True = one email per school addressed to all of that school's recipients.
+    group_by_school: bool = False
 
 
 class BroadcastOut(BaseModel):
     id: uuid.UUID
     subject: str
     body_json: dict
-    school_scope: str
+    school_ids: list[str]
+    cohort_ids: list[str]
     role_filter: str
     opt_in_filter: str
+    sender_name: str | None = None
+    sender_email: str | None = None
+    group_by_school: bool = False
     created_by: uuid.UUID
     created_at: datetime
     status: str
@@ -64,6 +76,19 @@ class AudienceContactRow(BaseModel):
     email: str
     school_name: str | None = None
     opted_in: bool
+
+
+class SenderOptionOut(BaseModel):
+    """One preset offered by the compose UI's From picker. Presets are
+    suggestions — any address on an allowed domain may be typed instead."""
+
+    name: str
+    email: str
+
+
+class SenderOptionsOut(BaseModel):
+    presets: list[SenderOptionOut]
+    allowed_domains: list[str]
 
 
 class SendBroadcastRequest(BaseModel):

@@ -68,7 +68,7 @@ def build_preview_context(
     contact = _load_contact(db, contact_id)
 
     if category == "general":
-        return PreviewContext(_merge_tags_for(db, contact, school), school.slug)
+        return PreviewContext(_merge_tags_for(db, [contact] if contact else [], school), school.slug)
 
     # workshop
     if webinar_id is None:

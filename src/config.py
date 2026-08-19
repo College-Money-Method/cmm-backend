@@ -116,6 +116,19 @@ class Settings(BaseSettings):
     # object at send time, unlike interactive routes) e.g. "https://next.collegemoneymethod.com".
     app_public_url: str = ""
     ses_from_email: str = "noreply@collegemoneymethod.com"
+    # Display name paired with ses_from_email when a send picks no sender of its own.
+    ses_from_name: str = "College Money Method"
+    # Presets the broadcast/automation compose UI offers, comma-separated
+    # "Name <email>" entries. Suggestions only — ses_allowed_sender_domains is
+    # the actual guard (see src/emails/sender.py).
+    ses_sender_options: str = (
+        "College Money Method <noreply@collegemoneymethod.com>,"
+        "CMM Newsflash <newsflash@collegemoneymethod.com>,"
+        "Paul Martin <paul.martin@collegemoneymethod.com>"
+    )
+    # Domains the app may send as. An address outside these is rejected at save
+    # time rather than failing per-recipient at SES (unverified identity).
+    ses_allowed_sender_domains: str = "collegemoneymethod.com"
     # NOTE: outbound email is always attempted. The only safety guard is the
     # runtime "email sandbox mode" flag stored on the global app config
     # (AppConfig.email_sandbox_mode) — see src/emails/ses_client.py. When on,
