@@ -70,6 +70,7 @@ from src.emails.counselor_resolver import contact_is_school_counselor, resolve_c
 from src.emails.email_template_models import EmailTemplate
 from src.emails.link_resolver import resolve_plain_text
 from src.emails.renderer import render_email
+from src.emails.sender import format_from_header
 from src.emails.ses_client import _sandbox_enabled, send_email
 from src.emails.unsubscribe import build_unsubscribe_url
 from src.emails.workshop_merge_tags import build_workshop_merge_replacements
@@ -253,6 +254,7 @@ def _process_due_mapping(
     subject = automation.subject_override or template.subject
     origin = settings.app_public_url or None
     source = _SOURCE_BY_TYPE.get(automation.type, "pre_workshop")
+    from_address = format_from_header(automation.sender_name, automation.sender_email)
 
     sent = 0
     for contact in recipients:
@@ -302,6 +304,7 @@ def _process_due_mapping(
                 unsubscribe_url=unsubscribe_url,
                 automation_id=automation.id,
                 sandbox_enabled=sandbox_enabled,
+                from_address=from_address,
             )
             sent += 1
         except Exception:  # noqa: BLE001 - one recipient failure must not abort the batch

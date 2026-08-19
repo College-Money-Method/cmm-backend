@@ -1,7 +1,7 @@
 """Broadcast (one-off admin email) endpoints — super_admin ONLY.
 
-NOTE: All static paths (/audience-preview) must be declared BEFORE
-parameterized paths (/{broadcast_id}) — Starlette matches in order (same
+NOTE: All static paths (/audience-preview, /sender-options) must be declared
+BEFORE parameterized paths (/{broadcast_id}) — Starlette matches in order (same
 convention as ``communications/router.py``).
 """
 
@@ -28,10 +28,13 @@ from src.emails.broadcast_schemas import (
     EmailEngagementOut,
     RecipientStatusRow,
     SendBroadcastRequest,
+    SenderOptionOut,
+    SenderOptionsOut,
     SendTestResultOut,
 )
 from src.emails.broadcast_send import send_broadcast_batch, send_test
 from src.emails.models import EmailSendLog
+from src.emails.sender import InvalidSenderError, allowed_sender_domains, sender_presets, validate_sender
 from src.schools.models import Contact
 
 router = APIRouter(prefix="/api/v1/emails/broadcasts", tags=["emails"])
@@ -42,9 +45,13 @@ def _broadcast_out(broadcast: Broadcast) -> BroadcastOut:
         id=broadcast.id,
         subject=broadcast.subject,
         body_json=json.loads(broadcast.body_json),
-        school_scope=broadcast.school_scope,
+        school_ids=broadcast.school_id_list,
+        cohort_ids=broadcast.cohort_id_list,
         role_filter=broadcast.role_filter,
         opt_in_filter=broadcast.opt_in_filter,
+        sender_name=broadcast.sender_name,
+        sender_email=broadcast.sender_email,
+        group_by_school=broadcast.group_by_school,
         created_by=broadcast.created_by,
         created_at=broadcast.created_at,
         status=broadcast.status,
@@ -58,23 +65,34 @@ def _get_broadcast_or_404(db: Session, broadcast_id: uuid.UUID) -> Broadcast:
     return broadcast
 
 
+@router.get("/sender-options", response_model=SenderOptionsOut)
+def get_sender_options(_admin: AdminDep) -> SenderOptionsOut:
+    """From-address presets for the compose UI, plus the domains a custom
+    address may use (the actual server-side guard)."""
+    return SenderOptionsOut(
+        presets=[SenderOptionOut(**p) for p in sender_presets()],
+        allowed_domains=allowed_sender_domains(),
+    )
+
+
 @router.get("/audience-preview", response_model=AudiencePreviewOut)
 def preview_audience(
     _admin: AdminDep,
     db: DbDep,
-    school_scope: str = Query(...),
+    school_ids: list[str] = Query(default_factory=list),
+    cohort_ids: list[str] = Query(default_factory=list),
     role_filter: str = Query("all"),
     opt_in_filter: str = Query("opted_in"),
 ) -> AudiencePreviewOut:
     """Live matched-count preview for the compose UI's audience selector.
 
     Always reports how many of the matched contacts are NOT opted in
-    (``auto_emails is False``), even when ``opt_in_filter="opted_in"`` already
-    excludes them, so the UI can warn the admin BEFORE they switch the filter
-    to "all" and reach those contacts.
+    (``broadcast_emails is False``), even when ``opt_in_filter="opted_in"``
+    already excludes them, so the UI can warn the admin BEFORE they switch the
+    filter to "all" and reach those contacts.
     """
-    matched = resolve_audience(db, school_scope, role_filter, opt_in_filter)
-    non_opted_in = sum(1 for c in matched if not c.auto_emails)
+    matched = resolve_audience(db, school_ids, cohort_ids, role_filter, opt_in_filter)
+    non_opted_in = sum(1 for c in matched if not c.broadcast_emails)
     return AudiencePreviewOut(
         matched_count=len(matched),
         non_opted_in_count=non_opted_in,
@@ -86,21 +104,22 @@ def preview_audience(
 def preview_audience_contacts(
     _admin: AdminDep,
     db: DbDep,
-    school_scope: str = Query(...),
+    school_ids: list[str] = Query(default_factory=list),
+    cohort_ids: list[str] = Query(default_factory=list),
     role_filter: str = Query("all"),
     opt_in_filter: str = Query("opted_in"),
 ) -> list[AudienceContactRow]:
     """Full resolved recipient list for the editable recipient-list preview, so
     the admin can review exactly who will receive the broadcast (and deselect or
     search-add contacts) before sending."""
-    matched = resolve_audience(db, school_scope, role_filter, opt_in_filter)
+    matched = resolve_audience(db, school_ids, cohort_ids, role_filter, opt_in_filter)
     return [
         AudienceContactRow(
             id=c.id,
             full_name=c.full_name or "",
             email=c.email or "",
             school_name=c.school.name if c.school else None,
-            opted_in=c.auto_emails,
+            opted_in=c.broadcast_emails,
         )
         for c in matched
     ]
@@ -108,12 +127,23 @@ def preview_audience_contacts(
 
 @router.post("", response_model=BroadcastOut, status_code=status.HTTP_201_CREATED)
 def create_broadcast(payload: BroadcastCreate, admin: AdminDep, db: DbDep) -> BroadcastOut:
+    # Reject an unsendable From at save time: SES would reject an unverified
+    # identity per recipient at send time, which is far harder to act on.
+    try:
+        sender_name, sender_email = validate_sender(payload.sender_name, payload.sender_email)
+    except InvalidSenderError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     broadcast = Broadcast(
         subject=payload.subject,
         body_json=json.dumps(payload.body_json),
-        school_scope=payload.school_scope,
+        school_ids=json.dumps(payload.school_ids),
+        cohort_ids=json.dumps(payload.cohort_ids),
         role_filter=payload.role_filter,
         opt_in_filter=payload.opt_in_filter,
+        sender_name=sender_name,
+        sender_email=sender_email,
+        group_by_school=payload.group_by_school,
         created_by=admin.user_id,
         status="draft",
     )
@@ -217,7 +247,11 @@ def send_broadcast(
         contacts = resolve_contacts_by_ids(db, payload.recipient_contact_ids)
     else:
         contacts = resolve_audience(
-            db, broadcast.school_scope, broadcast.role_filter, broadcast.opt_in_filter
+            db,
+            broadcast.school_id_list,
+            broadcast.cohort_id_list,
+            broadcast.role_filter,
+            broadcast.opt_in_filter,
         )
     contact_ids = [c.id for c in contacts]
 
@@ -248,7 +282,11 @@ def send_test_broadcast(broadcast_id: uuid.UUID, admin: AdminDep, db: DbDep) -> 
             detail="No email address on file for the current admin — cannot send a test",
         )
     audience = resolve_audience(
-        db, broadcast.school_scope, broadcast.role_filter, broadcast.opt_in_filter
+        db,
+        broadcast.school_id_list,
+        broadcast.cohort_id_list,
+        broadcast.role_filter,
+        broadcast.opt_in_filter,
     )
     sample = audience[0] if audience else None
     send_test(db, broadcast, sample, override_to=admin.email)

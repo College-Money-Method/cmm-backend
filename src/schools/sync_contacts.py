@@ -123,9 +123,9 @@ def sync_contacts_from_airtable(db: Session) -> dict:
             "email": effective_email,
             "role": cfields.get("Role") or None,
             "receive_comms": parse_bool(cfields.get("Receive Comms")),
-            # auto_emails intentionally excluded: Phase 2 makes it a counselor
-            # self-service opt-in (see auth/router.py update_contact); Airtable
-            # must never overwrite what the counselor themselves chose.
+            # auto_emails/broadcast_emails intentionally excluded: both are
+            # counselor self-service opt-ins (see auth/router.py update_contact);
+            # Airtable must never overwrite what the counselor themselves chose.
             "softr_access": parse_bool(cfields.get("Softr Access")),
         }
 

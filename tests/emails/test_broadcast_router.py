@@ -49,6 +49,21 @@ NON_CUSTOMER_SCHOOL_ID = uuid.UUID("acacacac-acac-acac-acac-acacacacacac")
 NON_CUSTOMER_CONTACT_ID = uuid.UUID("adadadad-adad-adad-adad-adadadadadad")
 
 SIMPLE_DOC = {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Hi {{school_name}}"}]}]}
+# Body merge tags are `mergeTag` nodes (chips), not raw "{{tag}}" text — only
+# the subject line is a plain string (see link_resolver.resolve_merge_tag).
+GREETING_DOC = {
+    "type": "doc",
+    "content": [
+        {
+            "type": "paragraph",
+            "content": [
+                {"type": "text", "text": "Hi "},
+                {"type": "mergeTag", "attrs": {"tag": "recipient_first_names"}},
+                {"type": "text", "text": ","},
+            ],
+        }
+    ],
+}
 
 
 @pytest.fixture
@@ -80,7 +95,7 @@ def make_client(monkeypatch):
                 first_name="Admin",
                 last_name="Person",
                 role="hub_admin",
-                auto_emails=True,
+                broadcast_emails=True,
             )
         )
         for cid, email in (
@@ -90,7 +105,7 @@ def make_client(monkeypatch):
         ):
             seed.add(
                 Contact(
-                    id=cid, school_id=SCHOOL_ID, email=email, role="hub_user", auto_emails=True
+                    id=cid, school_id=SCHOOL_ID, email=email, role="hub_user", broadcast_emails=True
                 )
             )
         seed.add(
@@ -99,7 +114,7 @@ def make_client(monkeypatch):
                 school_id=SCHOOL_ID,
                 email="nooptin@example.com",
                 role="hub_user",
-                auto_emails=False,
+                broadcast_emails=False,
             )
         )
         seed.add(School(id=NON_CUSTOMER_SCHOOL_ID, name="Prospect School", is_current_customer=False))
@@ -109,7 +124,7 @@ def make_client(monkeypatch):
                 school_id=NON_CUSTOMER_SCHOOL_ID,
                 email="prospect@example.com",
                 role="hub_user",
-                auto_emails=True,
+                broadcast_emails=True,
             )
         )
         seed.commit()
@@ -148,7 +163,7 @@ def _create_broadcast(client: TestClient) -> dict:
         json={
             "subject": "Hello {{school_name}}",
             "body_json": SIMPLE_DOC,
-            "school_scope": str(SCHOOL_ID),
+            "school_ids": [str(SCHOOL_ID)],
             "role_filter": "all",
             "opt_in_filter": "opted_in",
         },
@@ -165,7 +180,7 @@ def test_non_super_admin_cannot_create_broadcast(make_client, role: str):
     client = make_client(role)
     resp = client.post(
         "/api/v1/emails/broadcasts",
-        json={"subject": "x", "body_json": SIMPLE_DOC, "school_scope": "all_customers"},
+        json={"subject": "x", "body_json": SIMPLE_DOC, "school_ids": []},
     )
     assert resp.status_code == 403
 
@@ -191,7 +206,7 @@ def test_audience_preview_reports_matched_count(make_client):
     client = make_client("super_admin")
     resp = client.get(
         "/api/v1/emails/broadcasts/audience-preview",
-        params={"school_scope": str(SCHOOL_ID), "role_filter": "all", "opt_in_filter": "opted_in"},
+        params={"school_ids": [str(SCHOOL_ID)], "role_filter": "all", "opt_in_filter": "opted_in"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -206,7 +221,7 @@ def test_audience_preview_contacts_returns_resolved_rows(make_client):
     client = make_client("super_admin")
     resp = client.get(
         "/api/v1/emails/broadcasts/audience-preview/contacts",
-        params={"school_scope": str(SCHOOL_ID), "role_filter": "all", "opt_in_filter": "opted_in"},
+        params={"school_ids": [str(SCHOOL_ID)], "role_filter": "all", "opt_in_filter": "opted_in"},
     )
     assert resp.status_code == 200, resp.text
     rows = resp.json()
@@ -220,7 +235,7 @@ def test_audience_preview_contacts_includes_non_opted_in_when_filter_all(make_cl
     client = make_client("super_admin")
     resp = client.get(
         "/api/v1/emails/broadcasts/audience-preview/contacts",
-        params={"school_scope": str(SCHOOL_ID), "role_filter": "all", "opt_in_filter": "all"},
+        params={"school_ids": [str(SCHOOL_ID)], "role_filter": "all", "opt_in_filter": "all"},
     )
     assert resp.status_code == 200, resp.text
     rows = resp.json()
@@ -233,7 +248,7 @@ def test_non_super_admin_cannot_preview_audience_contacts(make_client, role: str
     client = make_client(role)
     resp = client.get(
         "/api/v1/emails/broadcasts/audience-preview/contacts",
-        params={"school_scope": str(SCHOOL_ID)},
+        params={"school_ids": [str(SCHOOL_ID)]},
     )
     assert resp.status_code == 403
 
@@ -449,3 +464,184 @@ def test_get_unknown_broadcast_returns_404(make_client):
     client = make_client("super_admin")
     resp = client.get(f"/api/v1/emails/broadcasts/{uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+# ── Sender identity ──────────────────────────────────────────────────────────
+
+
+def test_create_broadcast_rejects_sender_outside_allowed_domains(make_client):
+    """SES would reject an unverified identity per recipient at send time — the
+    400 here turns that into one actionable error at save time."""
+    client = make_client("super_admin")
+    resp = client.post(
+        "/api/v1/emails/broadcasts",
+        json={
+            "subject": "x",
+            "body_json": SIMPLE_DOC,
+            "school_ids": [],
+            "sender_name": "Someone Else",
+            "sender_email": "spoof@evil.example",
+        },
+    )
+    assert resp.status_code == 400
+    assert "collegemoneymethod.com" in resp.json()["detail"]
+
+
+def test_create_broadcast_stores_allowed_custom_sender(make_client):
+    client = make_client("super_admin")
+    resp = client.post(
+        "/api/v1/emails/broadcasts",
+        json={
+            "subject": "x",
+            "body_json": SIMPLE_DOC,
+            "school_ids": [],
+            "sender_name": "CMM Newsflash",
+            "sender_email": "newsflash@collegemoneymethod.com",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["sender_name"] == "CMM Newsflash"
+    assert body["sender_email"] == "newsflash@collegemoneymethod.com"
+
+
+def test_sender_options_lists_presets_and_allowed_domains(make_client):
+    client = make_client("super_admin")
+    resp = client.get("/api/v1/emails/broadcasts/sender-options")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["allowed_domains"] == ["collegemoneymethod.com"]
+    assert any(p["email"] == "newsflash@collegemoneymethod.com" for p in body["presets"])
+
+
+@pytest.mark.parametrize("role", ["hub_admin", "hub_user", "viewer"])
+def test_non_super_admin_cannot_read_sender_options(make_client, role: str):
+    client = make_client(role)
+    assert client.get("/api/v1/emails/broadcasts/sender-options").status_code == 403
+
+
+# ── Grouped send (one email per school) ──────────────────────────────────────
+
+
+def _create_grouped_broadcast(client: TestClient) -> dict:
+    resp = client.post(
+        "/api/v1/emails/broadcasts",
+        json={
+            "subject": "Hello {{school_name}}",
+            "body_json": GREETING_DOC,
+            "school_ids": [str(SCHOOL_ID)],
+            "group_by_school": True,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+def test_grouped_send_logs_one_row_per_recipient_of_the_single_email(make_client):
+    """One email goes out, but each addressee still gets its own log row —
+    status counts, the recipient table and open rates all read a row as one
+    person, so collapsing them would undercount the send's reach."""
+    client = make_client("super_admin")
+    broadcast = _create_grouped_broadcast(client)
+
+    resp = client.post(f"/api/v1/emails/broadcasts/{broadcast['id']}/send")
+    assert resp.status_code == 202
+    # The audience is still 4 contacts — they just collapse into one email.
+    assert resp.json()["recipient_count"] == "4"
+
+    db = client._session_local()
+    try:
+        logs = (
+            db.query(EmailSendLog)
+            .filter(EmailSendLog.broadcast_id == uuid.UUID(broadcast["id"]))
+            .all()
+        )
+        assert {log.recipient_email for log in logs} == {
+            "admin@example.com",
+            "family1@example.com",
+            "family2@example.com",
+            "family3@example.com",
+        }
+        assert len(logs) == 4
+    finally:
+        db.close()
+
+
+def test_grouped_send_detail_counts_every_recipient(make_client):
+    """The admin-facing summary must report 4 recipients, not 1 email."""
+    client = make_client("super_admin")
+    broadcast = _create_grouped_broadcast(client)
+    client.post(f"/api/v1/emails/broadcasts/{broadcast['id']}/send")
+
+    detail = client.get(f"/api/v1/emails/broadcasts/{broadcast['id']}").json()
+    assert detail["sandboxed_count"] == 4
+    assert len(detail["recipients"]) == 4
+    # Each row names exactly one person — never a comma-joined list.
+    assert all("," not in r["recipient_email"] for r in detail["recipients"])
+
+
+def test_grouped_send_renders_every_recipient_first_name(make_client):
+    client = make_client("super_admin")
+    # Give each recipient a first name so the joined greeting is observable.
+    db = client._session_local()
+    try:
+        for cid, first in (
+            (FAMILY_CONTACT_1_ID, "Paul"),
+            (FAMILY_CONTACT_2_ID, "Caroline"),
+            (FAMILY_CONTACT_3_ID, "Vu"),
+        ):
+            db.query(Contact).filter(Contact.id == cid).first().first_name = first
+        db.query(Contact).filter(Contact.id == ADMIN_CONTACT_ID).first().broadcast_emails = False
+        db.commit()
+    finally:
+        db.close()
+
+    broadcast = _create_grouped_broadcast(client)
+    client.post(f"/api/v1/emails/broadcasts/{broadcast['id']}/send")
+
+    db = client._session_local()
+    try:
+        log = (
+            db.query(EmailSendLog)
+            .filter(EmailSendLog.broadcast_id == uuid.UUID(broadcast["id"]))
+            .first()
+        )
+        assert "Hi Paul, Caroline and Vu," in (log.rendered_html or "")
+    finally:
+        db.close()
+
+
+def test_ungrouped_send_renders_the_single_recipients_first_name(make_client):
+    """The same merge tag reads naturally on a normal, per-contact send."""
+    client = make_client("super_admin")
+    db = client._session_local()
+    try:
+        db.query(Contact).filter(Contact.id == FAMILY_CONTACT_1_ID).first().first_name = "Paul"
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.post(
+        "/api/v1/emails/broadcasts",
+        json={
+            "subject": "Hi",
+            "body_json": GREETING_DOC,
+            "school_ids": [str(SCHOOL_ID)],
+        },
+    )
+    broadcast = resp.json()
+    client.post(
+        f"/api/v1/emails/broadcasts/{broadcast['id']}/send",
+        json={"recipient_contact_ids": [str(FAMILY_CONTACT_1_ID)]},
+    )
+
+    db = client._session_local()
+    try:
+        log = (
+            db.query(EmailSendLog)
+            .filter(EmailSendLog.broadcast_id == uuid.UUID(broadcast["id"]))
+            .first()
+        )
+        assert "Hi Paul," in (log.rendered_html or "")
+    finally:
+        db.close()

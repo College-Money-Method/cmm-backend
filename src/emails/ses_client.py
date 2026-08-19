@@ -81,7 +81,13 @@ def _sandbox_enabled(db: Session) -> bool:
 
 
 def _build_raw_message(
-    to: str, subject: str, html: str, text: str, *, unsubscribe_url: str | None = None
+    recipients: list[str],
+    subject: str,
+    html: str,
+    text: str,
+    *,
+    unsubscribe_url: str | None = None,
+    from_address: str | None = None,
 ) -> bytes:
     """Build a multipart/alternative MIME message.
 
@@ -89,11 +95,15 @@ def _build_raw_message(
     ``List-Unsubscribe`` header can be attached here, one-click, per RFC 8058 —
     every sender (broadcast, and future pre-workshop/followup) gets it for free
     by passing ``unsubscribe_url`` through to ``send_email``.
+
+    ``recipients`` may hold several addresses (a grouped send to every counselor
+    at one school): they all go on a single ``To`` header so the recipients can
+    see each other, which is the point of grouping.
     """
     message = MIMEMultipart("alternative")
     message["Subject"] = subject
-    message["From"] = settings.ses_from_email
-    message["To"] = to
+    message["From"] = from_address or settings.ses_from_email
+    message["To"] = ", ".join(recipients)
     if unsubscribe_url:
         message["List-Unsubscribe"] = f"<{unsubscribe_url}>"
         message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
@@ -132,7 +142,7 @@ def _log_send(
 
 def send_email(
     db: Session,
-    to: str,
+    to: str | list[str],
     subject: str,
     html: str,
     text: str,
@@ -143,17 +153,25 @@ def send_email(
     automation_id: uuid.UUID | None = None,
     unsubscribe_url: str | None = None,
     sandbox_enabled: bool | None = None,
+    from_address: str | None = None,
 ) -> EmailSendLog:
     """Send one email, or log it, depending on suppression / sandbox state.
 
     Checks run in this order, both un-bypassable by any caller:
-      1. Suppression: ``to`` has an active ``EmailSuppression`` row -> log
-         status "suppressed", no network call.
-      2. Sandbox: ``AppConfig.email_sandbox_mode`` is on and ``to`` is outside
-         ``SANDBOX_DOMAIN`` -> log status "sandboxed" with the rendered HTML
-         attached, no boto3 call.
-      3. Otherwise, call SES ``send_raw_email`` through the shared
-         Configuration Set and log "sent" (or "failed" on a boto3 error).
+      1. Suppression: a recipient with an active ``EmailSuppression`` row is
+         dropped and logged with status "suppressed", no network call.
+      2. Sandbox: when ``AppConfig.email_sandbox_mode`` is on, recipients
+         outside ``SANDBOX_DOMAIN`` are dropped and logged with status
+         "sandboxed" (rendered HTML attached), no boto3 call.
+      3. Whoever survives both is sent to via SES ``send_raw_email`` through the
+         shared Configuration Set and logged "sent" (or "failed" on a boto3 error).
+
+    ``to`` may be a list — a grouped broadcast addressing every counselor at one
+    school in a single email. The drops above are evaluated per address, so one
+    unsubscribed counselor no longer blocks the mail to their colleagues, and
+    every address gets its own log row whatever its outcome, keeping the
+    per-broadcast status counts honest. The returned row is the last one of the
+    bucket that got furthest (sent > sandboxed > suppressed).
 
     ``broadcast_id`` (source="broadcast" callers) and ``automation_id``
     (source="pre_workshop"/"post_workshop" callers) link the logged row back
@@ -161,49 +179,81 @@ def send_email(
     exclusive in practice, both accepted here for a single shared log path.
     ``unsubscribe_url``, when given, is attached as a one-click
     ``List-Unsubscribe`` header on the raw message — every sender that resolves
-    a per-recipient unsubscribe link gets CAN-SPAM compliance for free.
+    an unsubscribe link gets CAN-SPAM compliance for free.
 
     ``sandbox_enabled`` lets a batch sender resolve the global flag ONCE per
     batch and pass the decision in, avoiding a per-recipient config query on a
     large fan-out. Left as None (single/ad-hoc sends), the flag is read from the
     DB here.
+
+    ``from_address`` overrides the configured default sender for this one
+    message (already validated + formatted by ``emails.sender``).
     """
-    if _is_suppressed(db, to):
-        logger.info("Skipping send to suppressed recipient (source=%s)", source)
-        return _log_send(
-            db,
-            to=to,
-            subject=subject,
-            status="suppressed",
-            source=source,
-            broadcast_id=broadcast_id,
-            automation_id=automation_id,
-        )
+    recipients = [to] if isinstance(to, str) else [address for address in to if address]
+    if not recipients:
+        raise ValueError("send_email requires at least one recipient")
+
+    def _log(status: str, addresses: list[str], *, rendered_html: str | None = None,
+             provider_message_id: str | None = None) -> EmailSendLog:
+        """Log ONE row per address, even when they shared a single grouped email.
+
+        Every consumer of ``email_send_log`` (per-broadcast status counts, the
+        recipient table, open/click rates) treats a row as one recipient, so a
+        comma-joined row would undercount a grouped send's reach. Rows from the
+        same grouped send share ``provider_message_id`` — SES issues one id for
+        the message, and an open/click event on it can only be attributed to the
+        group, not to an individual.
+        """
+        rows = [
+            _log_send(
+                db,
+                to=address,
+                subject=subject,
+                status=status,
+                source=source,
+                provider_message_id=provider_message_id,
+                rendered_html=rendered_html,
+                broadcast_id=broadcast_id,
+                automation_id=automation_id,
+            )
+            for address in addresses
+        ]
+        return rows[-1]
+
+    suppressed = [address for address in recipients if _is_suppressed(db, address)]
+    remaining = [address for address in recipients if address not in suppressed]
+    last_log: EmailSendLog | None = None
+    if suppressed:
+        logger.info("Skipping send to %d suppressed recipient(s) (source=%s)", len(suppressed), source)
+        last_log = _log("suppressed", suppressed)
+    if not remaining:
+        assert last_log is not None  # non-empty recipients with none remaining => all suppressed
+        return last_log
 
     in_sandbox = _sandbox_enabled(db) if sandbox_enabled is None else sandbox_enabled
-    if in_sandbox and not _in_sandbox_domain(to):
-        logger.info(
-            "email_sandbox_mode — recipient outside %s, not sent (source=%s)",
-            SANDBOX_DOMAIN,
-            source,
-        )
-        return _log_send(
-            db,
-            to=to,
-            subject=subject,
-            status="sandboxed",
-            source=source,
-            rendered_html=html,
-            broadcast_id=broadcast_id,
-            automation_id=automation_id,
-        )
+    if in_sandbox:
+        withheld = [address for address in remaining if not _in_sandbox_domain(address)]
+        remaining = [address for address in remaining if _in_sandbox_domain(address)]
+        if withheld:
+            logger.info(
+                "email_sandbox_mode — %d recipient(s) outside %s, not sent (source=%s)",
+                len(withheld),
+                SANDBOX_DOMAIN,
+                source,
+            )
+            last_log = _log("sandboxed", withheld, rendered_html=html)
+        if not remaining:
+            assert last_log is not None
+            return last_log
 
     client = _create_ses_client()
-    raw_message = _build_raw_message(to, subject, html, text, unsubscribe_url=unsubscribe_url)
+    raw_message = _build_raw_message(
+        remaining, subject, html, text, unsubscribe_url=unsubscribe_url, from_address=from_address
+    )
 
     kwargs: dict = {
-        "Source": settings.ses_from_email,
-        "Destinations": [to],
+        "Source": from_address or settings.ses_from_email,
+        "Destinations": remaining,
         "RawMessage": {"Data": raw_message},
     }
     if settings.ses_configuration_set_name:
@@ -215,24 +265,7 @@ def send_email(
         response = client.send_raw_email(**kwargs)
     except (BotoCoreError, ClientError) as exc:
         logger.error("SES send failed (source=%s): %s", source, exc)
-        _log_send(
-            db,
-            to=to,
-            subject=subject,
-            status="failed",
-            source=source,
-            broadcast_id=broadcast_id,
-            automation_id=automation_id,
-        )
+        _log("failed", remaining)
         raise
 
-    return _log_send(
-        db,
-        to=to,
-        subject=subject,
-        status="sent",
-        source=source,
-        provider_message_id=response.get("MessageId"),
-        broadcast_id=broadcast_id,
-        automation_id=automation_id,
-    )
+    return _log("sent", remaining, provider_message_id=response.get("MessageId"))

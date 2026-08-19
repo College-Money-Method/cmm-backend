@@ -26,6 +26,7 @@ from src.db.base import Base
 from src.db.client import get_supabase
 from src.db.deps import get_db
 from src.main import app
+from src.emails.models import EmailSuppression
 from src.schools.models import Contact
 
 # Letter-only hex (no digit-only segments): SQLite applies NUMERIC column
@@ -55,7 +56,11 @@ def make_client():
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
-        tables = [t for n, t in Base.metadata.tables.items() if n in ("contacts", "schools", "user_roles")]
+        tables = [
+            t
+            for n, t in Base.metadata.tables.items()
+            if n in ("contacts", "schools", "user_roles", "email_suppression")
+        ]
         Base.metadata.create_all(engine, tables=tables)
         SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
@@ -175,5 +180,97 @@ def test_hub_admin_self_role_change_still_works(make_client):
     try:
         role_record = db.query(UserRole).filter(UserRole.user_id == SELF_USER_ID).first()
         assert role_record.role == "hub_user"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("role", ["hub_user", "viewer"])
+def test_non_admin_can_toggle_own_broadcast_emails(make_client, role: str):
+    client = make_client(role)
+    resp = client.patch(f"/api/v1/contacts/{SELF_CONTACT_ID}", json={"broadcast_emails": True})
+    assert resp.status_code == 200
+    assert resp.json()["broadcast_emails"] is True
+
+    db = client._session_local()
+    try:
+        contact = db.query(Contact).filter(Contact.id == SELF_CONTACT_ID).first()
+        assert contact.broadcast_emails is True
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("role", ["hub_user", "viewer"])
+def test_the_two_opt_ins_move_independently(make_client, role: str):
+    """Workshop automations and admin broadcasts are separate consents —
+    accepting one must never imply the other."""
+    client = make_client(role)
+    resp = client.patch(
+        f"/api/v1/contacts/{SELF_CONTACT_ID}",
+        json={"auto_emails": True, "broadcast_emails": False},
+    )
+    assert resp.status_code == 200
+
+    db = client._session_local()
+    try:
+        contact = db.query(Contact).filter(Contact.id == SELF_CONTACT_ID).first()
+        assert contact.auto_emails is True
+        assert contact.broadcast_emails is False
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("role", ["hub_user", "viewer"])
+def test_non_admin_cannot_flip_others_broadcast_emails(make_client, role: str):
+    client = make_client(role)
+    resp = client.patch(f"/api/v1/contacts/{OTHER_CONTACT_ID}", json={"broadcast_emails": True})
+    assert resp.status_code == 200  # title-only branch: silently no-ops non-title fields
+
+    db = client._session_local()
+    try:
+        other = db.query(Contact).filter(Contact.id == OTHER_CONTACT_ID).first()
+        assert other.broadcast_emails is False
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("role", ["hub_user", "viewer"])
+def test_opting_back_in_lifts_an_earlier_unsubscribe_suppression(make_client, role: str):
+    """A suppression row blocks every send whatever the opt-ins say — re-opting
+    in from the Hub has to clear it, or the checkbox is a lie."""
+    client = make_client(role)
+    db = client._session_local()
+    try:
+        db.add(EmailSuppression(email="self@example.com", reason="unsubscribe"))
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.patch(f"/api/v1/contacts/{SELF_CONTACT_ID}", json={"broadcast_emails": True})
+    assert resp.status_code == 200
+
+    db = client._session_local()
+    try:
+        assert db.query(EmailSuppression).filter(EmailSuppression.email == "self@example.com").first() is None
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("role", ["hub_user", "viewer"])
+def test_opting_back_in_leaves_a_bounce_suppression_in_place(make_client, role: str):
+    """A bounce is the receiving server's verdict, not a preference."""
+    client = make_client(role)
+    db = client._session_local()
+    try:
+        db.add(EmailSuppression(email="self@example.com", reason="bounce"))
+        db.commit()
+    finally:
+        db.close()
+
+    client.patch(f"/api/v1/contacts/{SELF_CONTACT_ID}", json={"broadcast_emails": True})
+
+    db = client._session_local()
+    try:
+        row = db.query(EmailSuppression).filter(EmailSuppression.email == "self@example.com").first()
+        assert row is not None and row.reason == "bounce"
     finally:
         db.close()

@@ -22,6 +22,7 @@ from src.db.deps import DbDep
 from src.emails.automation_models import EmailAutomation
 from src.emails.email_template_models import EmailTemplate
 from src.emails.models import EmailSendLog
+from src.emails.sender import InvalidSenderError, validate_sender
 
 router = APIRouter(prefix="/api/v1/emails/automations", tags=["emails"])
 
@@ -48,6 +49,8 @@ class EmailAutomationOut(BaseModel):
     offset_direction: str
     template_id: uuid.UUID | None
     subject_override: str | None
+    sender_name: str | None = None
+    sender_email: str | None = None
     sent_count: int
 
 
@@ -59,6 +62,10 @@ class EmailAutomationCreate(BaseModel):
     offset_direction: OffsetDirection
     template_id: uuid.UUID | None = None
     subject_override: str | None = None
+    # From identity. Blank = the configured default; the domain is validated
+    # against the sending allowlist in the router (see emails/sender.py).
+    sender_name: str | None = None
+    sender_email: str | None = None
     enabled: bool = False
 
     @model_validator(mode="after")
@@ -78,6 +85,8 @@ class EmailAutomationUpdate(BaseModel):
     offset_direction: OffsetDirection | None = None
     template_id: uuid.UUID | None = None
     subject_override: str | None = None
+    sender_name: str | None = None
+    sender_email: str | None = None
 
     @field_validator("offset_value")
     @classmethod
@@ -109,6 +118,8 @@ def _automation_out(db: Session, automation: EmailAutomation) -> EmailAutomation
         offset_direction=automation.offset_direction,
         template_id=automation.template_id,
         subject_override=automation.subject_override,
+        sender_name=automation.sender_name,
+        sender_email=automation.sender_email,
         sent_count=_sent_count(db, automation.id),
     )
 
@@ -132,6 +143,16 @@ def _validate_template_id(db: Session, template_id: uuid.UUID | None) -> None:
         )
 
 
+def _validated_sender(name: str | None, email: str | None) -> tuple[str | None, str | None]:
+    """Normalize the admin-chosen From, rejecting an address the app may not send
+    as. SES would reject an unverified identity per recipient at send time, which
+    is far harder to act on than a 400 here."""
+    try:
+        return validate_sender(name, email)
+    except InvalidSenderError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 def _get_automation_or_404(db: Session, automation_id: uuid.UUID) -> EmailAutomation:
     automation = db.get(EmailAutomation, automation_id)
     if automation is None:
@@ -148,7 +169,11 @@ def list_automations(_admin: AdminDep, db: DbDep) -> list[EmailAutomationOut]:
 @router.post("", response_model=EmailAutomationOut, status_code=status.HTTP_201_CREATED)
 def create_automation(payload: EmailAutomationCreate, _admin: AdminDep, db: DbDep) -> EmailAutomationOut:
     _validate_template_id(db, payload.template_id)
-    automation = EmailAutomation(**payload.model_dump())
+    fields = payload.model_dump()
+    fields["sender_name"], fields["sender_email"] = _validated_sender(
+        payload.sender_name, payload.sender_email
+    )
+    automation = EmailAutomation(**fields)
     db.add(automation)
     db.commit()
     db.refresh(automation)
@@ -166,6 +191,13 @@ def update_automation(
     updates = payload.model_dump(exclude_unset=True)
     if "template_id" in updates:
         _validate_template_id(db, updates["template_id"])
+    if "sender_name" in updates or "sender_email" in updates:
+        # Validate the merged state so patching only one half of the pair still
+        # normalizes both consistently.
+        updates["sender_name"], updates["sender_email"] = _validated_sender(
+            updates.get("sender_name", automation.sender_name),
+            updates.get("sender_email", automation.sender_email),
+        )
     for field, value in updates.items():
         setattr(automation, field, value)
     # Validate the direction/type invariant against the merged state so a patch

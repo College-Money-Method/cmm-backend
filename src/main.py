@@ -57,7 +57,7 @@ from src.zoom.webhook_router import router as zoom_webhook_router
 from src.content.translation_router import router as translation_router
 from src.content.video_cc_router import router as video_cc_router
 from src.emails.webhook_router import router as emails_webhook_router
-from src.emails.unsubscribe_router import router as emails_unsubscribe_router
+from src.emails.email_preferences_router import router as emails_preferences_router
 from src.emails.broadcast_router import router as emails_broadcast_router
 from src.emails.automation_router import router as emails_automation_router
 from src.emails.template_router import router as emails_template_router
@@ -111,7 +111,7 @@ app.include_router(zoom_webhook_router)
 app.include_router(translation_router)
 app.include_router(video_cc_router)
 app.include_router(emails_webhook_router)
-app.include_router(emails_unsubscribe_router)
+app.include_router(emails_preferences_router)
 app.include_router(emails_broadcast_router)
 app.include_router(emails_automation_router)
 app.include_router(emails_template_router)
