@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help dev build run stop logs shell \
         migrate upgrade downgrade revision history current \
-        seed-admins import-assets migrate-wp \
+        seed-admins seed-calculators import-assets migrate-wp \
         lint format typecheck uv-run
 
 # Capture extra args after "uv-run" so you can do:
@@ -109,6 +109,13 @@ uv-run:
 
 seed-admins:
 	uv run python scripts/seed_super_admins.py
+
+# Usage: make seed-calculators FRONTEND=~/WebstormProjects/cmm-frontend
+# Authored markup lives in the frontend repo; the two repos are not siblings on
+# every machine, so the path is explicit.
+seed-calculators:
+	@if [ -z "$(FRONTEND)" ]; then echo "Usage: make seed-calculators FRONTEND=~/WebstormProjects/cmm-frontend" && exit 1; fi
+	uv run python scripts/seed/seed_calculators.py --source $(FRONTEND)/app/lib/calculators $(ARGS)
 
 import-assets:
 	uv run python scripts/import_content_assets.py

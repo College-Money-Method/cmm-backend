@@ -11,6 +11,7 @@ from src.app_config.models import AppConfig
 from src.auth.models import Profile, UserRole
 from src.assets.models import Asset
 from src.guest_contacts.models import GuestContact
+from src.calculators.models import Calculator
 from src.calendar.models import PaulMartinCalendar
 from src.content.models import (
     AssetType,
@@ -45,6 +46,7 @@ __all__ = [
     "Profile",
     "UserRole",
     "Asset",
+    "Calculator",
     "AssetType",
     "Cohort",
     "Contact",
