@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Seed the embeddable calculators from authored files in the frontend repo.
 
-The authored markup, its config, and its authoring brief live in the frontend
-repo (``app/lib/calculators/<slug>/`` — ``calculator.html``, ``config.json``,
-``documentation.md``) because that is where they are edited, linted, and
-self-tested. This script is the one-way door that puts them in the database,
-which is the runtime source of truth — after seeding, an admin editing a
-calculator in the CMS wins until the next run.
+The authored markup and its config live in the frontend repo
+(``app/lib/calculators/<slug>/`` — ``calculator.html``, ``config.json``) because
+that is where they are edited, linted, and self-tested. The authoring briefs live
+here in ``scripts/seed/calculator-documentation/<slug>.md``: they are prose about
+the database row, nothing in the frontend build reads them, and keeping them
+beside this script means seeding a brief needs no second checkout.
+
+This script is the one-way door that puts both in the database, which is the
+runtime source of truth — after seeding, an admin editing a calculator in the CMS
+wins until the next run.
 
 Calculators with authored files are upserted: re-running picks up authoring
 changes to their markup and data. Ones with no authored files yet are inserted
@@ -34,6 +38,12 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Authoring briefs, one ``<slug>.md`` per calculator. In this repo rather than
+# behind --source, so a brief can be written and seeded without the frontend
+# tree, and keyed by slug rather than by source dir so a stub with no authored
+# markup can still carry one.
+DOCUMENTATION_ROOT = Path(__file__).resolve().parent / "calculator-documentation"
 
 from sqlalchemy import select
 
@@ -83,23 +93,27 @@ CALCULATORS = [
 ]
 
 
-def load_source(source_root: Path, source_dir: str) -> tuple[str, dict, str]:
-    """Read the authored markup, data and authoring brief for one calculator.
-
-    ``documentation.md`` is the brief the admin editor's Documentation tab shows:
-    how the calculator reads its data, the ``window.__CALC_*`` contract, and the
-    self-test cases. Optional — a calculator can be seeded before its brief is
-    written — so a missing file is an empty string, not a failure.
-    """
+def load_source(source_root: Path, source_dir: str) -> tuple[str, dict]:
+    """Read the authored markup and data for one calculator."""
     d = source_root / source_dir
     html_path, config_path = d / "calculator.html", d / "config.json"
-    doc_path = d / "documentation.md"
     if not html_path.is_file():
         raise SystemExit(f"missing {html_path}")
     if not config_path.is_file():
         raise SystemExit(f"missing {config_path}")
-    documentation = doc_path.read_text() if doc_path.is_file() else ""
-    return html_path.read_text(), json.loads(config_path.read_text()), documentation
+    return html_path.read_text(), json.loads(config_path.read_text())
+
+
+def load_documentation(slug: str) -> str:
+    """Read the authoring brief the admin editor's Documentation tab shows.
+
+    The brief covers how the calculator reads its data, the ``window.__CALC_*``
+    contract it has to keep, and the self-test cases that lock its arithmetic.
+    Optional — a calculator can be seeded before its brief is written — so a
+    missing file is an empty string, not a failure.
+    """
+    path = DOCUMENTATION_ROOT / f"{slug}.md"
+    return path.read_text() if path.is_file() else ""
 
 
 def main() -> int:
@@ -127,9 +141,10 @@ def main() -> int:
 
     try:
         for slug, title, ctype, description, source_dir, upsert in CALCULATORS:
-            html, config, documentation = ("", {}, "")
+            html, config = ("", {})
             if source_dir:
-                html, config, documentation = load_source(source_root, source_dir)
+                html, config = load_source(source_root, source_dir)
+            documentation = load_documentation(slug)
 
             # An empty calculator has nothing to serve, so --publish never
             # promotes a stub — publishing one would ship a blank embed.
@@ -163,9 +178,9 @@ def main() -> int:
                         existing.status = "published"
                     existing.html = html
                     existing.config = config
-                    # Only overwritten when there is an authored brief to write:
-                    # a stub with no documentation.md must not wipe one an admin
-                    # typed into the Documentation tab.
+                    # Only overwritten when there is an authored brief to
+                    # write: a calculator with no brief on disk must not wipe one
+                    # an admin typed into the Documentation tab.
                     if documentation:
                         existing.documentation = documentation
                     existing.updated_at = datetime.now(timezone.utc)
