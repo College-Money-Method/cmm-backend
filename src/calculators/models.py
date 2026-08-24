@@ -61,6 +61,13 @@ class Calculator(Base):
         JSONB, nullable=False, default=list, server_default="[]"
     )
 
+    # Authoring instructions for whoever changes this calculator next — human or
+    # AI agent: where its numbers come from, the window.__CALC_* contract it has
+    # to keep, and the self-test cases that lock its arithmetic. Markdown, and
+    # never read at render time; it exists so the how-to travels with the row
+    # rather than living in a report nobody opens.
+    documentation: Mapped[str | None] = mapped_column(Text)
+
     meta_title: Mapped[str | None] = mapped_column(Text)
     meta_description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="draft", server_default="draft")
