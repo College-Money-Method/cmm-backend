@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Seed the embeddable calculators from authored files in the frontend repo.
 
-The authored markup lives in the frontend repo (``app/lib/calculators/<slug>/``)
-because that is where it is edited, linted, and self-tested. This script is the
-one-way door that puts it in the database, which is the runtime source of truth
-— after seeding, an admin editing a calculator in the CMS wins until the next run.
+The authored markup, its config, and its authoring brief live in the frontend
+repo (``app/lib/calculators/<slug>/`` — ``calculator.html``, ``config.json``,
+``documentation.md``) because that is where they are edited, linted, and
+self-tested. This script is the one-way door that puts them in the database,
+which is the runtime source of truth — after seeding, an admin editing a
+calculator in the CMS wins until the next run.
 
 Calculators with authored files are upserted: re-running picks up authoring
 changes to their markup and data. Ones with no authored files yet are inserted
@@ -81,15 +83,23 @@ CALCULATORS = [
 ]
 
 
-def load_source(source_root: Path, source_dir: str) -> tuple[str, dict]:
-    """Read the authored markup and data for one calculator."""
+def load_source(source_root: Path, source_dir: str) -> tuple[str, dict, str]:
+    """Read the authored markup, data and authoring brief for one calculator.
+
+    ``documentation.md`` is the brief the admin editor's Documentation tab shows:
+    how the calculator reads its data, the ``window.__CALC_*`` contract, and the
+    self-test cases. Optional — a calculator can be seeded before its brief is
+    written — so a missing file is an empty string, not a failure.
+    """
     d = source_root / source_dir
     html_path, config_path = d / "calculator.html", d / "config.json"
+    doc_path = d / "documentation.md"
     if not html_path.is_file():
         raise SystemExit(f"missing {html_path}")
     if not config_path.is_file():
         raise SystemExit(f"missing {config_path}")
-    return html_path.read_text(), json.loads(config_path.read_text())
+    documentation = doc_path.read_text() if doc_path.is_file() else ""
+    return html_path.read_text(), json.loads(config_path.read_text()), documentation
 
 
 def main() -> int:
@@ -117,9 +127,9 @@ def main() -> int:
 
     try:
         for slug, title, ctype, description, source_dir, upsert in CALCULATORS:
-            html, config = ("", {})
+            html, config, documentation = ("", {}, "")
             if source_dir:
-                html, config = load_source(source_root, source_dir)
+                html, config, documentation = load_source(source_root, source_dir)
 
             # An empty calculator has nothing to serve, so --publish never
             # promotes a stub — publishing one would ship a blank embed.
@@ -137,7 +147,8 @@ def main() -> int:
             if existing:
                 print(
                     f"  update  {slug} "
-                    f"({len(html)} chars of markup, {len(config)} config keys)"
+                    f"({len(html)} chars of markup, {len(config)} config keys, "
+                    f"{len(documentation)} chars of docs)"
                 )
                 updated += 1
                 if not args.dry_run:
@@ -152,6 +163,11 @@ def main() -> int:
                         existing.status = "published"
                     existing.html = html
                     existing.config = config
+                    # Only overwritten when there is an authored brief to write:
+                    # a stub with no documentation.md must not wipe one an admin
+                    # typed into the Documentation tab.
+                    if documentation:
+                        existing.documentation = documentation
                     existing.updated_at = datetime.now(timezone.utc)
             else:
                 print(f"  create  {slug} [{ctype}] status={status}")
@@ -166,6 +182,7 @@ def main() -> int:
                             html=html,
                             deps="",
                             config=config,
+                            documentation=documentation or None,
                             embed_allowed_origins=[],
                             status=status,
                         )

@@ -34,6 +34,7 @@ class CalculatorCreate(BaseModel):
     deps: str | None = None
     config: dict = {}
     embed_allowed_origins: list[str] = []
+    documentation: str | None = None
     meta_title: str | None = None
     meta_description: str | None = None
     status: str = "draft"
@@ -58,6 +59,7 @@ class CalculatorUpdate(BaseModel):
     deps: str | None = None
     config: dict | None = None
     embed_allowed_origins: list[str] | None = None
+    documentation: str | None = None
     meta_title: str | None = None
     meta_description: str | None = None
     status: str | None = None
@@ -83,6 +85,7 @@ class CalculatorOut(BaseModel):
     deps: str | None
     config: dict
     embed_allowed_origins: list[str]
+    documentation: str | None
     meta_title: str | None
     meta_description: str | None
     status: str

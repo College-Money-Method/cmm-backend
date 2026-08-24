@@ -53,6 +53,7 @@ def client() -> TestClient:
             type="fafsa_sai",
             html="<div>sai</div>",
             config={"award_year": "2027-28", "sai_floor": -1500},
+            documentation="# SAI\n\nThe workbook is wrong about Medicare.",
             status="published",
         )
     )
@@ -94,6 +95,12 @@ def test_public_get_published_returns_html_and_config(client):
     assert body["html"] == "<div>sai</div>"
     assert body["config"]["sai_floor"] == -1500
     assert body["embed_allowed_origins"] == []
+
+
+def test_public_get_omits_authoring_documentation(client):
+    """Internal authoring notes must not ride along on the unauthenticated route."""
+    body = client.get(f"{BASE}/public/{PUBLISHED_SLUG}").json()
+    assert body["documentation"] is None
 
 
 def test_public_get_draft_is_404(client):
@@ -151,6 +158,20 @@ def test_patch_sets_updated_at_and_persists_config(client):
     body = r.json()
     assert body["updated_at"] is not None
     assert body["config"] == {"max_pell_award": 7395}
+
+
+def test_admin_get_returns_authoring_documentation(client):
+    """The editor's Documentation tab reads it from here."""
+    body = client.get(f"{BASE}/{PUBLISHED_ID}").json()
+    assert body["documentation"].startswith("# SAI")
+
+
+def test_patch_persists_authoring_documentation(client):
+    brief = "## Data\n\nEvery figure comes from window.__CALC_CONFIG__."
+    r = client.patch(f"{BASE}/{DRAFT_ID}", json={"documentation": brief})
+    assert r.status_code == 200
+    assert r.json()["documentation"] == brief
+    assert client.get(f"{BASE}/{DRAFT_ID}").json()["documentation"] == brief
 
 
 def test_patch_to_taken_slug_is_409(client):

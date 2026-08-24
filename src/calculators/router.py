@@ -65,7 +65,13 @@ def get_calculator_by_slug_public(slug: str, db: DbDep):
     )
     if not calc:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    return calc
+    out = CalculatorOut.model_validate(calc)
+    # `documentation` is internal authoring commentary — which divergences from a
+    # source workbook were deliberate, what is still unconfirmed. Nothing renders
+    # it, so withholding it costs the embed nothing and keeps those notes off an
+    # unauthenticated, publicly cacheable response.
+    out.documentation = None
+    return out
 
 
 @router.get("/{calculator_id}", response_model=CalculatorOut)
