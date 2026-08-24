@@ -6,16 +6,20 @@ because that is where it is edited, linted, and self-tested. This script is the
 one-way door that puts it in the database, which is the runtime source of truth
 — after seeding, an admin editing a calculator in the CMS wins until the next run.
 
-The SAI calculator is upserted: re-running picks up authoring changes to its
-markup and data. The other three are inserted only if absent, so a stub someone
-has started authoring in the CMS is never wiped by a re-seed.
+Calculators with authored files are upserted: re-running picks up authoring
+changes to their markup and data. Ones with no authored files yet are inserted
+only if absent, so a stub someone has started authoring in the CMS is never
+wiped by a re-seed.
 
 The frontend repo is not a sibling of this one on every machine, so --source has
-no default that would silently point at the wrong tree.
+no default that would silently point at the wrong tree. The database likewise
+comes from an explicit --env-file, so seeding never guesses an environment.
 
 Usage (from project root):
-    uv run python scripts/seed/seed_calculators.py --source ~/WebstormProjects/cmm-frontend/app/lib/calculators
-    uv run python scripts/seed/seed_calculators.py --source <path> --dry-run
+    uv run --env-file .env.local python scripts/seed/seed_calculators.py \
+        --source ~/WebstormProjects/cmm-frontend/app/lib/calculators
+    uv run --env-file .env.dev python scripts/seed/seed_calculators.py \
+        --source <path> --publish --dry-run
 """
 
 from __future__ import annotations
@@ -69,9 +73,10 @@ CALCULATORS = [
         "student-borrowing-8-percent",
         "Student Borrowing: the 8% Rule",
         "student_borrowing_8_percent",
-        "Check whether a planned loan balance fits the 8%-of-income rule.",
-        None,
-        False,
+        "Start from the salary a major or career actually pays and work backwards "
+        "to the most a student should borrow for the whole degree.",
+        "student-borrowing-8-percent",
+        True,
     ),
 ]
 
