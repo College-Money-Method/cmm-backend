@@ -1,126 +1,142 @@
-# Assets Calculator for Applications
+# Assets calculator for applications
 
 - **Slug:** `application-assets` · **Type:** `application_assets`
 - **Embed:** `/embed/calculators/application-assets` · **On-site:** `/calculators/application-assets`
-- **Source of truth:** the `calculators` row. The markup and config are
-  authored in the frontend repo at `app/lib/calculators/application-assets/`; this
-  brief is authored in the backend repo at
-  `scripts/seed/calculator-documentation/application-assets.md`. Both are pushed into
-  the row by `scripts/seed/seed_calculators.py`, and after seeding, CMS
-  edits win until the next run.
+- **Where it lives:** the `calculators` database row — the markup in the Markup
+  tab, the wording and categories in the Data tab. Editing the row changes the
+  live calculator.
 
-Read this before changing anything here.
+**If you are an AI agent editing this calculator:** you have been given the
+markup. Read §2 and §6 before you change it. Styling, copy and layout are yours
+to change freely; the attributes in §2 are the wiring, and removing one stops the
+calculator dead. Nothing in §4 is a bug to fix.
 
 ---
 
-## 1. How it gets its data
+## 1. What it does
 
-**One rule: the markup never hard-codes a figure or a piece of application
-wording.** Everything variable is read from `window.__CALC_CONFIG__`, so a
-yearly update is a Data-tab edit, not a deploy. This calculator holds **no rates
-at all** — what drifts here is the two applications' question wording, and that
-is exactly what the config carries.
+The FAFSA and the CSS Profile ask for investment totals in different ways, so a
+family filling in both needs two different numbers from the same accounts. This
+calculator collects the accounts once and reports both totals side by side, with
+each application's question quoted verbatim above its figure.
 
-```
-Postgres calculators row (html + config JSONB)
-        │  GET /api/v1/calculators/public/application-assets   ← published only, no auth, no cookie
-        ▼
-buildCalculatorDocument()        app/lib/calculators/build-calculator-document.ts
-  ├─ <head>: charset, viewport, robots=noindex, color-scheme=light
-  ├─ iframeThemePreamble()       brand fonts + --cmm-* vars
-  ├─ buildCalculatorDeps(config) <script>window.__CALC_CONFIG__={…}</script> + row.deps
-  ├─ <style>  --calc-bg from ?bg=  (transparent by default)
-  ├─ <body>   row.html VERBATIM, UNSANITIZED
-  └─ resize script → postMessage {type:"cmm-calculator-resize", slug, height}
-```
+The visible surface, in DOM order: heading, the investment-category grid, the
+"leave these out" list, the student's 529 field, an add-your-own list of siblings'
+529s, an add-your-own list of properties, then the two result columns.
 
-Four surfaces render that same document — public embed, on-site page, CMS block,
-admin preview — so none can silently differ. No cookie or session is read on the
-embed routes; `Cache-Control: public, no-cache` + ETag means every load
-revalidates; `frame-ancestors` is sent only when the allowlist is non-empty.
+Unlike the other calculators here, this one holds **no rates at all**. What it
+encodes is the two applications' rules about *which* accounts count.
 
-## 2. The contract the markup must keep
+## 2. How the file is wired
 
-| Global | Direction | Rule |
-|---|---|---|
-| `window.__CALC_CONFIG__` | injected | the `config` bag verbatim |
-| `window.__CALC_RUN__(inputs)` | authored | **pure** — no `document`, no `window.location`, no `fetch`, no `localStorage`. Returns one flat result object |
-| `window.__CALC_SELFTEST__` | authored | `[{name, inputs, expect, tolerance?}]`. Numbers compare within `tolerance`, everything else strict `===` |
+The markup is a **fragment** — a `<style>` block, the HTML, then two `<script>`
+elements. It is injected into a document that is built around it, so it must
+never contain `<html>`, `<head>`, `<body>` or `<!doctype>`.
 
-The formula lives in `<script id="assets-formula">` and is the only script CI
-evaluates, in `node:vm` with nothing but `{window:{__CALC_CONFIG__:config}}`. The
-UI script beside it is the only part allowed to touch the document. The form
-calls `preventDefault`; nothing is POSTed and no PII leaves the browser.
+| Part | Role |
+|---|---|
+| `<style>` | all styling, scoped by `.cmm-calc` and `.calc-*` classes |
+| `<div class="cmm-calc">` | the root. The UI script gives up silently without it |
+| `<script id="assets-formula">` | the rules. Pure — no DOM, no network, no storage |
+| `<script id="assets-ui">` | builds the rows, calls the formula, paints the results |
 
-**Inputs:** `investments[]` (one figure per configured category),
-`student_529`, `siblings[]` `{amount, owner: "sibling" | "parent", age_19_plus}`,
-`properties[]` `{market, debt}`.
+Markup and logic are joined by attributes, not by structure — so you can move,
+rewrap and restyle anything as long as the attributes travel with it:
 
-**Result fields:** `investment_accounts_total`, `student_529`,
-`sibling_529_css_total`, `siblings[]` `{amount, counted_fafsa, counted_css}`,
-`education_total_fafsa`, `education_total_css`, `properties[]` `{equity}`,
-`property_equity_total`, `fafsa_total`, `css_total`, `fafsa_question`,
-`css_question`.
+| Attribute | Meaning |
+|---|---|
+| `data-calc-form` | the form the UI script listens to |
+| `data-out="<field>"` | an element the UI script writes a result into |
+| `data-investments` | container the category fields are generated into |
+| `data-excluded` | list the "leave these out" items are generated into |
+| `data-siblings` / `data-properties` | containers the repeatable rows are generated into |
+| `data-add-sibling` / `data-add-property` | the buttons that append a row |
+| `name="student_529"` | the one statically-named field |
 
-Every figure is carried through as a **pair** rather than computed once and
-adjusted — the two applications ask for different totals from the same accounts,
-and pairing them is what keeps the two columns honest.
+Most of this page is **generated**, not authored: the six category inputs, the
+excluded list, and every sibling and property row are built by the UI script from
+config and from clicks. Style them by class; do not expect to find them in the
+markup, and do not hand-write rows inside those containers — a re-render clears
+them.
 
-## 3. Config — 5 keys, no rates
+Two things about `data-out` that bite:
+
+- The script looks it up with `querySelector`, so **only the first match is
+  painted.** That is why several figures exist under two names — `fafsa_total` and
+  `fafsa_total_row`, `education_total_css` and `education_total_css_row` — one for
+  the table row, one for the summary. To show a figure in a third place, add
+  another name in the UI script rather than duplicating an existing one.
+- Every name in §3 is painted unconditionally. **Delete the element and the paint
+  throws**, which kills the whole render — the totals freeze and typing stops
+  doing anything. Hide it with CSS if you don't want it seen.
+
+The two add-row buttons are looked up the same way. Removing one throws at
+startup, before anything renders.
+
+Config arrives as `window.__CALC_CONFIG__` before these scripts run. The form
+calls `preventDefault`, so a submit button is safe to add; nothing is ever sent
+anywhere, and no figure a family types may reach a URL, a log or a request.
+
+## 3. Inputs, results, config
+
+**Inputs** to `window.__CALC_RUN__`:
+
+| Input | Shape |
+|---|---|
+| `investments[]` | one figure per configured category, **positional** |
+| `student_529` | number |
+| `siblings[]` | `{amount, owner: "sibling" \| "parent", age_19_plus}` |
+| `properties[]` | `{market, debt}` |
+
+**Results:** `investment_accounts_total`, `student_529`, `sibling_529_css_total`,
+`siblings[]` `{amount, counted_fafsa, counted_css}`, `education_total_fafsa`,
+`education_total_css`, `properties[]` `{equity}`, `property_equity_total`,
+`fafsa_total`, `css_total`, `fafsa_question`, `css_question`.
+
+Every figure is carried as a **pair** — a FAFSA value and a CSS value — rather
+than computed once and adjusted. That pairing is what keeps the two columns from
+drifting into each other.
+
+**Config — 5 keys**, all Data-tab edits, no deploy:
 
 | Key | What it is |
 |---|---|
 | `fafsa_question` | the FAFSA investment line's verbatim wording |
 | `css_question` | the CSS Profile's verbatim wording |
-| `investment_categories[6]` | `{label, note}` — the six account types counted in full |
+| `investment_categories[6]` | `{label, note}` — the account types counted in full |
 | `excluded_categories[4]` | `{label}` — the "leave these out" list |
 | `award_year` | label only, nothing computes from it |
 
-`excluded_categories` is `{label}` rows rather than bare strings so the existing
-`table` field kind renders it — no new `ConfigField` kind was needed. Keep that
-shape if you add to it.
-
-## 4. What it computes
+## 4. Rules the numbers follow — do not "fix" these
 
 ```
 FAFSA = investments + student 529 + property equity (each property floored at 0)
 CSS   = investments + all reportable 529s
 ```
 
-The rules that differ:
-
 | Item | FAFSA | CSS Profile |
 |---|---|---|
-| Investment accounts (6 categories) | counted | counted |
-| Student's 529 | counted, whoever owns it | counted |
-| Sibling's 529 | never | counted **unless** sibling-owned *and* sibling is 19+ |
+| Investment accounts | counted | counted |
+| Student's own 529 | counted, whoever owns it | counted |
+| A sibling's 529 | never | counted **unless** sibling-owned *and* 19+ |
 | Second property | equity, floored at 0 | excluded — its own section |
 
-Two floors matter: a property worth less than is owed on it is reported as 0,
-never as a negative that would quietly shrink the rest of the family's reported
-assets. And a sibling's plan drops off CSS only when it is **both** owned by that
-sibling **and** theirs as an adult — parent-owned, or sibling-owned under 19, and
-it stays a family asset.
+- **A property worth less than is owed on it reports as 0**, per property. Never
+  as a negative that would quietly shrink the rest of the family's assets.
+- **A sibling's plan drops off CSS only when both halves are true** — owned by that
+  sibling *and* theirs as an adult. Parent-owned, or sibling-owned under 19, and
+  it stays a family asset. This four-way rule is the only real logic here.
+- **The student's 529 does not ask who owns it, deliberately.** For a dependent
+  student it is a parent asset either way, so the question cannot change the
+  answer. Do not add an owner selector to that field.
 
-## 5. Deliberate divergences from the source worksheet
+## 5. Self-tests
 
-- The sheet asks "is this 529 owned by the Student or Parent?" (C19) and then
-  never references the answer — a dependent student's 529 is a parent asset
-  either way. **The web version drops a question that cannot change the answer.**
-  Do not add it back.
-- The sibling verdict strings (C27/C31/C35) all say "Sibling 1" from a
-  copy-paste; the UI generates per-row text.
-- Columns H–J are spreadsheet chrome (row-visibility toggles) and carry no
-  policy; the web version adds and removes rows instead.
+9 cases live in `window.__CALC_SELFTEST__` at the bottom of the formula script.
+The **Checks** button on the Markup tab runs them; a published row is expected to
+be 9/9 green. Keep them, and re-run after any edit.
 
-## 6. Tests
-
-9 cases in `window.__CALC_SELFTEST__`, run by the admin Markup tab's **Checks**
-button and by CI (`app/lib/calculators/__tests__/authored-selftests.test.ts`,
-which auto-discovers any directory holding both `calculator.html` and
-`config.json`).
-
-| Case | Locks |
+| Case | What it locks |
 |---|---|
 | An empty worksheet reports nothing | zero in, zero out |
 | Investment accounts count in full on both applications | the shared investment line |
@@ -129,50 +145,25 @@ which auto-discovers any directory holding both `calculator.html` and
 | A sibling's own 529 still counts on CSS while under 19 | the age half of the two-part test |
 | A parent-owned sibling 529 counts on CSS whatever the age | the ownership half |
 | Property equity is market less debt, on FAFSA only | the FAFSA/CSS property split |
-| A property worth less than it owes is reported as zero | the per-property floor, not a netted negative |
-| A full worksheet lands on two different totals | 260,000 FAFSA vs 100,000 CSS end to end |
+| A property worth less than it owes is reported as zero | the per-property floor |
+| A full worksheet lands on two different totals | 260,000 FAFSA vs 100,000 CSS, end to end |
 
-The three sibling cases are the heart of it: that four-way rule is the only real
-logic in this calculator, and each branch has its own case.
+## 6. Editing checklist
 
-## 7. Updating this calculator
+Restyling or reordering:
 
-1. Both applications' question wording, the six investment categories and their
-   notes, and the excluded list are **all Data-tab edits**. That wording is
-   exactly the part that drifts year to year — no markup change, no deploy.
-2. `investment_categories` length drives the number of input rows; `inputs.investments`
-   is positional, so **adding a category mid-list shifts every self-test's
-   `investments` array**. Append rather than insert, or update the cases.
-3. Expect 9/9 green before saving a published row; the publish gate enforces it.
-4. Adding or renaming a config key means editing the `application_assets`
-   descriptor list in `config-schema.ts` too, or the Data tab falls back to raw
-   JSON.
+1. Keep every attribute in §2 on some element, and keep `.cmm-calc` as an
+   ancestor of all of them.
+2. Keep the fragment a fragment — no document wrapper, no external stylesheet or
+   font link, no `fetch`, no `localStorage`.
+3. Keep both scripts, with their `id`s. `assets-formula` is run on its own by the
+   test harness; renaming it hides the calculator from the checks.
+4. Generated rows can only be restyled through CSS and through the UI script's
+   `createElement` calls — there is no row template in the markup to edit.
+5. Run the Checks button. 9/9 before saving a published row.
 
-## 8. Creating a new calculator from this pattern
-
-1. Create the row at `/admin/calculators/new` — always a draft. `type` is fixed
-   after creation because the markup reads config fields by name.
-2. Add the new type to `CALCULATOR_TYPES` in **both** `app/types/calculators.ts`
-   and `src/calculators/models.py`, plus a label in `CALCULATOR_TYPE_LABELS`.
-3. Add a descriptor list for the type in `config-schema.ts`. Prefer reusing the
-   existing field kinds — `table` of `{label}` rows beats inventing a
-   string-array kind, as `excluded_categories` shows.
-4. Author `app/lib/calculators/<slug>/calculator.html` and `config.json`. The
-   markup is a **fragment** — several `<script>` elements, no document wrapper.
-   Name the formula script `id="<prefix>-formula"`; CI matches
-   `<script id="[\w-]*formula">`.
-5. Declare `__CALC_SELFTEST__` cases from day one, one per branch of any
-   conditional rule — CI asserts every authored calculator declares at least one.
-6. Call `preventDefault` on every form.
-7. Write the brief at `scripts/seed/calculator-documentation/<slug>.md` in
-   the backend repo — it is what the Documentation tab shows.
-8. Register the slug in `CALCULATORS` in `scripts/seed/seed_calculators.py`,
-   then seed with an explicit `--source` and `--env-file`.
-
-## Open questions
-
-1. `award_year` is still `2023-24`, from the worksheet filename. Nothing computes
-   from it but the label is visible — confirm or update.
-2. The "leave these out" list (retirement accounts, primary home, life insurance
-   cash value, personal possessions) was authored here, not taken from the
-   worksheet. Editable in the Data tab; worth confirming the wording.
+Changing the content: both applications' question wording, the categories and
+their notes, and the excluded list are all Data-tab edits — and that wording is
+exactly what drifts year to year. One caution: `inputs.investments` is
+**positional**, so inserting a category mid-list shifts every self-test's array.
+Append instead, or update the cases.

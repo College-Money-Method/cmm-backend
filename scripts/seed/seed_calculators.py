@@ -17,13 +17,14 @@ changes to their markup and data. Ones with no authored files yet are inserted
 only if absent, so a stub someone has started authoring in the CMS is never
 wiped by a re-seed.
 
-The frontend repo is not a sibling of this one on every machine, so --source has
-no default that would silently point at the wrong tree. The database likewise
-comes from an explicit --env-file, so seeding never guesses an environment.
+The frontend repo is not a sibling of this one on every machine, so the source
+path is never guessed in code: it comes from --source, or from CALCULATORS_SOURCE
+in the --env-file that already decides which database is being written. Same rule
+as the database itself — explicit, and from the environment you named.
 
 Usage (from project root):
-    uv run --env-file .env.local python scripts/seed/seed_calculators.py \
-        --source ~/WebstormProjects/cmm-frontend/app/lib/calculators
+    # CALCULATORS_SOURCE=~/WebstormProjects/cmm-frontend/app/lib/calculators
+    uv run --env-file .env.local python scripts/seed/seed_calculators.py
     uv run --env-file .env.dev python scripts/seed/seed_calculators.py \
         --source <path> --publish --dry-run
 """
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +46,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # tree, and keyed by slug rather than by source dir so a stub with no authored
 # markup can still carry one.
 DOCUMENTATION_ROOT = Path(__file__).resolve().parent / "calculator-documentation"
+
+# Where the authored markup and config are checked out. Read from the --env-file
+# so the everyday invocation is just the script and an environment.
+SOURCE_ENV_VAR = "CALCULATORS_SOURCE"
 
 from sqlalchemy import select
 
@@ -120,8 +126,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--source",
-        required=True,
-        help="path to the frontend repo's app/lib/calculators directory",
+        default=os.environ.get(SOURCE_ENV_VAR),
+        help=(
+            "path to the frontend repo's app/lib/calculators directory "
+            f"(default: ${SOURCE_ENV_VAR} from the --env-file)"
+        ),
     )
     parser.add_argument("--dry-run", action="store_true", help="report without writing")
     parser.add_argument(
@@ -130,6 +139,12 @@ def main() -> int:
         help="publish the calculators that have authored markup (embed 404s on drafts)",
     )
     args = parser.parse_args()
+
+    if not args.source:
+        raise SystemExit(
+            f"no calculator source: pass --source, or set {SOURCE_ENV_VAR} in the "
+            "env file passed to `uv run --env-file`"
+        )
 
     source_root = Path(args.source).expanduser().resolve()
     if not source_root.is_dir():
