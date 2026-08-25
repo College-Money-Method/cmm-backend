@@ -189,6 +189,14 @@ class ContentAsset(Base):
     # state, or school). No rows across all dimensions => visible to everyone.
     schools = relationship("School", secondary="content_asset_schools", viewonly=True)
     state_rows = relationship("ContentAssetState", viewonly=True)
+    # Categories this asset is pinned to directly. Writes go through
+    # ResourceCategoryAsset from either side, so this stays viewonly.
+    resource_categories = relationship(
+        "ResourceCategory",
+        secondary="resource_category_assets",
+        order_by="ResourceCategory.sort_order",
+        viewonly=True,
+    )
 
     @property
     def states(self) -> list[str]:
