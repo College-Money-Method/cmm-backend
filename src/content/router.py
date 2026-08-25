@@ -749,6 +749,7 @@ def list_assets(
     goal_id: Annotated[uuid.UUID | None, Query()] = None,
     topic_id: Annotated[uuid.UUID | None, Query()] = None,
     cohort_id: Annotated[uuid.UUID | None, Query()] = None,
+    grades: Annotated[str | None, Query()] = None,
     is_featured: Annotated[bool | None, Query()] = None,
     sort_by: Annotated[str, Query()] = "created_at",
     sort_dir: Annotated[str, Query()] = "desc",
@@ -776,6 +777,11 @@ def list_assets(
         stmt = stmt.join(TopicResource, TopicResource.content_asset_id == ContentAsset.id).where(TopicResource.topic_id == topic_id)
     if cohort_id:
         stmt = stmt.join(ContentAssetCohort).where(ContentAssetCohort.cohort_id == cohort_id)
+    grade_ints = _parse_csv_ints(grades)
+    if grade_ints:
+        # Admin list matches the asset's own grades only — no transitive
+        # goal/workshop inference, so admins see exactly what they assigned.
+        stmt = stmt.where(or_(*_asset_grade_conditions(grade_ints)))
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = db.scalar(count_stmt)
@@ -812,6 +818,18 @@ def _parse_csv_ints(value: str | None) -> list[int]:
         return [int(p.strip()) for p in value.split(",") if p.strip()]
     except ValueError:
         return []
+
+
+def _asset_grade_conditions(grade_ints: list[int]):
+    """WHERE conditions matching a grade number inside the asset's grade CSV.
+
+    `suggested_grades` holds a flat CSV of grade numbers ("9,10,11"), so an
+    anchored regex avoids "1" matching "11" / "12".
+    """
+    return [
+        ContentAsset.suggested_grades.op("~")(f"(^|,){g}(,|$)")
+        for g in grade_ints
+    ]
 
 
 def _parse_csv_strings(value: str | None) -> list[str]:
@@ -984,8 +1002,10 @@ def list_assets_public(
         )
         stmt = stmt.where(ContentAsset.id.in_(cat_asset_subq))
 
-    # Grade filtering: grade_configs(grade) → goals → topics → topic_resources
-    #                  + workshops(suggested_grades contains grade) → workshop_resources
+    # Grade filtering, matched additively across three sources:
+    #   the asset's own suggested_grades
+    #   + grade_configs(grade) → goals → topics → topic_resources
+    #   + workshops(suggested_grades contains grade) → workshop_resources
     grade_ints = _parse_csv_ints(grades)
     if grade_ints:
         goal_id_subq = (
@@ -1008,7 +1028,14 @@ def list_assets_public(
             .where(or_(*workshop_grade_conditions))
         )
         grade_asset_combined = topic_asset_subq.union(workshop_asset_subq)
-        stmt = stmt.where(ContentAsset.id.in_(grade_asset_combined))
+        # An asset matches if its own grades say so, OR if it inherits the grade
+        # transitively from a linked goal-topic or workshop.
+        stmt = stmt.where(
+            or_(
+                ContentAsset.id.in_(grade_asset_combined),
+                *_asset_grade_conditions(grade_ints),
+            )
+        )
 
     if school_id:
         # Return assets accessible to this school. Visibility is ADDITIVE across

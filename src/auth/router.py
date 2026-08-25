@@ -4,7 +4,7 @@ import logging
 import uuid
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 logger = logging.getLogger(__name__)
 from sqlalchemy import func, or_
@@ -14,9 +14,12 @@ from src.auth.deps import AdminDep, CurrentUserDep, get_current_user
 from src.auth.hub_password import default_hub_password
 from src.auth.models import Profile, UserRole
 from src.auth.profile_sync import delete_profile, upsert_profile
+from src.auth.rate_limit import allow
 from src.auth.schemas import (
     AuthEmailSyncOut,
     ChangePasswordRequest,
+    CheckEmailOut,
+    CheckEmailRequest,
     ContactCreate,
     ContactListResponse,
     ContactOut,
@@ -46,6 +49,35 @@ def get_me(user: CurrentUserDep) -> UserRoleOut:
         school_id=user.school_id,
         school_role=user.school_role,
     )
+
+
+@router.post("/api/v1/auth/check-email", response_model=CheckEmailOut)
+def check_email(body: CheckEmailRequest, request: Request, db: DbDep) -> CheckEmailOut:
+    """Public: report whether an email belongs to a registered user.
+
+    The forgot-password form calls this before Supabase so it can warn on an
+    unknown/typo'd address — Supabase, by design, returns 200 and stays silent
+    for unknown emails, which otherwise leaves the user staring at a reset link
+    that never arrives. This intentionally exposes account existence (an accepted
+    product trade-off), so it is rate-limited per client IP to blunt enumeration
+    scraping. Existence is read from `profiles`, the indexed mirror of
+    `auth.users`.
+    """
+    fwd = request.headers.get("x-forwarded-for", "")
+    client_ip = fwd.split(",")[0].strip() or (request.client.host if request.client else "unknown")
+    if not allow(f"check-email:{client_ip}", limit=5, window_seconds=60.0):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many attempts. Please wait a minute and try again.",
+        )
+
+    exists = (
+        db.query(Profile.user_id)
+        .filter(func.lower(Profile.email) == body.email.lower())
+        .first()
+        is not None
+    )
+    return CheckEmailOut(exists=exists)
 
 
 @router.post("/api/v1/auth/change-password", status_code=status.HTTP_204_NO_CONTENT)

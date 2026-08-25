@@ -120,6 +120,18 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class CheckEmailRequest(BaseModel):
+    """Look up whether an email belongs to a registered user (forgot-password warn)."""
+
+    email: EmailStr
+
+
+class CheckEmailOut(BaseModel):
+    # Intentionally exposes account existence so the reset form can warn on a typo.
+    # See the check_email endpoint for the enumeration trade-off + rate limiting.
+    exists: bool
+
+
 class ContactSyncResult(BaseModel):
     contacts_created: int = 0
     contacts_updated: int = 0
