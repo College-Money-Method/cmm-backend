@@ -139,6 +139,41 @@ def test_create_template_succeeds(make_client):
     assert body["body_json"] == SAMPLE_BODY
 
 
+def test_create_template_defaults_to_no_branding(make_client):
+    """Plain, Gmail-like is the default shell — a template has to ask for the
+    CMM logo and footer."""
+    client = make_client("super_admin")
+    resp = client.post(
+        "/api/v1/emails/templates",
+        json={"category": "general", "name": "Plain", "subject": "Hi", "body_json": SAMPLE_BODY},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["include_branding"] is False
+
+
+def test_create_and_patch_round_trip_include_branding(make_client):
+    client = make_client("super_admin")
+    created = client.post(
+        "/api/v1/emails/templates",
+        json={
+            "category": "general",
+            "name": "Branded",
+            "subject": "Hi",
+            "body_json": SAMPLE_BODY,
+            "include_branding": True,
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["include_branding"] is True
+
+    template_id = created.json()["id"]
+    patched = client.patch(
+        f"/api/v1/emails/templates/{template_id}", json={"include_branding": False}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["include_branding"] is False
+
+
 def test_create_template_rejects_invalid_category(make_client):
     client = make_client("super_admin")
     resp = client.post(

@@ -25,7 +25,7 @@ from src.emails.models import EmailSendLog
 from src.main import app
 from src.cycles.models import Cycle
 from src.schools.models import Contact, School
-from src.workshops.models import PortalMapping, Webinar, Workshop
+from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopRegistration
 
 ADMIN_USER_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 ADMIN_CONTACT_ID = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
@@ -293,6 +293,49 @@ def test_render_workshop_preview_resolves_workshop_tags(make_client):
     assert "FAFSA Basics" in body["html"]
 
 
+def test_render_workshop_preview_counts_this_schools_registrations(make_client):
+    """`registrations_to_date`/`attendees` quote THIS school's numbers for the
+    webinar — another school's registrations on the same webinar must not leak
+    into them."""
+    client = make_client("super_admin")
+    other_school_id = uuid.uuid4()
+    session = client._session_local()
+    session.add(School(id=other_school_id, name="Other High", slug="other-high", is_current_customer=True))
+    for email, attended in [("a@example.com", True), ("b@example.com", True), ("c@example.com", False)]:
+        session.add(
+            WorkshopRegistration(
+                id=uuid.uuid4(), webinar_id=WEBINAR_ID, school_id=SCHOOL_ID, email=email, attended=attended
+            )
+        )
+    session.add(
+        WorkshopRegistration(
+            id=uuid.uuid4(),
+            webinar_id=WEBINAR_ID,
+            school_id=other_school_id,
+            email="elsewhere@example.com",
+            attended=True,
+        )
+    )
+    session.commit()
+    session.close()
+    resp = client.post(
+        "/api/v1/emails/preview/render",
+        json=_workshop_payload(subject="{{registrations_to_date}} signed up, {{attendees}} came"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["subject"] == "3 signed up, 2 came"
+
+
+def test_render_workshop_preview_counts_are_zero_without_registrations(make_client):
+    client = make_client("super_admin")
+    resp = client.post(
+        "/api/v1/emails/preview/render",
+        json=_workshop_payload(subject="{{registrations_to_date}}/{{attendees}}"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["subject"] == "0/0"
+
+
 def test_render_workshop_without_webinar_returns_422(make_client):
     client = make_client("super_admin")
     resp = client.post("/api/v1/emails/preview/render", json=_workshop_payload(webinar_id=None))
@@ -305,6 +348,111 @@ def test_render_unknown_school_returns_404(make_client):
         "/api/v1/emails/preview/render", json=_broadcast_payload(school_id=str(uuid.uuid4()))
     )
     assert resp.status_code == 404
+
+
+# ── Grouped preview ──────────────────────────────────────────────────────────
+
+
+def _set_opt_in(client, contact_ids: list[uuid.UUID]) -> None:
+    """Opt the given contacts into broadcasts (the column defaults to False)."""
+    session = client._session_local()
+    for contact_id in contact_ids:
+        session.get(Contact, contact_id).broadcast_emails = True
+    session.commit()
+    session.close()
+
+
+def test_grouped_preview_greets_every_recipient(make_client):
+    """The whole school audience shares one grouped email, so
+    recipient_first_names must join all of their names — the tag is unusable in
+    a preview otherwise (it would always show a single sample contact)."""
+    client = make_client("super_admin")
+    resp = client.post(
+        "/api/v1/emails/preview/render",
+        json=_broadcast_payload(
+            subject="Hi {{recipient_first_names}},", grouped=True, opt_in_filter="all"
+        ),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["subject"] == "Hi Admin, Casey and Fran,"
+
+
+def test_grouped_preview_keeps_duplicate_first_names(make_client):
+    """Two counselors who share a first name must both be greeted ("Paul and
+    Paul") — the grouped greeting is a list of recipients, not a set of names."""
+    client = make_client("super_admin")
+    paul_one, paul_two = uuid.uuid4(), uuid.uuid4()
+    session = client._session_local()
+    session.add(
+        Contact(id=paul_one, school_id=SCHOOL_ID, email="paul.a@example.com", first_name="Paul", last_name="Marlin")
+    )
+    session.add(
+        Contact(id=paul_two, school_id=SCHOOL_ID, email="paul.b@example.com", first_name="Paul", last_name="Munoz")
+    )
+    session.commit()
+    session.close()
+    resp = client.post(
+        "/api/v1/emails/preview/render",
+        json=_broadcast_payload(
+            subject="Dear {{recipient_first_names}},",
+            grouped=True,
+            recipient_contact_ids=[str(paul_one), str(paul_two)],
+        ),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["subject"] == "Dear Paul and Paul,"
+
+
+def test_grouped_preview_returns_the_to_line(make_client):
+    """The preview reports who shares the email so the admin can sanity-check
+    the To header before sending."""
+    client = make_client("super_admin")
+    _set_opt_in(client, [ADMIN_CONTACT_ID, COUNSELOR_CONTACT_ID])
+    resp = client.post(
+        "/api/v1/emails/preview/render", json=_broadcast_payload(grouped=True)
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["recipients"] == [
+        "Admin Person <admin@collegemoneymethod.com>",
+        "Casey Counselor <counselor@collegemoneymethod.com>",
+    ]
+
+
+def test_grouped_preview_applies_the_audience_filters(make_client):
+    """Opted-out contacts are not on a real send's To header, so they must not
+    appear in the grouped greeting either."""
+    client = make_client("super_admin")
+    _set_opt_in(client, [COUNSELOR_CONTACT_ID])
+    resp = client.post(
+        "/api/v1/emails/preview/render",
+        json=_broadcast_payload(subject="Hi {{recipient_first_names}},", grouped=True),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["subject"] == "Hi Casey,"
+
+
+def test_grouped_preview_ignores_the_sample_contact(make_client):
+    """A grouped email has no single "you" — the counselor tags come from the
+    school's representative counselor even when a sample contact is picked."""
+    client = make_client("super_admin")
+    _set_opt_in(client, [COUNSELOR_CONTACT_ID, FAMILY_CONTACT_ID])
+    resp = client.post(
+        "/api/v1/emails/preview/render",
+        json=_broadcast_payload(
+            subject="Hi from {{counselor_first_name}}",
+            grouped=True,
+            contact_id=str(COUNSELOR_CONTACT_ID),
+        ),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["subject"] == "Hi from Admin"
+
+
+def test_ungrouped_preview_reports_no_recipient_list(make_client):
+    client = make_client("super_admin")
+    resp = client.post("/api/v1/emails/preview/render", json=_broadcast_payload())
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["recipients"] == []
 
 
 # ── Webinar picker ───────────────────────────────────────────────────────────

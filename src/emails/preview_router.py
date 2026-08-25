@@ -49,12 +49,28 @@ class PreviewContextIn(BaseModel):
     # for broadcast.
     webinar_id: uuid.UUID | None = None
     # Optional; only affects counselor_name when the contact IS the hub_admin.
+    # Ignored when `grouped` is on — a grouped email has no single recipient.
     contact_id: uuid.UUID | None = None
+    # Preview the "one email per school" broadcast option: renders against the
+    # whole school audience so `recipient_first_names` shows the joined greeting.
+    # The three fields below only apply when it is on (general category only).
+    grouped: bool = False
+    role_filter: Literal["all", "hub_admin"] = "all"
+    opt_in_filter: Literal["opted_in", "all"] = "opted_in"
+    # The admin-edited recipient set from the compose form, when they customized
+    # it; narrowed to `school_id` server-side. Empty = resolve from the filters.
+    recipient_contact_ids: list[uuid.UUID] = Field(default_factory=list)
+    # Mirrors the template's "include CMM logo & footer" setting so the preview
+    # shows the same shell the send will use.
+    include_branding: bool = False
 
 
 class TemplatePreviewOut(BaseModel):
     subject: str  # merge-tags resolved
     html: str
+    # "Name <email>" for every address on a grouped send's To header; empty for
+    # a normal preview, which is addressed to one contact.
+    recipients: list[str] = Field(default_factory=list)
 
 
 class PreviewWebinarOut(BaseModel):
@@ -64,14 +80,18 @@ class PreviewWebinarOut(BaseModel):
     cycle_name: str | None
 
 
-def _render(db: Session, payload: PreviewContextIn) -> tuple[str, str, str]:
-    """Resolve context and render -> (html, text, resolved_subject)."""
+def _render(db: Session, payload: PreviewContextIn) -> tuple[str, str, str, list[str]]:
+    """Resolve context and render -> (html, text, resolved_subject, recipients)."""
     ctx = build_preview_context(
         db,
         category=payload.category,
         school_id=payload.school_id,
         webinar_id=payload.webinar_id,
         contact_id=payload.contact_id,
+        grouped=payload.grouped,
+        role_filter=payload.role_filter,
+        opt_in_filter=payload.opt_in_filter,
+        recipient_contact_ids=payload.recipient_contact_ids,
     )
     html, text = render_email(
         payload.body_json,
@@ -79,9 +99,10 @@ def _render(db: Session, payload: PreviewContextIn) -> tuple[str, str, str]:
         payload.subject,
         school_slug=ctx.school_slug,
         origin=settings.app_public_url or None,
+        include_branding=payload.include_branding,
     )
     subject = resolve_plain_text(payload.subject, ctx.replacements)
-    return html, text, subject
+    return html, text, subject, ctx.recipients
 
 
 @router.get("/webinars", response_model=list[PreviewWebinarOut])
@@ -116,8 +137,8 @@ def list_school_webinars(
 
 @router.post("/render", response_model=TemplatePreviewOut)
 def render_preview(payload: PreviewContextIn, _admin: AdminDep, db: DbDep) -> TemplatePreviewOut:
-    html, _text, subject = _render(db, payload)
-    return TemplatePreviewOut(subject=subject, html=html)
+    html, _text, subject, recipients = _render(db, payload)
+    return TemplatePreviewOut(subject=subject, html=html, recipients=recipients)
 
 
 @router.post("/send-test", response_model=SendTestResultOut)
@@ -132,7 +153,7 @@ def send_preview_test(payload: PreviewContextIn, admin: AdminDep, db: DbDep) -> 
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No email address on file for the current admin — cannot send a test",
         )
-    html, text, subject = _render(db, payload)
+    html, text, subject, _recipients = _render(db, payload)
     send_email(
         db,
         to=to,

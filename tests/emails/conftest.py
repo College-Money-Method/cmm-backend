@@ -43,6 +43,8 @@ SCHEDULER_TEST_TABLES = (
     "webinars",
     "cycles",
     "portal_mapping",
+    # Backs the registrations_to_date / attendees merge tags.
+    "workshop_registrations",
     "workshop_email_templates",
     "email_template",
     "email_automation",

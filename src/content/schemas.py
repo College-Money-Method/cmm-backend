@@ -357,6 +357,7 @@ class ContentAssetDetail(BaseModel):
     schools: list[SchoolRef] = []
     faqs: list[FaqOut]
     resources: list[ContentAssetListItem]
+    resource_categories: list[ResourceCategoryOut] = []
     tags: list[TagOut] = []
     source: str | None = None
     review_status: str | None = None

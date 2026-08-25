@@ -1,7 +1,8 @@
 """Tests for `resolve_audience` — the broadcast filter resolver.
 
-Covers: school/cohort targeting restricted to customer schools (even when a
-caller asks for a non-customer school explicitly), the school+cohort union, role
+Covers: school/cohort targeting restricted to current-customer schools (even
+when a caller asks for a prospect explicitly, and even for a prospect whose
+School Resource Center an admin activated), the school+cohort union, role
 filter, the `broadcast_emails` opt-in filter, and the exclusion of
 deactivated/emailless contacts.
 """
@@ -28,6 +29,7 @@ from src.schools.models import Contact, School
 CUSTOMER_SCHOOL_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 PROSPECT_SCHOOL_ID = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 ACTIVATED_PROSPECT_SCHOOL_ID = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+COHORT_CUSTOMER_SCHOOL_ID = uuid.UUID("dadadada-dada-dada-dada-dadadadadada")
 COHORT_ID = uuid.UUID("bcbcbcbc-bcbc-bcbc-bcbc-bcbcbcbcbcbc")
 
 # Auth user ids for the hub_admin/hub_user contacts (letter-only, same reason).
@@ -35,6 +37,7 @@ USER_CUSTOMER_ADMIN = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
 USER_CUSTOMER_USER = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
 USER_ACTIVATED_ADMIN = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
 USER_PROSPECT_ADMIN = uuid.UUID("abababab-abab-abab-abab-abababababab")
+USER_COHORT_ADMIN = uuid.UUID("acacacac-acac-acac-acac-acacacacacac")
 
 
 @pytest.fixture
@@ -54,11 +57,19 @@ def db_session():
 
 def _seed_standard_fixture(db) -> None:
     """Seed 2 customer-school contacts (1 hub_admin opted-in, 1 hub_user not
-    opted-in), 1 activated-but-not-customer prospect contact (still in scope,
-    and the only member of the seeded cohort), and 1 true prospect contact
-    (must never be reachable)."""
+    opted-in), 1 customer contact in the seeded cohort, 1 prospect contact whose
+    SRC an admin activated (also in that cohort — still unreachable), and 1 plain
+    prospect contact. Only the customer-school contacts are ever addressable."""
     db.add(Cohort(id=COHORT_ID, name="Fall 2026"))
     db.add(School(id=CUSTOMER_SCHOOL_ID, name="Customer High", is_current_customer=True))
+    db.add(
+        School(
+            id=COHORT_CUSTOMER_SCHOOL_ID,
+            name="Cohort Customer High",
+            is_current_customer=True,
+            cohort_id=COHORT_ID,
+        )
+    )
     db.add(
         School(
             id=ACTIVATED_PROSPECT_SCHOOL_ID,
@@ -93,6 +104,15 @@ def _seed_standard_fixture(db) -> None:
     )
     db.add(
         Contact(
+            school_id=COHORT_CUSTOMER_SCHOOL_ID,
+            user_id=USER_COHORT_ADMIN,
+            email="admin@cohort.example",
+            role="Director",
+            broadcast_emails=True,
+        )
+    )
+    db.add(
+        Contact(
             school_id=ACTIVATED_PROSPECT_SCHOOL_ID,
             user_id=USER_ACTIVATED_ADMIN,
             email="admin@activated.example",
@@ -111,18 +131,19 @@ def _seed_standard_fixture(db) -> None:
     )
     db.add(UserRole(user_id=USER_CUSTOMER_ADMIN, school_id=CUSTOMER_SCHOOL_ID, role="hub_admin"))
     db.add(UserRole(user_id=USER_CUSTOMER_USER, school_id=CUSTOMER_SCHOOL_ID, role="hub_user"))
+    db.add(UserRole(user_id=USER_COHORT_ADMIN, school_id=COHORT_CUSTOMER_SCHOOL_ID, role="hub_admin"))
     db.add(UserRole(user_id=USER_ACTIVATED_ADMIN, school_id=ACTIVATED_PROSPECT_SCHOOL_ID, role="hub_admin"))
     db.add(UserRole(user_id=USER_PROSPECT_ADMIN, school_id=PROSPECT_SCHOOL_ID, role="hub_admin"))
     db.commit()
 
 
-def test_all_customers_opted_in_excludes_non_opted_in_and_non_customer_schools(db_session):
+def test_all_customers_opted_in_excludes_non_opted_in_and_prospect_schools(db_session):
     _seed_standard_fixture(db_session)
 
     contacts = resolve_audience(db_session, [], [], "all", "opted_in")
 
     emails = {c.email for c in contacts}
-    assert emails == {"admin@customer.example", "admin@activated.example"}
+    assert emails == {"admin@customer.example", "admin@cohort.example"}
 
 
 def test_opt_in_filter_all_reaches_non_opted_in_contact(db_session):
@@ -153,12 +174,25 @@ def test_opt_in_reads_broadcast_emails_not_auto_emails(db_session):
 
 
 def test_school_scope_restricted_to_customer_schools_even_for_forged_prospect_id(db_session):
-    """Passing a real, existing school_id for a non-customer, non-activated
-    school must still resolve to an empty audience — the customer-school
-    restriction applies unconditionally, regardless of caller input."""
+    """Passing a real, existing prospect school_id must still resolve to an
+    empty audience — the customer restriction applies unconditionally,
+    regardless of caller input."""
     _seed_standard_fixture(db_session)
 
     contacts = resolve_audience(db_session, [str(PROSPECT_SCHOOL_ID)], [], "all", "all")
+
+    assert contacts == []
+
+
+def test_src_activated_prospect_is_still_not_emailable(db_session):
+    """Activating a prospect's School Resource Center gives them a preview of
+    the site, NOT a place on any mailing list — targeting them explicitly (the
+    strongest possible request) still resolves to nobody."""
+    _seed_standard_fixture(db_session)
+
+    contacts = resolve_audience(
+        db_session, [str(ACTIVATED_PROSPECT_SCHOOL_ID)], [], "all", "all"
+    )
 
     assert contacts == []
 
@@ -173,12 +207,14 @@ def test_school_scope_restricts_to_one_school(db_session):
 
 
 def test_cohort_scope_expands_to_member_schools(db_session):
+    """The cohort holds a customer AND an SRC-activated prospect; expanding it
+    reaches only the customer."""
     _seed_standard_fixture(db_session)
 
     contacts = resolve_audience(db_session, [], [str(COHORT_ID)], "all", "all")
 
     emails = {c.email for c in contacts}
-    assert emails == {"admin@activated.example"}
+    assert emails == {"admin@cohort.example"}
 
 
 def test_school_and_cohort_scopes_union(db_session):
@@ -194,7 +230,7 @@ def test_school_and_cohort_scopes_union(db_session):
     assert emails == {
         "admin@customer.example",
         "user@customer.example",
-        "admin@activated.example",
+        "admin@cohort.example",
     }
 
 
@@ -204,7 +240,7 @@ def test_role_filter_hub_admin_only(db_session):
     contacts = resolve_audience(db_session, [], [], "hub_admin", "all")
 
     emails = {c.email for c in contacts}
-    assert emails == {"admin@customer.example", "admin@activated.example"}
+    assert emails == {"admin@customer.example", "admin@cohort.example"}
 
 
 def test_deactivated_and_emailless_contacts_excluded(db_session):

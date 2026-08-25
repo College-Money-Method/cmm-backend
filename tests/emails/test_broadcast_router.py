@@ -611,6 +611,47 @@ def test_grouped_send_renders_every_recipient_first_name(make_client):
         db.close()
 
 
+def _send_and_read_html(client, *, include_branding: bool) -> str:
+    """Create a one-recipient broadcast, send it, return the rendered HTML."""
+    broadcast = client.post(
+        "/api/v1/emails/broadcasts",
+        json={
+            "subject": "Hi",
+            "body_json": GREETING_DOC,
+            "school_ids": [str(SCHOOL_ID)],
+            "include_branding": include_branding,
+        },
+    ).json()
+    client.post(
+        f"/api/v1/emails/broadcasts/{broadcast['id']}/send",
+        json={"recipient_contact_ids": [str(FAMILY_CONTACT_1_ID)]},
+    )
+    db = client._session_local()
+    try:
+        log = (
+            db.query(EmailSendLog)
+            .filter(EmailSendLog.broadcast_id == uuid.UUID(broadcast["id"]))
+            .first()
+        )
+        return log.rendered_html or ""
+    finally:
+        db.close()
+
+
+def test_send_defaults_to_the_plain_unbranded_shell(make_client):
+    """A broadcast sends as a plain message unless it opted into branding."""
+    html = _send_and_read_html(make_client("super_admin"), include_branding=False)
+
+    assert "<img" not in html
+    assert "College Money Method" not in html
+
+
+def test_send_uses_the_branded_shell_when_the_broadcast_opted_in(make_client):
+    html = _send_and_read_html(make_client("super_admin"), include_branding=True)
+
+    assert "<img" in html
+
+
 def test_ungrouped_send_renders_the_single_recipients_first_name(make_client):
     """The same merge tag reads naturally on a normal, per-contact send."""
     client = make_client("super_admin")

@@ -106,6 +106,8 @@ def build_workshop_merge_replacements(
     registration_url: str | None = None,
     resources: list[dict] | None = None,
     origin: str | None = None,
+    registration_count: int = 0,
+    attendee_count: int = 0,
 ) -> dict[str, str]:
     """Builds the full ``{{tag}}`` -> value map for all ``WORKSHOP_MERGE_TAGS``.
 
@@ -115,6 +117,10 @@ def build_workshop_merge_replacements(
     ``recording_link`` and ``workshop_detail_url`` both resolve to the
     workshop detail page (not the raw Zoom URL) — same convention as the
     frontend, so families view the embedded recording/resources in-portal.
+
+    ``registration_count``/``attendee_count`` are this school's numbers for this
+    webinar, counted by the caller at render time (``registrations_to_date`` is
+    "as of now", so it is never a stored value).
     """
     resolved_origin = origin or ""
     slug = workshop_slug(workshop_name, webinar_id)
@@ -150,4 +156,6 @@ def build_workshop_merge_replacements(
         "recording_link": workshop_page_url,
         "workshop_detail_url": workshop_page_url,
         "resources_list": "\n".join(resource_lines),
+        "registrations_to_date": str(registration_count),
+        "attendees": str(attendee_count),
     }

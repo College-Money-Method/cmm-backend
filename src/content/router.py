@@ -701,6 +701,7 @@ def _load_asset_detail(db: DbDep, asset_id: uuid.UUID) -> ContentAsset:
             selectinload(ContentAsset.state_rows),
             selectinload(ContentAsset.faqs),
             selectinload(ContentAsset.resources).selectinload(ContentAsset.asset_type),
+            selectinload(ContentAsset.resource_categories),
         )
     )
     obj = db.scalar(stmt)
@@ -1373,6 +1374,20 @@ def update_asset_objectives(asset_id: uuid.UUID, body: RelationshipsUpdate, _adm
     db.query(ContentAssetObjective).filter_by(content_asset_id=asset_id).delete()
     for oid in body.ids:
         db.add(ContentAssetObjective(content_asset_id=asset_id, objective_id=oid))
+    db.commit()
+    return _load_asset_detail(db, asset_id)
+
+
+@router.put("/assets/{asset_id}/resource-categories", response_model=ContentAssetDetail)
+def update_asset_resource_categories(
+    asset_id: uuid.UUID, body: RelationshipsUpdate, _admin: AdminDep, db: DbDep
+):
+    """Pin this asset to categories — the mirror of PUT /resource-categories/{id}/assets."""
+    if not db.get(ContentAsset, asset_id):
+        raise HTTPException(status_code=404, detail="Content asset not found")
+    db.query(ResourceCategoryAsset).filter_by(content_asset_id=asset_id).delete()
+    for cid in dict.fromkeys(body.ids):
+        db.add(ResourceCategoryAsset(resource_category_id=cid, content_asset_id=asset_id))
     db.commit()
     return _load_asset_detail(db, asset_id)
 

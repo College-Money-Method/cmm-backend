@@ -159,6 +159,7 @@ def send_to_contacts(
         broadcast.subject,
         school_slug=school.slug if school else None,
         unsubscribe_url=unsubscribe_url,
+        include_branding=broadcast.include_branding,
     )
     from src.emails.link_resolver import resolve_plain_text
 

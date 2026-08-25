@@ -128,9 +128,34 @@ def test_render_email_escapes_merge_tag_values_no_raw_html_injection():
     assert "&lt;script&gt;" in html
 
 
-def test_render_email_renders_empty_safe_without_unsubscribe_url():
-    doc = {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hi"}]}]}
-    html, _text = render_email(doc, {}, "Subject")
+def _hi_doc() -> dict:
+    return {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hi"}]}]}
+
+
+def test_render_email_defaults_to_plain_shell_without_branding_or_unsubscribe():
+    """The default send reads like a plain message: no logo, no branded footer,
+    and — with no unsubscribe URL supplied — nothing but the authored body."""
+    html, _text = render_email(_hi_doc(), {}, "Subject")
+
+    assert "hi" in html
+    assert "College Money Method" not in html
+    assert "<img" not in html
+    assert "Unsubscribe" not in html
+
+
+def test_render_email_plain_shell_keeps_the_unsubscribe_link():
+    """Branding is optional; the unsubscribe link is not — it is required on
+    subscriber mail regardless of which shell renders it."""
+    html, _text = render_email(_hi_doc(), {}, "Subject", unsubscribe_url="https://x.com/u?t=tok")
+
+    assert 'href="https://x.com/u?t=tok"' in html
+    assert "Unsubscribe" in html
+
+
+def test_render_email_branded_shell_adds_logo_and_footer():
+    html, _text = render_email(_hi_doc(), {}, "Subject", include_branding=True)
+
+    assert "<img" in html
     assert "College Money Method" in html
 
 
