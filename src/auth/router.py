@@ -281,6 +281,9 @@ def list_contacts(
     no_school: bool = Query(default=False),
     school_role: str | None = Query(default=None),
     role: str | None = Query(default=None),
+    # Email compose only: hides prospect-school contacts, who are not addressable
+    # (see emails.audience — a prospect never receives CMM mail).
+    customer_schools_only: bool = Query(default=False),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> ContactListResponse:
@@ -307,6 +310,8 @@ def list_contacts(
         q = q.filter(Contact.school_id.is_(None))
     elif school_id:
         q = q.filter(Contact.school_id == school_id)
+    if customer_schools_only:
+        q = q.filter(School.is_current_customer.is_(True))
     if school_role:
         q = q.filter(Contact.role == school_role)
     # Hub permission filter: the access role on the login. "no_access" = contacts

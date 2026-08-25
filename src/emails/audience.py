@@ -2,10 +2,15 @@
 
 ``resolve_audience`` is the single place the filter dimensions (school/cohort
 targeting, role, opt-in) are combined into a SQLAlchemy query. School scope is
-ALWAYS restricted server-side to customer schools
-(``is_current_customer OR is_cmm_website_activated``) regardless of the
-caller-supplied ids — defense in depth so a forged/stale ``school_id`` can never
-reach a non-customer school's contacts.
+ALWAYS restricted server-side to current customers (``is_current_customer``)
+regardless of the caller-supplied ids — defense in depth so a forged/stale
+``school_id`` can never reach a prospect school's contacts.
+
+Note that being emailable is stricter than being able to *see* the School
+Resource Center: ``is_cmm_website_activated`` opens the SRC to a prospect for a
+preview (see ``schools.router._find_public_school``) but deliberately does NOT
+make that prospect's contacts addressable — a prospect never receives CMM mail
+until they are a customer.
 
 The opt-in dimension reads ``Contact.broadcast_emails``, the counselor-managed
 opt-in for one-off admin broadcasts. Scheduler-driven workshop automations use
@@ -58,16 +63,18 @@ def resolve_audience(
             restriction — the ONLY dimension a caller may relax to reach
             non-opted-in contacts.
 
-    Both id lists empty means every customer school. Always excludes deactivated
+    Both id lists empty means every current-customer school. Always excludes deactivated
     contacts (``deleted_at`` set) and contacts with no email address — there is
     nothing to send those either way.
     """
-    is_customer_school = School.is_current_customer.is_(True) | School.is_cmm_website_activated.is_(True)
-
     stmt = (
         select(Contact)
         .join(School, Contact.school_id == School.id)
-        .where(is_customer_school, Contact.deleted_at.is_(None), Contact.email.is_not(None))
+        .where(
+            School.is_current_customer.is_(True),
+            Contact.deleted_at.is_(None),
+            Contact.email.is_not(None),
+        )
     )
 
     parsed_school_ids = _parse_uuids(school_ids)
@@ -102,20 +109,19 @@ def resolve_contacts_by_ids(db: Session, contact_ids: list[uuid.UUID]) -> list[C
     """Resolve an explicit, admin-edited recipient set to Contact rows.
 
     Applies the same non-negotiable server-side guards as ``resolve_audience``
-    (customer school only, not deactivated, has an email) so a forged or stale
-    id can never reach a non-customer school's contacts — but does NOT apply the
+    (current-customer school only, not deactivated, has an email) so a forged or
+    stale id can never reach a prospect school's contacts — but does NOT apply the
     opt-in filter: the admin has explicitly chosen these recipients. Unsubscribe
     suppression is still enforced downstream at send time.
     """
     if not contact_ids:
         return []
-    is_customer_school = School.is_current_customer.is_(True) | School.is_cmm_website_activated.is_(True)
     stmt = (
         select(Contact)
         .join(School, Contact.school_id == School.id)
         .where(
             Contact.id.in_(contact_ids),
-            is_customer_school,
+            School.is_current_customer.is_(True),
             Contact.deleted_at.is_(None),
             Contact.email.is_not(None),
         )
