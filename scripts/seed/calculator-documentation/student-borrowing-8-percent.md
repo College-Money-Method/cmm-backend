@@ -7,7 +7,7 @@
   calculator.
 
 **If you are an AI agent editing this calculator:** you have been given the
-markup. Read §2 and §6 before you change it. Styling, copy and layout are yours
+markup. Read §2, §5 and §7 before you change it. Styling, copy and layout are yours
 to change freely; the attributes in §2 are the wiring, and removing one stops the
 calculator dead. Nothing in §4 is a bug to fix — the tax row in particular looks
 wrong against older worksheets and is not.
@@ -130,7 +130,92 @@ keep in step. Do not add one.
 - **Brackets are federal, single-filer.** No state tax, no married rates. That is a
   deliberate simplification for a new graduate, not an omission to patch inline.
 
-## 5. Self-tests
+## 5. Translation
+
+The site is read in Spanish and Chinese as well as English, and this calculator
+has to follow. It cannot be translated the way the rest of a page is: the embed
+is **its own browsing context**, and the site's translation engine walks the
+page's DOM — a walk that stops dead at an iframe boundary. So the document is
+translated on the server before it is sent, whenever the URL carries
+`?tl=<locale>`. The site adds that automatically; the whole mechanism is
+`/embed/calculators/student-borrowing-8-percent?tl=es`, which is also how you
+check your work.
+
+That timing is what constrains the markup:
+
+> **Only text that is already in the markup can be translated.** A string built
+> from a JavaScript literal is invisible to the translator and stays English in
+> every language.
+
+### The string bank
+
+Every string the script writes into the page lives as a text node in a hidden
+bank, the last child of `.cmm-calc`:
+
+```html
+<div data-strings style="display:none" aria-hidden="true">
+  <span data-k="some_key">The sentence a reader sees.</span>
+</div>
+```
+
+`display:none` does not exempt it — the skip rules deliberately ignore
+visibility, which is exactly what makes the pattern work. The `borrow-ui`
+script reads a string back with the `S(key, tokens)` helper defined at the top
+of it, which fills the `{token}` slots:
+
+```js
+S("some_key", { amount: money(total) })
+```
+
+Token filling uses `split`/`join`, not `String.replace` — a money value starts
+with `$`, and `$&` in a replacement string is a substitution pattern rather than
+text. Do not "simplify" that to `.replace()`.
+
+### Rules for anyone editing the markup
+
+1. **New reader-facing string → new bank entry.** Never type display text into
+   the script. This includes `<option>` labels, table row labels, headings built
+   at runtime, button text, and messages.
+2. **Keep a sentence whole.** One entry is one complete sentence with `{token}`
+   slots, never fragments joined in script. Translated word order differs from
+   English, and a fragment cannot be reordered.
+3. **Do not split a sentence with inline markup.** `<strong>` inside a sentence
+   cuts it into separate translation units, each translated out of context. Style
+   the whole element instead, or put the emphasised part in its own element
+   beside the sentence.
+4. **Prefer static markup to generated markup.** A `<select>` written out with
+   its `<option>`s, or a table with its labels written out, is translated for
+   free and needs no bank entry. Build in script only what genuinely varies.
+5. **Numbers stay numbers.** Figures come from `money()` at runtime and are never
+   translated. Codes, years and rates are left alone too — a string with no
+   letters is skipped.
+6. **Opting out.** `<script>` and `<style>` content is never translated, and
+   brand terms are protected automatically. To hold something else in English,
+   mark it `translate="no"`, `class="notranslate"` or `data-no-translate`.
+
+Config prose is translated too. Every string value in the Data tab that contains
+a letter is sent for translation — question wording, category labels, notes — so
+those may be written as plain display prose. Values with no letters (an award
+year, a rate) are left exactly as typed.
+
+### This calculator's bank
+
+| Key | English |
+|---|---|
+| `years_one` | {count} year |
+| `years_many` | {count} years |
+
+Two entries, the singular and plural of a year count. Languages that inflect
+differently need the whole phrase, which is why the number is a token inside it
+rather than concatenated in script.
+
+### Checking it
+
+Open `/embed/calculators/student-borrowing-8-percent?tl=es` and read it.
+Everything a reader sees should be Spanish; anything still in English is a
+string that escaped the bank.
+
+## 6. Self-tests
 
 11 cases live in `window.__CALC_SELFTEST__` at the bottom of the formula script.
 The **Checks** button on the Markup tab runs them; a published row is expected to
@@ -154,7 +239,7 @@ cases run at 0.01–0.02, compounding cases at 1–2.
 Anchor figures: $23,464 borrowed at a $40,000 salary, $323.49 on +$5,000, and
 $57,946 / $183,815 / $583,093 at $333.33/mo.
 
-## 6. Editing checklist
+## 7. Editing checklist
 
 Restyling or reordering:
 
@@ -162,13 +247,15 @@ Restyling or reordering:
    ancestor of all of them.
 2. Keep the fragment a fragment — no document wrapper, no external stylesheet or
    font link, no `fetch`, no `localStorage`.
-3. Keep both scripts, with their `id`s. `borrow-formula` is run on its own by the
+3. Keep the `[data-strings]` bank and the `S()` helper, and keep display text
+   in the bank rather than in the script (§5).
+4. Keep both scripts, with their `id`s. `borrow-formula` is run on its own by the
    test harness; renaming it hides the calculator from the checks.
-4. Do not replace a `data-out` label with typed-in text, however static it looks
+5. Do not replace a `data-out` label with typed-in text, however static it looks
    (see §2).
-5. `data-locked`, `data-over` and `data-total` are styling hooks the script sets.
+6. `data-locked`, `data-over` and `data-total` are styling hooks the script sets.
    Restyle them; do not set them by hand.
-6. Run the Checks button. 11/11 before saving a published row.
+7. Run the Checks button. 11/11 before saving a published row.
 
 Changing the numbers: `loan_interest_rate` (with its `loan_rate_note`),
 `standard_deduction`, `payroll_tax_rate` and `tax_brackets` are the yearly edits,

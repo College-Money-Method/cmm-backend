@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
 
@@ -274,6 +275,19 @@ class ObjectiveAssetsUpdate(BaseModel):
 
 # ── Content Assets ────────────────────────────────────────────────────────────
 
+def _normalize_suggested_grades(v: str | None) -> str | None:
+    """Normalize a grade CSV to sorted, unique, numeric tokens ("12th,9" -> "9,12").
+
+    Stored as a flat CSV of grade numbers (same convention as Goal/Workshop).
+    Keeping tokens purely numeric is what lets the list endpoints match a grade
+    with the `(^|,)N(,|$)` regex.
+    """
+    if v is None:
+        return None
+    grades = sorted({int(m) for m in re.findall(r"\d+", v)})
+    return ",".join(str(g) for g in grades) or None
+
+
 class ContentAssetListItem(BaseModel):
     id: uuid.UUID
     name: str
@@ -292,6 +306,7 @@ class ContentAssetListItem(BaseModel):
     click_count: int = 0
     source: str | None = None
     review_status: str | None = None
+    suggested_grades: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -389,6 +404,7 @@ class ContentAssetCreate(BaseModel):
     why_important: str | None = None
     how_to_use: str | None = None
     time_estimate_minutes: int | None = None
+    suggested_grades: str | None = None
 
     @field_validator("status")
     @classmethod
@@ -396,6 +412,11 @@ class ContentAssetCreate(BaseModel):
         if v not in ("draft", "published", "archived"):
             raise ValueError("status must be draft, published, or archived")
         return v
+
+    @field_validator("suggested_grades")
+    @classmethod
+    def normalize_grades(cls, v: str | None) -> str | None:
+        return _normalize_suggested_grades(v)
 
 
 class ContentAssetUpdate(BaseModel):
@@ -417,6 +438,12 @@ class ContentAssetUpdate(BaseModel):
     why_important: str | None = None
     how_to_use: str | None = None
     time_estimate_minutes: int | None = None
+    suggested_grades: str | None = None
+
+    @field_validator("suggested_grades")
+    @classmethod
+    def normalize_grades(cls, v: str | None) -> str | None:
+        return _normalize_suggested_grades(v)
 
     @field_validator("status")
     @classmethod

@@ -8,7 +8,7 @@
 
 **If you are an AI agent editing this calculator:** you have been given the
 markup. This is the largest and most wired of the four calculators — a five-step
-form whose step list changes with the answers. Read §2 and §6 before you change
+form whose step list changes with the answers. Read §2, §5 and §7 before you change
 it. Styling, copy and layout are yours to change freely; the attributes in §2 are
 the wiring, and removing one stops the calculator dead. Nothing in §4 is a bug to
 fix, however wrong it looks against a federal worksheet.
@@ -182,7 +182,123 @@ deliberate and self-tested:
 - **Hiding the second parent's field also zeroes it.** A wage typed before
   switching to a single parent must not keep counting from behind a hidden input.
 
-## 5. Self-tests
+## 5. Translation
+
+The site is read in Spanish and Chinese as well as English, and this calculator
+has to follow. It cannot be translated the way the rest of a page is: the embed
+is **its own browsing context**, and the site's translation engine walks the
+page's DOM — a walk that stops dead at an iframe boundary. So the document is
+translated on the server before it is sent, whenever the URL carries
+`?tl=<locale>`. The site adds that automatically; the whole mechanism is
+`/embed/calculators/fafsa-sai-2027-28?tl=es`, which is also how you
+check your work.
+
+That timing is what constrains the markup:
+
+> **Only text that is already in the markup can be translated.** A string built
+> from a JavaScript literal is invisible to the translator and stays English in
+> every language.
+
+### The string bank
+
+Every string the script writes into the page lives as a text node in a hidden
+bank, the last child of `.cmm-calc`:
+
+```html
+<div data-strings style="display:none" aria-hidden="true">
+  <span data-k="some_key">The sentence a reader sees.</span>
+</div>
+```
+
+`display:none` does not exempt it — the skip rules deliberately ignore
+visibility, which is exactly what makes the pattern work. The `sai-ui`
+script reads a string back with the `S(key, tokens)` helper defined at the top
+of it, which fills the `{token}` slots:
+
+```js
+S("some_key", { amount: money(total) })
+```
+
+Token filling uses `split`/`join`, not `String.replace` — a money value starts
+with `$`, and `$&` in a replacement string is a substitution pattern rather than
+text. Do not "simplify" that to `.replace()`.
+
+### Rules for anyone editing the markup
+
+1. **New reader-facing string → new bank entry.** Never type display text into
+   the script. This includes `<option>` labels, table row labels, headings built
+   at runtime, button text, and messages.
+2. **Keep a sentence whole.** One entry is one complete sentence with `{token}`
+   slots, never fragments joined in script. Translated word order differs from
+   English, and a fragment cannot be reordered.
+3. **Do not split a sentence with inline markup.** `<strong>` inside a sentence
+   cuts it into separate translation units, each translated out of context. Style
+   the whole element instead, or put the emphasised part in its own element
+   beside the sentence.
+4. **Prefer static markup to generated markup.** A `<select>` written out with
+   its `<option>`s, or a table with its labels written out, is translated for
+   free and needs no bank entry. Build in script only what genuinely varies.
+5. **Numbers stay numbers.** Figures come from `money()` at runtime and are never
+   translated. Codes, years and rates are left alone too — a string with no
+   letters is skipped.
+6. **Opting out.** `<script>` and `<style>` content is never translated, and
+   brand terms are protected automatically. To hold something else in English,
+   mark it `translate="no"`, `class="notranslate"` or `data-no-translate`.
+
+Config prose is translated too. Every string value in the Data tab that contains
+a letter is sent for translation — question wording, category labels, notes — so
+those may be written as plain display prose. Values with no letters (an award
+year, a rate) are left exactly as typed.
+
+### This calculator's bank
+
+Twenty-five entries, the largest bank of the four:
+
+| Key | English |
+|---|---|
+| `step_1` … `step_5` | Family · Parent income · Assets · Student · Results |
+| `step_chip` | {number}. {label} |
+| `step_progress` | Step {number} of {total} |
+| `married_heading_income` | Parents' income |
+| `married_heading_assets` | Parents' assets |
+| `married_parent1` | Parent 1 earned income (from work) |
+| `single_heading_income` | Parent's income |
+| `single_heading_assets` | Parent's assets |
+| `single_parent1` | Parent's earned income (from work) |
+| `estimated_award` | estimated award |
+| `pell_pending` | Pell award amounts for {year} have not been published yet. |
+| `pell_this_year` | this year |
+| `pell_max` | Eligible for the maximum Pell Grant, about {amount} a year. |
+| `pell_partial` | Estimated Pell Grant of about {amount} a year. |
+| `pell_min` | Eligible for the minimum Pell Grant, about {amount} a year. |
+| `pell_ineligible` | Not eligible for a Pell Grant: the index is at least twice the maximum award. |
+| `pell_none` | Not eligible for a Pell Grant based on these figures. |
+| `note_not_required` | Because the parents are not required to file a federal return, … |
+| `note_pending` | The Student Aid Index above is complete. … |
+| `note_multiple` | Having {count} students in college no longer divides … |
+| `link_copied` | Link copied |
+
+The `married_*` / `single_*` pairs are read as `S(scope + "_" + key)` against the
+`[data-text]` slots, so both halves of every pair must exist.
+
+Two parts of this calculator were moved out of the script and into the markup for
+the same reason, and must stay there:
+
+- **the state `<select>`** — every `<option>` written out rather than built in
+  script. The schedule only ever depends on the code, so the visible name is free to be
+  translated.
+- **the breakdown table** — every row written out with its label and a
+  `<td data-out="row_*">` for the figure. Rows carry `data-row="full"` or
+  `data-row="statutory"`; the script only toggles `hidden` between the two sets
+  and fills the figures.
+
+### Checking it
+
+Open `/embed/calculators/fafsa-sai-2027-28?tl=es` and read it.
+Everything a reader sees should be Spanish; anything still in English is a
+string that escaped the bank.
+
+## 6. Self-tests
 
 11 cases live in `window.__CALC_SELFTEST__` at the bottom of the formula script.
 The **Checks** button on the Markup tab runs them, and the publish gate enforces
@@ -207,7 +323,7 @@ the federal spec, with zero divergences. That pass found three self-test
 expectations that had been typed wrong by hand — the formula was right every
 time. **If a self-test and the formula disagree here, suspect the test first.**
 
-## 6. Editing checklist
+## 7. Editing checklist
 
 Restyling or reordering:
 
@@ -216,18 +332,20 @@ Restyling or reordering:
    loudest.
 2. Keep the fragment a fragment — no document wrapper, no external stylesheet or
    font link, no `fetch`, no `localStorage`.
-3. Keep both scripts, with their `id`s. `sai-formula` is run on its own by the
+3. Keep the `[data-strings]` bank and the `S()` helper, and keep display text
+   in the bank rather than in the script (§5).
+4. Keep both scripts, with their `id`s. `sai-formula` is run on its own by the
    test harness; renaming it hides the calculator from the checks.
-4. Keep `preventDefault` on the form, and keep the caption under **Copy a link**
+5. Keep `preventDefault` on the form, and keep the caption under **Copy a link**
    if you keep the button (§2).
-5. Moving a field between panels is safe — the script reads by `name`, not by
+6. Moving a field between panels is safe — the script reads by `name`, not by
    panel. Renumbering panels is not: the last one is the results panel.
-6. Generated content — state options, step chips, breakdown rows, the Pell
+7. Generated content — state options, step chips, breakdown rows, the Pell
    sentence — can only be restyled through CSS and through the UI script. There
    is no template for them in the markup.
-7. Test both marital answers and *Not required to file* after any change to the
+8. Test both marital answers and *Not required to file* after any change to the
    step flow; that path drops three panels.
-8. Run the Checks button. 11/11 before saving a published row.
+9. Run the Checks button. 11/11 before saving a published row.
 
 Changing the numbers: the whole yearly update — poverty guidelines and
 increments, the IPA table and its increment, the OASDI wage base, Medicare
