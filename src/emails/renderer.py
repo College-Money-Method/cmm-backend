@@ -1,8 +1,9 @@
 """Top-level Tiptap JSON -> email (HTML + plain text) render pipeline.
 
 Pipeline: resolve merge tags/links (``link_resolver``) -> walk the resolved doc
-into an HTML fragment + plain text (``tiptap_render``) -> inject into the
-Jinja2 base shell -> inline CSS (``inliner``). Content is authored via a
+into an HTML fragment + plain text (``tiptap_render``) -> inject into a Jinja2
+shell (plain ``base.html`` by default, ``base_branded.html`` when the sender
+opted into CMM branding) -> inline CSS (``inliner``). Content is authored via a
 restricted Tiptap schema and rendered fresh at send time (not pre-rendered/
 stored) so the same source of truth backs preview and send.
 """
@@ -35,6 +36,7 @@ def render_email(
     school_slug: str | None = None,
     unsubscribe_url: str | None = None,
     origin: str | None = None,
+    include_branding: bool = False,
 ) -> tuple[str, str]:
     """Render a Tiptap JSON document into inlined-CSS HTML + plain text.
 
@@ -48,6 +50,9 @@ def render_email(
             when omitted.
         origin: Absolute origin for internal links. Defaults to
             ``settings.app_public_url`` when omitted.
+        include_branding: Wrap the body in the CMM shell (logo, card, footer
+            rule) instead of the default plain, Gmail-like message. Opt-in per
+            template — see ``EmailTemplate.include_branding``.
 
     Returns:
         ``(html, text)`` — inlined-CSS HTML ready for SES, and a plain-text
@@ -71,7 +76,7 @@ def render_email(
     plain_text = tiptap_to_plain_text(resolved_doc)
     resolved_subject = resolve_plain_text(subject, merge_tag_replacements)
 
-    template = _jinja_env.get_template("base.html")
+    template = _jinja_env.get_template("base_branded.html" if include_branding else "base.html")
     html_out = template.render(
         subject=resolved_subject,
         # Already HTML-escaped node-by-node in tiptap_render — marking safe here

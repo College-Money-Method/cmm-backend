@@ -33,6 +33,9 @@ class EmailTemplateCreate(BaseModel):
     name: str = Field(min_length=1)
     subject: str = Field(min_length=1)
     body_json: dict
+    # Render through the CMM shell (logo + branded footer) instead of the
+    # default plain message.
+    include_branding: bool = False
 
 
 class EmailTemplateUpdate(BaseModel):
@@ -41,6 +44,7 @@ class EmailTemplateUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     subject: str | None = Field(default=None, min_length=1)
     body_json: dict | None = None
+    include_branding: bool | None = None
 
 
 class EmailTemplateOut(BaseModel):
@@ -49,6 +53,7 @@ class EmailTemplateOut(BaseModel):
     name: str
     subject: str
     body_json: dict
+    include_branding: bool
     created_at: datetime
     updated_at: datetime | None
 
@@ -60,6 +65,7 @@ def _template_out(template: EmailTemplate) -> EmailTemplateOut:
         name=template.name,
         subject=template.subject,
         body_json=json.loads(template.body_json),
+        include_branding=template.include_branding,
         created_at=template.created_at,
         updated_at=template.updated_at,
     )
@@ -90,6 +96,7 @@ def create_template(payload: EmailTemplateCreate, admin: AdminDep, db: DbDep) ->
         name=payload.name,
         subject=payload.subject,
         body_json=json.dumps(payload.body_json),
+        include_branding=payload.include_branding,
         created_by=admin.user_id,
     )
     db.add(template)

@@ -52,6 +52,7 @@ def _broadcast_out(broadcast: Broadcast) -> BroadcastOut:
         sender_name=broadcast.sender_name,
         sender_email=broadcast.sender_email,
         group_by_school=broadcast.group_by_school,
+        include_branding=broadcast.include_branding,
         created_by=broadcast.created_by,
         created_at=broadcast.created_at,
         status=broadcast.status,
@@ -144,6 +145,7 @@ def create_broadcast(payload: BroadcastCreate, admin: AdminDep, db: DbDep) -> Br
         sender_name=sender_name,
         sender_email=sender_email,
         group_by_school=payload.group_by_school,
+        include_branding=payload.include_branding,
         created_by=admin.user_id,
         status="draft",
     )

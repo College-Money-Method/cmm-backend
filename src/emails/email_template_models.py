@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, Index, Text, Uuid
+from sqlalchemy import Boolean, CheckConstraint, Index, Text, Uuid
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -36,6 +36,11 @@ class EmailTemplate(Base):
     # Tiptap JSON document, serialized as a string (matches Broadcast.body_json
     # so the shared `render_email` pipeline accepts either without branching).
     body_json: Mapped[str] = mapped_column(Text, nullable=False)
+    # Opt in to the CMM shell (logo, card, branded footer). Off by default:
+    # sends should read like a plain message, not a marketing blast.
+    include_branding: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True, onupdate=func.now())

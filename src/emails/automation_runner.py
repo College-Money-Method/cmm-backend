@@ -74,6 +74,7 @@ from src.emails.sender import format_from_header
 from src.emails.ses_client import _sandbox_enabled, send_email
 from src.emails.unsubscribe import build_unsubscribe_url
 from src.emails.workshop_merge_tags import build_workshop_merge_replacements
+from src.workshops.registration_counts import school_registration_counts
 from src.schools.models import Contact, School
 from src.workshops.models import PortalMapping, Webinar, Workshop
 
@@ -251,6 +252,9 @@ def _process_due_mapping(
     )
     family_label = school.nickname or (f"{school.name} families" if school.name else "families")
     resources = [{"id": str(a.id), "name": a.name, "link": a.link} for a in workshop.content_assets]
+    # Counted once per school batch: every recipient at this school quotes the
+    # same registration/attendance figures.
+    registration_count, attendee_count = school_registration_counts(db, webinar.id, school.id)
     subject = automation.subject_override or template.subject
     origin = settings.app_public_url or None
     source = _SOURCE_BY_TYPE.get(automation.type, "pre_workshop")
@@ -282,6 +286,8 @@ def _process_due_mapping(
             registration_url=webinar.registration_url,
             resources=resources,
             origin=origin,
+            registration_count=registration_count,
+            attendee_count=attendee_count,
         )
         unsubscribe_url = build_unsubscribe_url(contact.id)
         html, text = render_email(
@@ -291,6 +297,7 @@ def _process_due_mapping(
             school_slug=school.slug,
             unsubscribe_url=unsubscribe_url,
             origin=origin,
+            include_branding=template.include_branding,
         )
         resolved_subject = resolve_plain_text(subject, replacements)
         try:

@@ -29,6 +29,9 @@ class BroadcastCreate(BaseModel):
     sender_email: str | None = None
     # True = one email per school addressed to all of that school's recipients.
     group_by_school: bool = False
+    # Carried over from the template that prefilled this broadcast; True renders
+    # the CMM shell (logo + branded footer) instead of the plain message.
+    include_branding: bool = False
 
 
 class BroadcastOut(BaseModel):
@@ -42,6 +45,7 @@ class BroadcastOut(BaseModel):
     sender_name: str | None = None
     sender_email: str | None = None
     group_by_school: bool = False
+    include_branding: bool = False
     created_by: uuid.UUID
     created_at: datetime
     status: str

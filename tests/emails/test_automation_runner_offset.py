@@ -105,6 +105,43 @@ def test_post_workshop_after_offset_sends_once(template):
     assert ledger_row is not None
 
 
+@pytest.mark.parametrize("include_branding", [False, True])
+def test_automation_send_follows_its_templates_branding_choice(template, include_branding):
+    """An automation renders through the template it is linked to at send time,
+    so the branding shell comes off that live row — there is no copy to drift."""
+    session = template
+    session.get(EmailTemplate, TEMPLATE_ID).include_branding = include_branding
+    school_id, contact_id, workshop_id, webinar_id, mapping_id, automation_id = (uuid.uuid4() for _ in range(6))
+    now = datetime.now(timezone.utc)
+    _seed_base(
+        session,
+        school_id=school_id,
+        contact_id=contact_id,
+        workshop_id=workshop_id,
+        webinar_id=webinar_id,
+        start_datetime=now - timedelta(days=8),
+        mapping_id=mapping_id,
+    )
+    session.add(
+        EmailAutomation(
+            id=automation_id,
+            name="Post-Workshop Follow-up",
+            type="post_workshop_reminder",
+            enabled=True,
+            offset_value=7,
+            offset_unit="days",
+            offset_direction="after",
+            template_id=TEMPLATE_ID,
+        )
+    )
+    session.commit()
+
+    assert run_automations_check(session) == 1
+
+    log = session.query(EmailSendLog).filter(EmailSendLog.automation_id == automation_id).one()
+    assert ("<img" in (log.rendered_html or "")) is include_branding
+
+
 def test_hours_offset_unit_is_honored(template):
     session = template
     school_id, contact_id, workshop_id, webinar_id, mapping_id, automation_id = (uuid.uuid4() for _ in range(6))

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ subject }}</title>
+  <!--
+    The CMM-branded shell: logo, 480px card, and footer rule. Opt-in only —
+    a template must set `include_branding` (see `renderer.render_email`);
+    everything else renders the plain `base.html`.
+
+    Ported from cmm-frontend's supabase/email-templates/reset-password.html
+    shell. The Google Fonts <link> from that file is intentionally dropped —
+    most email clients strip <head> content — in favor of inline font-family
+    fallback stacks (Lora/Georgia/serif for headings, Inter/Arial/Helvetica/
+    sans-serif for body text).
+  -->
+</head>
+<body style="margin: 0; padding: 0; background-color: #ffffff;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #ffffff; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 480px;">
+          <tr>
+            <td style="padding-bottom: 24px;">
+              <img src="https://cmm-general.s3.us-east-1.amazonaws.com/portal/assets/1036f61184845b94.256.png" alt="College Money Method" width="56" height="56" style="display: block; width: 56px; height: 56px;" />
+            </td>
+          </tr>
+          <tr>
+            <td style="padding-bottom: 24px;">
+              {{ body_html }}
+            </td>
+          </tr>
+          <tr>
+            <td style="border-top: 1px solid #b0c8c0; padding-top: 16px; font-family: 'Inter', Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.4; color: #2c3e4a;">
+              {% if unsubscribe_url %}
+              <p style="margin: 0;">
+                <a href="{{ unsubscribe_url }}" style="color: #2c3e4a;">Unsubscribe or choose which emails you receive</a>.
+              </p>
+              {% else %}
+              <p style="margin: 0;">College Money Method</p>
+              {% endif %}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
