@@ -57,7 +57,12 @@ def sync_schools_from_airtable(db: Session) -> dict:
     school_by_name: dict[str, School] = {s.name.strip().lower(): s for s in all_schools if s.name}
     all_slugs: set[str] = {s.slug for s in all_schools if s.slug}
 
+    # Every record ID present in this pull — used to tell a *dead* airtable_id on a
+    # DB row (Airtable record deleted/recreated) from one another live record owns.
+    pulled_airtable_ids: set[str] = {srec["id"] for srec in at_schools}
+
     schools_created = schools_updated = skipped = cohorts_unresolved = 0
+    airtable_ids_refreshed = 0
 
     for srec in at_schools:
         fields = srec.get("fields", {})
@@ -104,6 +109,33 @@ def sync_schools_from_airtable(db: Session) -> dict:
             if not existing.airtable_id:
                 existing.airtable_id = airtable_rec_id
                 school_by_airtable_id[airtable_rec_id] = existing
+            elif existing.airtable_id != airtable_rec_id:
+                # Matched by slug/name while carrying a different airtable_id. When
+                # the stored ID is absent from this pull, the Airtable record was
+                # deleted and recreated, leaving the DB row pointing at a dead ID —
+                # which silently breaks every airtable_id-keyed sync (webinar →
+                # portal_mapping, contacts → school). Refresh it. Guarded twice:
+                # the stored ID must be dead, and the new ID must be unclaimed, so
+                # duplicate-named Airtable records can never steal each other's ID.
+                if (
+                    existing.airtable_id not in pulled_airtable_ids
+                    and airtable_rec_id not in school_by_airtable_id
+                ):
+                    logger.warning(
+                        "Refreshed stale airtable_id for school %s: %s → %s "
+                        "(old record no longer in Airtable)",
+                        name, existing.airtable_id, airtable_rec_id,
+                    )
+                    school_by_airtable_id.pop(existing.airtable_id, None)
+                    existing.airtable_id = airtable_rec_id
+                    school_by_airtable_id[airtable_rec_id] = existing
+                    airtable_ids_refreshed += 1
+                else:
+                    logger.warning(
+                        "School %s matched by slug/name but airtable_id mismatch left "
+                        "unchanged: db=%s airtable=%s (ID collision or both live)",
+                        name, existing.airtable_id, airtable_rec_id,
+                    )
             if existing.name != name:
                 existing.name = name
             if existing.street_address != street_address:
@@ -167,12 +199,14 @@ def sync_schools_from_airtable(db: Session) -> dict:
 
     db.commit()
     logger.info(
-        "Schools sync complete: created=%d updated=%d skipped=%d cohorts_unresolved=%d",
-        schools_created, schools_updated, skipped, cohorts_unresolved,
+        "Schools sync complete: created=%d updated=%d skipped=%d cohorts_unresolved=%d "
+        "airtable_ids_refreshed=%d",
+        schools_created, schools_updated, skipped, cohorts_unresolved, airtable_ids_refreshed,
     )
     return {
         "schools_created": schools_created,
         "schools_updated": schools_updated,
         "cohorts_unresolved": cohorts_unresolved,
+        "airtable_ids_refreshed": airtable_ids_refreshed,
         "skipped": skipped,
     }
