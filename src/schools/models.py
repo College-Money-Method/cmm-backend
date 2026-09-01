@@ -45,6 +45,9 @@ class School(Base):
     # Raw slug value sourced from Airtable; slug field is owned by the application
     airtable_slug: Mapped[str | None] = mapped_column(Text)
     nickname: Mapped[str | None] = mapped_column(Text)
+    # IANA zone this school's workshop dates/times are written in. NULL uses
+    # settings.workshop_display_timezone — see src/schools/display_timezone.py.
+    display_timezone: Mapped[str | None] = mapped_column(Text)
 
     @property
     def has_password(self) -> bool:

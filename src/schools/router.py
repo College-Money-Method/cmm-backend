@@ -17,7 +17,7 @@ from src.db.deps import DbDep
 from src.cycles.models import Cycle
 from src.schools.models import Contact, School, SchoolEnrollmentCycle
 from src.schools.logo_thumbnail import generate_logo_thumbnail
-from src.schools.slug_utils import unique_slug_db
+from src.schools.slug_utils import find_slug_owner, unique_slug_db, validate_custom_slug
 from src.storage.asset_url import s3_object_url, to_cdn_url
 from src.storage.s3_client import S3ClientDep
 
@@ -305,11 +305,61 @@ def list_schools(
     )
 
 
+@router.get("/slug-available")
+def check_slug_available(
+    _admin: AdminDep,
+    db: DbDep,
+    slug: str = Query(min_length=1),
+    exclude_id: uuid.UUID | None = Query(default=None),
+) -> dict:
+    """Admin: report whether *slug* is usable, for live validation in the school form.
+
+    Registered ahead of /{school_id} so the literal path isn't parsed as a UUID.
+    `exclude_id` lets the edit form ignore the school's own current slug.
+    """
+    try:
+        normalized = validate_custom_slug(slug)
+    except ValueError as exc:
+        return {"available": False, "slug": None, "reason": str(exc)}
+
+    owner = find_slug_owner(normalized, db, exclude_id=exclude_id)
+    if owner:
+        return {
+            "available": False,
+            "slug": normalized,
+            "reason": f'Already used by {owner.name}.',
+        }
+    return {"available": True, "slug": normalized, "reason": None}
+
+
+def _resolve_slug(value: str, db, exclude_id: uuid.UUID | None = None) -> str:
+    """Validate an admin-supplied slug and assert it is free.
+
+    Raises 400 for a malformed/reserved slug and 409 when another school already
+    owns it (mirrored by the /slug-available endpoint the admin UI checks).
+    """
+    try:
+        slug = validate_custom_slug(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    owner = find_slug_owner(slug, db, exclude_id=exclude_id)
+    if owner:
+        raise HTTPException(
+            status_code=409,
+            detail=f'The slug "{slug}" is already used by {owner.name}.',
+        )
+    return slug
+
+
 @router.post("", response_model=SchoolDetail, status_code=status.HTTP_201_CREATED)
 def create_school(body: SchoolCreate, _admin: AdminDep, db: DbDep) -> SchoolDetail:
     """Create a new school (admin only)."""
     data = body.model_dump(exclude_none=True)
-    data.setdefault("slug", unique_slug_db(body.name, db))
+    # An explicit slug wins; otherwise derive a free one from the name.
+    if data.get("slug"):
+        data["slug"] = _resolve_slug(data["slug"], db)
+    else:
+        data["slug"] = unique_slug_db(body.name, db)
     # List views render logo_thumb_url; use the full logo until a real thumb exists
     if data.get("logo_url"):
         data["logo_thumb_url"] = data["logo_url"]
@@ -417,8 +467,8 @@ def update_school(
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # Hub admins may only update a safe subset of fields; name is excluded
-    # because slug is derived from name and must stay stable
+    # Hub admins may only update a safe subset of fields; name and slug are
+    # excluded because the public URL must stay stable for them
     if user.role == "hub_admin":
         counselor_allowed = {
             "logo_url", "nickname",
@@ -427,6 +477,16 @@ def update_school(
             "enrollment_9_12", *_ENROLLMENT_GRADE_FIELDS,
         }
         update_data = {k: v for k, v in update_data.items() if k in counselor_allowed}
+
+    # Slug drives the public SRC URL — validate and uniqueness-check before it
+    # reaches setattr. Sending an empty value regenerates it from the name.
+    if "slug" in update_data:
+        raw = (update_data["slug"] or "").strip()
+        update_data["slug"] = (
+            _resolve_slug(raw, db, exclude_id=school_id)
+            if raw
+            else unique_slug_db(update_data.get("name") or school.name, db, exclude_id=school_id)
+        )
 
     # Keep the list-view thumbnail in sync when the logo changes outside the
     # dedicated upload endpoint (which generates a real thumbnail itself)

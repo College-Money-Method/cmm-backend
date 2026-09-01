@@ -2,9 +2,11 @@
 
 import uuid
 from datetime import date, datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict
 
+from src.schools.display_timezone import is_supported_timezone
 from src.storage.asset_url import CdnUrl
 
 
@@ -39,6 +41,27 @@ class GradeSetRef(BaseModel):
     name: str
 
 
+def _validate_display_timezone(value: str | None) -> str | None:
+    """Reject a zone that is not on the supported list.
+
+    Blank clears the override (back to the app-wide default) rather than
+    storing an empty string that would fail to load as a zone at send time.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if not is_supported_timezone(cleaned):
+        raise ValueError(f"Unsupported timezone: {cleaned}")
+    return cleaned
+
+
+# Writable timezone field: validated on the way in, so a send never has to cope
+# with a zone name the picker could not have produced.
+SchoolTimezone = Annotated[str | None, AfterValidator(_validate_display_timezone)]
+
+
 class SchoolListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -57,16 +80,12 @@ class SchoolListItem(BaseModel):
     is_cmm_website_activated: bool = False
     logo_url: CdnUrl = None
     logo_thumb_url: CdnUrl = None
+    # Authoritative public URL segment (/school/<slug>). Admin-editable; the
+    # Airtable sync only overwrites it while it still tracks the Airtable value.
     slug: str | None = None
-    # Read from ORM but excluded from response — used only to compute effective slug below
-    airtable_slug: str | None = Field(default=None, exclude=True)
     nickname: str | None = None
-
-    @model_validator(mode="after")
-    def _effective_slug(self) -> "SchoolListItem":
-        """Prefer the Airtable-curated slug over the auto-generated one."""
-        self.slug = self.airtable_slug or self.slug
-        return self
+    # IANA zone workshop {{date}}/{{time}} render in; None = app-wide default.
+    display_timezone: str | None = None
     cohort_id: uuid.UUID | None = None
     cohort: CohortSummary | None = None
     grade_set_id: uuid.UUID | None = None
@@ -91,7 +110,10 @@ class SchoolDetail(SchoolListItem):
 
 class SchoolCreate(BaseModel):
     name: str
+    # Optional custom public URL segment; derived from `name` when omitted.
+    slug: str | None = None
     nickname: str | None = None
+    display_timezone: SchoolTimezone = None
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
@@ -112,7 +134,10 @@ class SchoolUpdate(BaseModel):
     """All fields optional — PATCH semantics."""
 
     name: str | None = None
+    # Custom public URL segment. Changing it changes the school's SRC URL.
+    slug: str | None = None
     nickname: str | None = None
+    display_timezone: SchoolTimezone = None
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
@@ -189,14 +214,10 @@ class SchoolPublic(BaseModel):
     id: uuid.UUID
     name: str
     slug: str | None = None
-    airtable_slug: str | None = Field(default=None, exclude=True)
     nickname: str | None = None
-
-    @model_validator(mode="after")
-    def _effective_slug(self) -> "SchoolPublic":
-        """Prefer the Airtable-curated slug over the auto-generated one."""
-        self.slug = self.airtable_slug or self.slug
-        return self
+    # Read-only here: the Hub previews workshop emails client-side and needs the
+    # same zone the backend renders the real send in.
+    display_timezone: str | None = None
     city: str | None = None
     state: str | None = None
     logo_url: CdnUrl = None

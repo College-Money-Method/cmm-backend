@@ -129,6 +129,27 @@ class Settings(BaseSettings):
     # Domains the app may send as. An address outside these is rejected at save
     # time rather than failing per-recipient at SES (unverified identity).
     ses_allowed_sender_domains: str = "collegemoneymethod.com"
+    # Comma-separated From addresses whose mail carries NO unsubscribe mechanism
+    # — neither the visible footer link nor the List-Unsubscribe header (see
+    # src/emails/sender.py::sender_omits_unsubscribe).
+    #
+    # This is a deliberate, narrow exception, not a default to widen casually.
+    # It exists for one-to-one style mail to a small, warm, already-opted-in
+    # audience (Paul's counselor contacts), where the personal read matters more
+    # than the footer. Adding a sender that mails a broad or cold list would
+    # push opt-outs into "Report Spam" instead, and complaint rate is scored
+    # against the whole sending domain — degrading delivery for ALL CMM mail,
+    # automations and transactional included. It also forfeits the CAN-SPAM
+    # opt-out mechanism, which commercial email is required to provide.
+    ses_no_unsubscribe_senders: str = "paul.martin@collegemoneymethod.com"
+
+    # IANA zone that workshop {{date}}/{{time}} merge tags render in when the
+    # school has no `display_timezone` of its own. Workshop datetimes are stored
+    # in UTC, which is a day ahead for any US evening event — see
+    # src/schools/display_timezone.py. Keep in step with DEFAULT_DISPLAY_TIMEZONE
+    # in cmm-frontend's app/lib/us-timezones.ts, or the Hub preview of an email
+    # will disagree with the email that actually goes out.
+    workshop_display_timezone: str = "America/New_York"
     # NOTE: outbound email is always attempted. The only safety guard is the
     # runtime "email sandbox mode" flag stored on the global app config
     # (AppConfig.email_sandbox_mode) — see src/emails/ses_client.py. When on,

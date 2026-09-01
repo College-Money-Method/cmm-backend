@@ -161,6 +161,20 @@ def sync_schools_from_airtable(db: Session) -> dict:
             if existing.cohort_id != new_cohort_id:
                 existing.cohort_id = new_cohort_id
             if existing.airtable_slug != at_slug:
+                # Airtable slug changed. `slug` owns the public URL now, so only
+                # propagate when it still tracks the old Airtable value — an
+                # admin-customized slug is never overwritten. Skip if the new
+                # slug is already claimed (unique constraint).
+                if (
+                    at_slug
+                    and existing.slug == existing.airtable_slug
+                    and at_slug not in all_slugs
+                ):
+                    all_slugs.discard(existing.slug)
+                    school_by_slug.pop(existing.slug, None)
+                    existing.slug = at_slug
+                    all_slugs.add(at_slug)
+                    school_by_slug[at_slug] = existing
                 existing.airtable_slug = at_slug
             schools_updated += 1
             continue
