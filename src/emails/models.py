@@ -43,6 +43,18 @@ class EmailSendLog(Base):
     automation_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("email_automation.id", ondelete="SET NULL"), nullable=True
     )
+    # Workshop context for automation sends: which webinar the reminder was
+    # about, and which school's contacts it went to. Null for broadcasts (no
+    # workshop) and for rows written before these columns existed. `webinar_id`
+    # is what makes a send attributable to a cycle — scoping goes through
+    # `webinars.cycle_id`, never through `sent_at`, because a reminder fires
+    # days away from its workshop and can straddle a cycle boundary.
+    webinar_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("webinars.id", ondelete="SET NULL"), nullable=True
+    )
+    school_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("schools.id", ondelete="SET NULL"), nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -57,6 +69,8 @@ class EmailSendLog(Base):
         Index("idx_email_send_log_provider_message_id", "provider_message_id"),
         Index("idx_email_send_log_broadcast_id", "broadcast_id"),
         Index("idx_email_send_log_automation_id", "automation_id"),
+        Index("idx_email_send_log_webinar_id", "webinar_id"),
+        Index("idx_email_send_log_school_id", "school_id"),
     )
 
 

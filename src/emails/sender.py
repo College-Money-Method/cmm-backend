@@ -10,6 +10,10 @@ being used to send as an arbitrary third-party domain.
 ``settings.ses_sender_options`` supplies the presets the compose UI offers
 (``"Name <email>"``, comma-separated). They are suggestions only — the
 allowlist, not the preset list, is the security boundary.
+
+A separate, much narrower list (``settings.ses_no_unsubscribe_senders``) marks
+the senders whose mail goes out with no unsubscribe mechanism at all — see
+``sender_omits_unsubscribe``.
 """
 
 from __future__ import annotations
@@ -70,6 +74,34 @@ def sender_presets() -> list[dict[str, str]]:
 
     _add(settings.ses_from_name or "College Money Method", settings.ses_from_email)
     return presets
+
+
+def no_unsubscribe_senders() -> set[str]:
+    """Lower-cased From addresses configured to send without any unsubscribe.
+
+    Unlike ``allowed_sender_domains``, an empty setting here means the empty
+    set: this list REMOVES a safeguard, so a misconfigured env must fall back to
+    "everyone gets an unsubscribe link", never to "nobody does".
+    """
+    raw = settings.ses_no_unsubscribe_senders or ""
+    return {addr.strip().lower() for addr in raw.split(",") if addr.strip()}
+
+
+def sender_omits_unsubscribe(email: str | None) -> bool:
+    """True when mail from this sender carries NO unsubscribe mechanism.
+
+    ``email`` is the send's own sender override, or ``None``/blank to mean the
+    configured default — resolved the same way ``format_from_header`` resolves
+    it, so the default sender is checked under its real address rather than
+    silently skipping the list.
+
+    Callers act on this by passing ``unsubscribe_url=None`` down the render +
+    send path, which drops BOTH the visible footer link (``base.html`` renders
+    it only when a URL is supplied) and the one-click ``List-Unsubscribe``
+    header (``ses_client._build_message``) in a single place.
+    """
+    address = (email or "").strip() or (settings.ses_from_email or "")
+    return address.lower() in no_unsubscribe_senders()
 
 
 def validate_sender(name: str | None, email: str | None) -> tuple[str | None, str | None]:

@@ -93,6 +93,10 @@ class SenderOptionOut(BaseModel):
 class SenderOptionsOut(BaseModel):
     presets: list[SenderOptionOut]
     allowed_domains: list[str]
+    # Addresses whose mail goes out with no unsubscribe link or header. Exposed
+    # so the compose UI can say so up front — the behavior is otherwise
+    # invisible until after a send has already gone out.
+    no_unsubscribe_senders: list[str] = Field(default_factory=list)
 
 
 class SendBroadcastRequest(BaseModel):

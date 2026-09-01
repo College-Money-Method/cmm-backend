@@ -6,20 +6,24 @@
   <title>{{ subject }}</title>
   <!--
     The DEFAULT shell: a plain, Gmail-like message. No logo, no card, no
-    branded footer, no outer padding — just the authored body, so a broadcast
-    reads like a note a person typed rather than a marketing blast. Templates
-    that opt in to CMM branding render `base_branded.html` instead (see
-    `renderer.render_email`'s `include_branding`).
+    branded footer, no outer padding — and deliberately NO styling at all,
+    not on this shell and not on the body (see `tiptap_render`'s `styled`
+    flag, driven by `renderer.render_email`'s `include_branding`). The mail
+    therefore renders in the recipient client's own default typography, so it
+    reads like a note a person typed rather than a marketing blast.
+
+    Templates that opt in to CMM branding render `base_branded.html` instead,
+    which is where every brand font, color, and inline style lives.
 
     The unsubscribe line stays even here whenever the caller supplies a URL:
     it is a legal requirement on subscriber mail (CAN-SPAM), not decoration.
   -->
 </head>
-<body style="margin: 0; padding: 0; background-color: #ffffff;">
+<body>
   {{ body_html }}
   {% if unsubscribe_url %}
-  <p style="margin: 16px 0 0; font-family: 'Inter', Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.4; color: #6b7280;">
-    <a href="{{ unsubscribe_url }}" style="color: #6b7280;">Unsubscribe or choose which emails you receive</a>.
+  <p>
+    <a href="{{ unsubscribe_url }}">Unsubscribe or choose which emails you receive</a>.
   </p>
   {% endif %}
 </body>

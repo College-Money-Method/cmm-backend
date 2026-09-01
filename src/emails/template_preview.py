@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.emails.audience import resolve_audience, resolve_contacts_by_ids
-from src.emails.broadcast_send import _merge_tags_for
+from src.emails.broadcast_send import _merge_tags_for, format_name_list
 from src.emails.counselor_resolver import contact_is_school_counselor, resolve_counselor_name
 from src.emails.workshop_merge_tags import build_workshop_merge_replacements
 from src.schools.models import Contact, School
@@ -159,6 +159,11 @@ def build_preview_context(
         counselor_name=counselor_name,
         counselor_first_name=counselor_first,
         counselor_last_name=counselor_last,
+        # Workshop sends are one email per contact, so the greeting previews as
+        # the sample contact's own first name (blank when none was picked).
+        recipient_first_names=format_name_list(
+            [contact.first_name or contact.full_name or ""] if contact else []
+        ),
         school_slug=school.slug,
         resource_center_password=school.cmm_website_password,
         workshop_name=workshop.name,
@@ -171,5 +176,6 @@ def build_preview_context(
         origin=settings.app_public_url or None,
         registration_count=registration_count,
         attendee_count=attendee_count,
+        display_timezone=school.display_timezone,
     )
     return PreviewContext(replacements, school.slug)

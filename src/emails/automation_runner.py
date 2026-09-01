@@ -66,11 +66,12 @@ from src.config import settings
 from src.db.base import get_session_factory
 from src.emails.automation_ledger_models import AutomationSendLedger
 from src.emails.automation_models import EmailAutomation
+from src.emails.broadcast_send import format_name_list
 from src.emails.counselor_resolver import contact_is_school_counselor, resolve_counselor_name
 from src.emails.email_template_models import EmailTemplate
 from src.emails.link_resolver import resolve_plain_text
 from src.emails.renderer import render_email
-from src.emails.sender import format_from_header
+from src.emails.sender import format_from_header, sender_omits_unsubscribe
 from src.emails.ses_client import _sandbox_enabled, send_email
 from src.emails.unsubscribe import build_unsubscribe_url
 from src.emails.workshop_merge_tags import build_workshop_merge_replacements
@@ -259,6 +260,9 @@ def _process_due_mapping(
     origin = settings.app_public_url or None
     source = _SOURCE_BY_TYPE.get(automation.type, "pre_workshop")
     from_address = format_from_header(automation.sender_name, automation.sender_email)
+    # Resolved once per batch: every recipient shares the automation's sender, so
+    # they all get (or all skip) the unsubscribe mechanism together.
+    omit_unsubscribe = sender_omits_unsubscribe(automation.sender_email)
 
     sent = 0
     for contact in recipients:
@@ -276,6 +280,9 @@ def _process_due_mapping(
             counselor_name=counselor_name,
             counselor_first_name=counselor_first,
             counselor_last_name=counselor_last,
+            # One email per contact on this path, so the greeting names down to
+            # this recipient alone. Same fallback chain broadcasts use.
+            recipient_first_names=format_name_list([contact.first_name or contact.full_name or ""]),
             school_slug=school.slug,
             resource_center_password=school.cmm_website_password,
             workshop_name=workshop.name,
@@ -288,8 +295,9 @@ def _process_due_mapping(
             origin=origin,
             registration_count=registration_count,
             attendee_count=attendee_count,
+            display_timezone=school.display_timezone,
         )
-        unsubscribe_url = build_unsubscribe_url(contact.id)
+        unsubscribe_url = None if omit_unsubscribe else build_unsubscribe_url(contact.id)
         html, text = render_email(
             template.body_json,
             replacements,
@@ -310,6 +318,8 @@ def _process_due_mapping(
                 source=source,
                 unsubscribe_url=unsubscribe_url,
                 automation_id=automation.id,
+                webinar_id=webinar.id,
+                school_id=school.id,
                 sandbox_enabled=sandbox_enabled,
                 from_address=from_address,
             )

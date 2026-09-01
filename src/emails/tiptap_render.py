@@ -39,7 +39,10 @@ _SUPPORTED_NODE_TYPES = {
     "text",
 }
 
-# Brand inline styles (table-based email shell, see templates/email/base.html).
+# Brand inline styles — applied ONLY on the branded render path
+# (`base_branded.html`). The plain shell renders bare tags with no `style`
+# attribute at all, so a non-branded send is indistinguishable from a message
+# a person typed in their own client (see `_style_attr` / `render_doc_to_html`).
 _BODY_TEXT_STYLE = (
     "font-family: 'Inter', Arial, Helvetica, sans-serif; font-size: 16px; line-height: 1.4; color: #1e3a5f;"
 )
@@ -55,7 +58,17 @@ def _escape(text: str) -> str:
     return html_lib.escape(text, quote=True)
 
 
-def _text_node_to_html(node: dict) -> str:
+def _style_attr(style: str, styled: bool) -> str:
+    """The inline ``style="..."`` attribute, or nothing at all when unstyled.
+
+    Returning the whole attribute (rather than an empty value) keeps plain
+    renders free of even an empty ``style=""``, so the markup is genuinely
+    bare rather than merely unstyled.
+    """
+    return f' style="{style}"' if styled else ""
+
+
+def _text_node_to_html(node: dict, styled: bool) -> str:
     rendered = _escape(node.get("text", ""))
     for mark in node.get("marks", []):
         mark_type = mark.get("type")
@@ -67,45 +80,59 @@ def _text_node_to_html(node: dict) -> str:
             href = _escape(str(attrs.get("href", "")))
             target = _escape(str(attrs.get("target", "_blank")))
             rel = _escape(str(attrs.get("rel", "noopener noreferrer nofollow")))
-            rendered = f'<a href="{href}" target="{target}" rel="{rel}" style="{_LINK_STYLE}">{rendered}</a>'
+            style = _style_attr(_LINK_STYLE, styled)
+            rendered = f'<a href="{href}" target="{target}" rel="{rel}"{style}>{rendered}</a>'
     return rendered
 
 
-def _children_html(node: dict) -> str:
-    return "".join(node_to_html(child) for child in node.get("content", []))
+def _children_html(node: dict, styled: bool) -> str:
+    return "".join(node_to_html(child, styled=styled) for child in node.get("content", []))
 
 
-def node_to_html(node: dict) -> str:
-    """Render one Tiptap node (already merge-tag/link resolved) to an HTML string."""
+def node_to_html(node: dict, *, styled: bool = True) -> str:
+    """Render one Tiptap node (already merge-tag/link resolved) to an HTML string.
+
+    ``styled=False`` emits the same tag structure with no inline styles, for the
+    plain (non-branded) shell — the authored body then inherits whatever the
+    recipient's email client uses for ordinary mail.
+    """
     node_type = node.get("type")
     if node_type not in _SUPPORTED_NODE_TYPES:
         raise ValueError(f"Unsupported Tiptap node type for email rendering: {node_type!r}")
 
     if node_type == "text":
-        return _text_node_to_html(node)
+        return _text_node_to_html(node, styled)
     if node_type == "hardBreak":
         return "<br/>"
     if node_type == "paragraph":
-        return f'<p style="margin: 0 0 16px; {_BODY_TEXT_STYLE}">{_children_html(node)}</p>'
+        style = _style_attr(f"margin: 0 0 16px; {_BODY_TEXT_STYLE}", styled)
+        return f"<p{style}>{_children_html(node, styled)}</p>"
     if node_type == "heading":
         level = node.get("attrs", {}).get("level") or 2
         size = _HEADING_SIZES.get(level, "18px")
-        return f'<h{level} style="margin: 0 0 16px; font-size: {size}; {_HEADING_STYLE}">{_children_html(node)}</h{level}>'
+        style = _style_attr(f"margin: 0 0 16px; font-size: {size}; {_HEADING_STYLE}", styled)
+        return f"<h{level}{style}>{_children_html(node, styled)}</h{level}>"
     if node_type == "blockquote":
-        return f'<blockquote style="{_BLOCKQUOTE_STYLE}">{_children_html(node)}</blockquote>'
+        style = _style_attr(_BLOCKQUOTE_STYLE, styled)
+        return f"<blockquote{style}>{_children_html(node, styled)}</blockquote>"
     if node_type == "bulletList":
-        return f'<ul style="{_LIST_STYLE}">{_children_html(node)}</ul>'
+        style = _style_attr(_LIST_STYLE, styled)
+        return f"<ul{style}>{_children_html(node, styled)}</ul>"
     if node_type == "orderedList":
-        return f'<ol style="{_LIST_STYLE}">{_children_html(node)}</ol>'
+        style = _style_attr(_LIST_STYLE, styled)
+        return f"<ol{style}>{_children_html(node, styled)}</ol>"
     if node_type == "listItem":
-        return f'<li style="{_LIST_ITEM_STYLE}">{_children_html(node)}</li>'
+        style = _style_attr(_LIST_ITEM_STYLE, styled)
+        return f"<li{style}>{_children_html(node, styled)}</li>"
     # "doc" — the only remaining member of _SUPPORTED_NODE_TYPES.
-    return _children_html(node)
+    return _children_html(node, styled)
 
 
-def render_doc_to_html(doc: dict) -> str:
+def render_doc_to_html(doc: dict, *, styled: bool = True) -> str:
     """Render a resolved Tiptap doc into an HTML fragment (no shell/table)."""
-    return node_to_html(doc) if doc.get("type") == "doc" else _children_html(doc)
+    if doc.get("type") == "doc":
+        return node_to_html(doc, styled=styled)
+    return _children_html(doc, styled)
 
 
 # ── Plain-text extraction (ports merge-tag-utils.ts nodeToText/tiptapToPlainText) ──
