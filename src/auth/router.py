@@ -45,17 +45,23 @@ router = APIRouter(tags=["auth"])
 def get_me(user: CurrentUserDep, db: DbDep) -> UserRoleOut:
     """Return the current user's role, school assignment, and hub preferences.
 
-    The timezone is read from the Contact row rather than the role record: a
-    super_admin has no Contact and simply gets None, which the Hub reads as
-    "use the browser's zone".
+    The preferences are read from the Contact row rather than the role record: a
+    super_admin has no Contact and simply gets None for all of them, which the
+    Hub reads as "use the browser's zone" and "no opt-ins to show".
     """
-    timezone = db.scalar(select(Contact.timezone).where(Contact.user_id == user.user_id))
+    prefs = db.execute(
+        select(Contact.timezone, Contact.auto_emails, Contact.broadcast_emails).where(
+            Contact.user_id == user.user_id
+        )
+    ).first()
     return UserRoleOut(
         user_id=user.user_id,
         role=user.role,
         school_id=user.school_id,
         school_role=user.school_role,
-        timezone=timezone,
+        timezone=prefs.timezone if prefs else None,
+        auto_emails=prefs.auto_emails if prefs else None,
+        broadcast_emails=prefs.broadcast_emails if prefs else None,
     )
 
 
@@ -77,6 +83,15 @@ def update_my_preferences(
     fields = body.model_dump(exclude_unset=True)
     if "timezone" in fields:
         contact.timezone = fields["timezone"]
+    if fields.get("auto_emails") is not None:
+        contact.auto_emails = fields["auto_emails"]
+    if fields.get("broadcast_emails") is not None:
+        contact.broadcast_emails = fields["broadcast_emails"]
+    if fields.get("auto_emails") is not None or fields.get("broadcast_emails") is not None:
+        # An `EmailSuppression` row blocks every send whatever the opt-ins say,
+        # so opting back in here has to lift an earlier unsubscribe — otherwise
+        # the contact keeps receiving nothing while the Hub shows them opted in.
+        sync_unsubscribe_suppression(db, contact)
     db.commit()
     db.refresh(contact)
 
@@ -86,6 +101,8 @@ def update_my_preferences(
         school_id=user.school_id,
         school_role=user.school_role,
         timezone=contact.timezone,
+        auto_emails=contact.auto_emails,
+        broadcast_emails=contact.broadcast_emails,
     )
 
 
