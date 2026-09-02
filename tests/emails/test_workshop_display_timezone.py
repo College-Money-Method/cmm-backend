@@ -18,7 +18,14 @@ from src.emails.automation_models import EmailAutomation
 from src.emails.automation_runner import run_automations_check
 from src.emails.email_template_models import EmailTemplate
 from src.emails.workshop_merge_tags import build_workshop_merge_replacements
-from src.schools.display_timezone import FALLBACK_TIMEZONE, resolve_display_timezone
+from src.schools import display_timezone as tz_module
+from src.schools.display_timezone import (
+    FALLBACK_TIMEZONE,
+    resolve_display_timezone,
+)
+# Bound before the autouse fixture below stubs the module attribute, so one test
+# can still exercise the real database read.
+from src.schools.display_timezone import app_default_timezone as real_app_default_timezone
 from src.schools.models import Contact, School
 from src.schools.schemas import SchoolUpdate
 from src.workshops.models import PortalMapping, Webinar, Workshop
@@ -45,6 +52,44 @@ def _tags(start: datetime | None, display_timezone: str | None) -> dict[str, str
 
 
 # ── Zone resolution ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _no_app_default(monkeypatch):
+    """Assume no admin-set app-wide default unless a test says otherwise.
+
+    Without this the resolver would try to read the config row from whatever
+    database happens to be reachable, making these assertions depend on data.
+    """
+    monkeypatch.setattr(tz_module, "app_default_timezone", lambda: None)
+
+
+def test_the_admin_set_default_wins_over_the_env_seed(monkeypatch):
+    monkeypatch.setattr(tz_module, "app_default_timezone", lambda: "America/Denver")
+    monkeypatch.setattr(settings, "workshop_display_timezone", "America/Chicago")
+    assert str(resolve_display_timezone(None)) == "America/Denver"
+
+
+def test_school_timezone_still_wins_over_the_admin_set_default(monkeypatch):
+    monkeypatch.setattr(tz_module, "app_default_timezone", lambda: "America/Denver")
+    assert str(resolve_display_timezone("Pacific/Honolulu")) == "Pacific/Honolulu"
+
+
+def test_an_unreadable_config_row_reports_unset_instead_of_raising(monkeypatch):
+    """A database that is down must not take an email send with it.
+
+    Reporting "unset" lets the resolver fall through to the env seed, which is
+    the behaviour every deployment had before the setting moved into the
+    database.
+    """
+    import src.db.base as db_base
+
+    def _boom():
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(tz_module, "_app_default_cache", None)
+    monkeypatch.setattr(db_base, "get_session_factory", _boom)
+    assert real_app_default_timezone() is None
 
 
 def test_school_timezone_wins_over_the_app_default(monkeypatch):

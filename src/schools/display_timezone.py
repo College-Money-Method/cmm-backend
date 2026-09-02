@@ -9,10 +9,12 @@ value gets both ``{{time}}`` and ``{{date}}`` wrong.
 Resolution order, most specific first:
 
 1. ``School.display_timezone`` — set per school by an admin.
-2. ``settings.workshop_display_timezone`` — the app-wide default, for the many
-   schools that never set one.
-3. ``FALLBACK_TIMEZONE`` — only if the setting itself is an unknown zone name,
-   so a typo in the env degrades to a sane US zone rather than crashing a send.
+2. ``AppConfig.workshop_display_timezone`` — the app-wide default, editable in
+   Global Settings, for the many schools that never set one.
+3. ``settings.workshop_display_timezone`` — the env seed, used until an admin
+   sets the app-wide default (and whenever the config row cannot be read).
+4. ``FALLBACK_TIMEZONE`` — only if every candidate above is an unknown zone
+   name, so a typo degrades to a sane US zone rather than crashing a send.
 
 The frontend has a byte-for-byte counterpart of ``US_TIMEZONES`` and of the
 default in ``app/lib/us-timezones.ts`` (cmm-frontend). Both must agree, or the
@@ -21,7 +23,11 @@ Hub preview of a workshop email will disagree with what actually gets sent.
 
 from __future__ import annotations
 
+import time
+from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from pydantic import AfterValidator
 
 from src.config import settings
 
@@ -50,6 +56,72 @@ def is_supported_timezone(name: str) -> bool:
     return name in TIMEZONE_NAMES
 
 
+def validate_display_timezone(value: str | None) -> str | None:
+    """Reject a zone that is not on the supported list.
+
+    Blank clears the override (back to the next fallback) rather than storing an
+    empty string that would fail to load as a zone at send time.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if not is_supported_timezone(cleaned):
+        raise ValueError(f"Unsupported timezone: {cleaned}")
+    return cleaned
+
+
+# Writable timezone field: validated on the way in, so a send never has to cope
+# with a zone name the picker could not have produced.
+DisplayTimezoneField = Annotated[str | None, AfterValidator(validate_display_timezone)]
+
+
+# The app-wide default lives in the database so an admin can change it without a
+# deploy, but it is read on every rendered workshop email. Cached in-process so
+# a bulk send does one query rather than one per recipient; the window is short
+# enough that a change lands everywhere within minutes, and the process that
+# made the change clears its own cache immediately.
+_APP_DEFAULT_TTL_SECONDS = 300
+_app_default_cache: tuple[float, str | None] | None = None
+
+
+def reset_app_default_timezone_cache() -> None:
+    """Drop the cached app-wide default — called when it is edited."""
+    global _app_default_cache
+    _app_default_cache = None
+
+
+def app_default_timezone() -> str | None:
+    """The admin-set app-wide default zone, or None if unset or unreadable.
+
+    Never raises: a database that is down or a config row that does not exist
+    yet must not take an email send with it — the caller falls through to the
+    env seed.
+    """
+    global _app_default_cache
+    now = time.monotonic()
+    if _app_default_cache and now - _app_default_cache[0] < _APP_DEFAULT_TTL_SECONDS:
+        return _app_default_cache[1]
+
+    value: str | None = None
+    try:
+        # Imported here: src.app_config imports the ORM base, and this module is
+        # pulled in by schema definitions that load before the app is wired up.
+        from sqlalchemy import select
+
+        from src.app_config.models import AppConfig
+        from src.db.base import get_session_factory
+
+        with get_session_factory()() as db:
+            value = db.scalar(select(AppConfig.workshop_display_timezone))
+    except Exception:  # noqa: BLE001 - see docstring
+        value = None
+
+    _app_default_cache = (now, value)
+    return value
+
+
 def resolve_display_timezone(school_timezone: str | None) -> ZoneInfo:
     """The tzinfo to render a school's workshop dates in.
 
@@ -57,7 +129,13 @@ def resolve_display_timezone(school_timezone: str | None) -> ZoneInfo:
     constrains what gets *written*, and a row that predates (or outlives) that
     list should still render in the zone it actually names.
     """
-    for candidate in (school_timezone, settings.workshop_display_timezone, FALLBACK_TIMEZONE):
+    candidates = (
+        school_timezone,
+        app_default_timezone(),
+        settings.workshop_display_timezone,
+        FALLBACK_TIMEZONE,
+    )
+    for candidate in candidates:
         if not candidate:
             continue
         try:

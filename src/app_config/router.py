@@ -15,6 +15,7 @@ from src.app_config.models import AppConfig
 from src.app_config.schemas import AppConfigOut, AppConfigUpdate
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
+from src.schools.display_timezone import reset_app_default_timezone_cache
 
 router = APIRouter(prefix="/api/v1/app-config", tags=["app-config"])
 
@@ -46,4 +47,8 @@ def update_app_config(body: AppConfigUpdate, _admin: AdminDep, db: DbDep):
     cfg.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(cfg)
+    # The rendered-email path caches this value; drop it so the admin who just
+    # changed the default sees it take effect on the next preview, not in five
+    # minutes.
+    reset_app_default_timezone_cache()
     return cfg

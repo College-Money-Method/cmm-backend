@@ -2,11 +2,10 @@
 
 import uuid
 from datetime import date, datetime
-from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict
 
-from src.schools.display_timezone import is_supported_timezone
+from src.schools.display_timezone import DisplayTimezoneField
 from src.storage.asset_url import CdnUrl
 
 
@@ -39,27 +38,6 @@ class GradeSetRef(BaseModel):
 
     id: uuid.UUID
     name: str
-
-
-def _validate_display_timezone(value: str | None) -> str | None:
-    """Reject a zone that is not on the supported list.
-
-    Blank clears the override (back to the app-wide default) rather than
-    storing an empty string that would fail to load as a zone at send time.
-    """
-    if value is None:
-        return None
-    cleaned = value.strip()
-    if not cleaned:
-        return None
-    if not is_supported_timezone(cleaned):
-        raise ValueError(f"Unsupported timezone: {cleaned}")
-    return cleaned
-
-
-# Writable timezone field: validated on the way in, so a send never has to cope
-# with a zone name the picker could not have produced.
-SchoolTimezone = Annotated[str | None, AfterValidator(_validate_display_timezone)]
 
 
 class SchoolListItem(BaseModel):
@@ -113,7 +91,7 @@ class SchoolCreate(BaseModel):
     # Optional custom public URL segment; derived from `name` when omitted.
     slug: str | None = None
     nickname: str | None = None
-    display_timezone: SchoolTimezone = None
+    display_timezone: DisplayTimezoneField = None
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
@@ -137,7 +115,7 @@ class SchoolUpdate(BaseModel):
     # Custom public URL segment. Changing it changes the school's SRC URL.
     slug: str | None = None
     nickname: str | None = None
-    display_timezone: SchoolTimezone = None
+    display_timezone: DisplayTimezoneField = None
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
