@@ -146,10 +146,19 @@ def build_workshop_merge_replacements(
     first name there; the tag exists on this path so an automation template can
     open with "Hi {{recipient_first_names}}," the same way a broadcast does.
     """
-    resolved_origin = origin or ""
+    # An absolute origin is required: these values land in emails, where a
+    # relative href resolves against nothing and renders as "http:///school/...".
+    # With no origin we fall back to the Zoom registration URL (and to each
+    # resource's own link) rather than emitting a path — a missing link is
+    # recoverable, a hostless one is not.
+    resolved_origin = (origin or "").rstrip("/")
     local_start = _in_display_tz(start_datetime, resolve_display_timezone())
     slug = workshop_slug(workshop_name, webinar_id)
-    workshop_page_path = f"/school/{school_slug}/workshops/{slug}?via=email" if school_slug else None
+    workshop_page_path = (
+        f"/school/{school_slug}/workshops/{slug}?via=email"
+        if school_slug and resolved_origin
+        else None
+    )
     workshop_page_url = (
         f"{resolved_origin}{workshop_page_path}" if workshop_page_path else (registration_url or "")
     )
@@ -158,7 +167,7 @@ def build_workshop_merge_replacements(
     for r in _unique_resources(resources or []):
         detail_url = (
             f"{resolved_origin}/school/{school_slug}/resources/{r['id']}?via=email"
-            if school_slug
+            if school_slug and resolved_origin
             else r.get("link")
         )
         name = r.get("name", "")

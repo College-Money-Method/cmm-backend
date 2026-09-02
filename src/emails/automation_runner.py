@@ -71,6 +71,7 @@ from src.emails.counselor_resolver import contact_is_school_counselor, resolve_c
 from src.emails.email_template_models import EmailTemplate
 from src.emails.link_resolver import resolve_plain_text
 from src.emails.renderer import render_email
+from src.emails.school_links import email_origin
 from src.emails.sender import format_from_header, sender_omits_unsubscribe
 from src.emails.ses_client import _sandbox_enabled, send_email
 from src.emails.unsubscribe import build_unsubscribe_url
@@ -257,7 +258,7 @@ def _process_due_mapping(
     # same registration/attendance figures.
     registration_count, attendee_count = school_registration_counts(db, webinar.id, school.id)
     subject = automation.subject_override or template.subject
-    origin = settings.app_public_url or None
+    origin = email_origin() or None
     source = _SOURCE_BY_TYPE.get(automation.type, "pre_workshop")
     from_address = format_from_header(automation.sender_name, automation.sender_email)
     # Resolved once per batch: every recipient shares the automation's sender, so

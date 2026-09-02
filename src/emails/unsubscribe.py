@@ -24,6 +24,7 @@ import time
 import uuid
 
 from src.config import settings
+from src.emails.school_links import email_origin
 
 # Unsubscribe links live in emails that may sit unread for a long time — a
 # short TTL would make old emails' links silently stop working.
@@ -102,8 +103,7 @@ def email_preferences_url(token: str) -> str:
     their mail clients, which POST here for RFC 8058 one-click) should only ever
     see the site's own origin.
     """
-    base = (settings.app_public_url or settings.frontend_url).rstrip("/")
-    return f"{base}/email-preferences?token={token}"
+    return f"{email_origin()}/email-preferences?token={token}"
 
 
 def build_unsubscribe_url(contact_id: uuid.UUID | list[uuid.UUID]) -> str:

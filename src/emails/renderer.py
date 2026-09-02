@@ -18,6 +18,7 @@ from markupsafe import Markup
 
 from src.emails.inliner import inline_css
 from src.emails.link_resolver import resolve_plain_text, resolve_tiptap_doc
+from src.emails.school_links import email_origin
 from src.emails.tiptap_render import render_doc_to_html, tiptap_to_plain_text
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates" / "email"
@@ -49,7 +50,7 @@ def render_email(
         unsubscribe_url: Populated by the caller (phase 2); renders empty-safe
             when omitted.
         origin: Absolute origin for internal links. Defaults to
-            ``settings.app_public_url`` when omitted.
+            ``email_origin()`` when omitted.
         include_branding: Wrap the body in the CMM shell (logo, card, footer
             rule) instead of the default plain, Gmail-like message, AND apply
             the brand's inline typography/colors to the body. Off means bare,
@@ -60,12 +61,10 @@ def render_email(
         ``(html, text)`` — inlined-CSS HTML ready for SES, and a plain-text
         alternative for the multipart message.
     """
-    # Imported lazily so tests can monkeypatch `settings.app_public_url` freely
-    # without import-order surprises.
-    from src.config import settings
-
     doc = json.loads(doc_json) if isinstance(doc_json, str) else doc_json
-    effective_origin = origin if origin is not None else (settings.app_public_url or None)
+    # `None` means "caller did not resolve an origin"; an explicit "" means
+    # "there is none" and is left alone so no relative href is emitted.
+    effective_origin = origin if origin is not None else (email_origin() or None)
 
     resolved_doc = resolve_tiptap_doc(
         doc,

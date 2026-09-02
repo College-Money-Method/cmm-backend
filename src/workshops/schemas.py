@@ -53,6 +53,13 @@ class WebinarSummary(BaseModel):
     zoom_link: str | None
     registration_count: int
     slug: str | None = None
+    # Blast radius of a hard delete, so the admin confirmation prompt can name
+    # what is destroyed instead of asking "are you sure?" about nothing.
+    # `school_count` is mapped schools (portal_mapping, ON DELETE CASCADE) and
+    # `email_send_count` is automation/broadcast mail already sent for this
+    # session — the two signals that a webinar is real rather than a mistake.
+    school_count: int = 0
+    email_send_count: int = 0
 
 
 class WebinarListItem(WebinarSummary):
@@ -163,6 +170,12 @@ class WebinarUpdate(BaseModel):
     video_embed_code: str | None = None
     audio_transcript: str | None = None
     track_registrations: bool | None = None
+    # Opt-in escape hatch for the "the recorded date was wrong" case: a past
+    # `start_datetime` is rejected by default, since the common cause is a typo
+    # (wrong year, wrong AM/PM). An override is a data correction, never a
+    # reschedule, so it also suppresses the reschedule trail and the automation
+    # re-arm. Not a webinar column — popped before the update is applied.
+    allow_past_datetime: bool = False
 
 
 class WebinarOut(BaseModel):
@@ -190,6 +203,17 @@ class WebinarOut(BaseModel):
     cohort_name: str | None
     registration_count: int
     slug: str | None = None
+    # See WebinarSummary — same delete-impact counts, for the detail page.
+    school_count: int = 0
+    email_send_count: int = 0
+    # Reschedule trail (see Webinar model): where this session used to start and
+    # when it was moved. Both None for a session that has never been rescheduled.
+    previous_start_datetime: datetime | None = None
+    rescheduled_at: datetime | None = None
+    # Transient, not a column: how many automation send-ledger rows this request
+    # cleared, i.e. how many (automation, school) pairs will be mailed again for
+    # the new date. Only ever non-zero on the PATCH response that rescheduled.
+    rearmed_automation_sends: int = 0
 
 
 # ── Admin: Registration schemas ──────────────────────────────────────────────

@@ -6,7 +6,7 @@ Line-for-line port of the resolution logic in cmm-frontend's
 file intentionally — any behavior change there should be mirrored here, and the
 golden-fixture tests in both repos are what catch drift.
 
-Origin for backend renders comes from ``settings.app_public_url`` — there is no
+Origin for backend renders comes from ``school_links.email_origin()`` — there is no
 ``request`` object at send time (unlike interactive routes, which derive origin
 from the incoming request).
 """

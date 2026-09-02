@@ -81,6 +81,13 @@ class Webinar(Base):
             "END"
         ),
     )
+    # Reschedule trail. Set only when `start_datetime` moves materially into the
+    # future through the admin PATCH — not by an Airtable/Zoom backfill and not
+    # by a historical date correction (see `_validate_webinar_schedule` in router.py).
+    # Read by the admin UI and by the automation re-arm, which needs to know a
+    # session actually moved rather than being edited.
+    previous_start_datetime: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    rescheduled_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     slug: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     join_url: Mapped[str | None] = mapped_column(Text)
@@ -98,8 +105,18 @@ class Webinar(Base):
     workshop: Mapped[Workshop] = relationship(back_populates="webinars")
     cohort: Mapped[Cohort | None] = relationship(back_populates="webinars")
     cycle: Mapped[Cycle | None] = relationship(back_populates="webinars")
-    registrations: Mapped[list[WorkshopRegistration]] = relationship(back_populates="webinar")
-    portal_mappings: Mapped[list[PortalMapping]] = relationship(back_populates="webinar")
+    # `passive_deletes` defers child removal to the DB's ON DELETE CASCADE.
+    # Without it, deleting a webinar made SQLAlchemy load these collections and
+    # UPDATE their `webinar_id` to NULL — a NOT NULL column on both children —
+    # so the delete endpoint raised IntegrityError for any webinar that had a
+    # registration or a mapped school. That is why webinars "could not be
+    # removed": the button only ever worked on a webinar with nothing attached.
+    registrations: Mapped[list[WorkshopRegistration]] = relationship(
+        back_populates="webinar", cascade="all, delete", passive_deletes=True
+    )
+    portal_mappings: Mapped[list[PortalMapping]] = relationship(
+        back_populates="webinar", cascade="all, delete", passive_deletes=True
+    )
 
     __table_args__ = (
         Index("idx_webinars_workshop_id", "workshop_id"),

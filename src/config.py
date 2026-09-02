@@ -113,8 +113,16 @@ class Settings(BaseSettings):
     # check (dev/test, where no SNS subscription targets the webhook at all).
     ses_sns_topic_arn: str = ""
     # Absolute origin used to build school-scoped links in emails (no `request`
-    # object at send time, unlike interactive routes) e.g. "https://next.collegemoneymethod.com".
-    app_public_url: str = ""
+    # object at send time, unlike interactive routes).
+    #
+    # Defaults to the live site rather than "" on purpose: an empty origin used
+    # to yield *relative* hrefs, which mail clients absolutize against nothing —
+    # recipients got "http:///school/..." and a Google redirect warning instead
+    # of the workshop page. A wrong-but-absolute default degrades far more
+    # gracefully than a hostless link, so links stay clickable even when the
+    # deployment forgets to set APP_PUBLIC_URL (which prod did — see
+    # `email_origin()` in src/emails/school_links.py).
+    app_public_url: str = "https://collegemoneymethod.com"
     ses_from_email: str = "noreply@collegemoneymethod.com"
     # Display name paired with ses_from_email when a send picks no sender of its own.
     ses_from_name: str = "College Money Method"

@@ -105,7 +105,7 @@ def get_pulse(
                     "AND timestamp >= now() - INTERVAL 7 DAY"
                 )
                 try:
-                    rows = ph.get_hogql_query(api_key, project_id, content_hogql)
+                    rows = ph.get_hogql_query(api_key, project_id, content_hogql, name="admin-pulse-content-views")
                     content_views = int(rows[0][0]) if rows else 0
                 except Exception:
                     stale = ph._db_get_stale(db, content_key)
@@ -156,8 +156,8 @@ def get_pulse(
                         "AND isNotNull(properties.query) "
                         "GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
                     )
-                    st_rows = ph.get_hogql_query(api_key, project_id, st_hogql)
-                    rs_rows = ph.get_hogql_query(api_key, project_id, rs_hogql)
+                    st_rows = ph.get_hogql_query(api_key, project_id, st_hogql, name="admin-pulse-top-searches")
+                    rs_rows = ph.get_hogql_query(api_key, project_id, rs_hogql, name="admin-pulse-top-library-searches")
                     top_search_terms = [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in st_rows if r[0]]
                     top_resource_searches = [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in rs_rows if r[0]]
                 except Exception:
@@ -250,7 +250,7 @@ def get_big_picture(
                     "GROUP BY day ORDER BY day"
                 )
                 try:
-                    rows = ph.get_hogql_query(api_key, project_id, hogql)
+                    rows = ph.get_hogql_query(api_key, project_id, hogql, name="admin-platform-trends")
                     days = [str(r[0])[:10] for r in rows]
                     dau_data = [float(r[1]) for r in rows]
                     reg_data = [float(r[2]) for r in rows]
@@ -298,27 +298,31 @@ def get_whats_working(
 
         date_clause = ph._hogql_date_clause(date_from, date_to)
 
-        def _run(hogql: str) -> list[TopBreakdown]:
-            rows = ph.get_hogql_query(api_key, project_id, hogql)
+        def _run(name: str, hogql: str) -> list[TopBreakdown]:
+            rows = ph.get_hogql_query(api_key, project_id, hogql, name=name)
             return [TopBreakdown(label=str(r[0]), count=float(r[1])) for r in rows if r[0]]
 
         try:
             resources = _run(
+                "whats-working-resources",
                 f"SELECT properties.resource_name, count() FROM events "
                 f"WHERE event = 'resource_card_click' AND {date_clause} "
                 f"AND isNotNull(properties.resource_name) GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
             )
             topics = _run(
+                "whats-working-topics",
                 f"SELECT properties.topic_title, count() FROM events "
                 f"WHERE event = 'topic_card_click' AND {date_clause} "
                 f"AND isNotNull(properties.topic_title) GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
             )
             workshops = _run(
+                "whats-working-workshops",
                 f"SELECT properties.workshop_name, count() FROM events "
                 f"WHERE event = 'workshop_registration_complete' AND {date_clause} "
                 f"AND isNotNull(properties.workshop_name) GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
             )
             zero_results = _run(
+                "whats-working-zero-result-searches",
                 f"SELECT properties.query, count() FROM events "
                 f"WHERE event = 'search_query' AND {date_clause} "
                 # toInt64OrNull is unsupported in HogQL — toInt handles both string and numeric

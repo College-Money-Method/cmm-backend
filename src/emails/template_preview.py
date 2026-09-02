@@ -19,6 +19,7 @@ from src.config import settings
 from src.emails.audience import resolve_audience, resolve_contacts_by_ids
 from src.emails.broadcast_send import _merge_tags_for, format_name_list
 from src.emails.counselor_resolver import contact_is_school_counselor, resolve_counselor_name
+from src.emails.school_links import email_origin
 from src.emails.workshop_merge_tags import build_workshop_merge_replacements
 from src.schools.models import Contact, School
 from src.workshops.models import Webinar, Workshop
@@ -173,7 +174,7 @@ def build_preview_context(
         cycle_name=webinar.cycle.name if webinar.cycle else None,
         registration_url=webinar.registration_url,
         resources=resources,
-        origin=settings.app_public_url or None,
+        origin=email_origin() or None,
         registration_count=registration_count,
         attendee_count=attendee_count,
     )
