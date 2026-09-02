@@ -123,11 +123,22 @@ def _db_get_stale(db: Session | None, key: str) -> Any | None:
 
 # ── Low-level query ───────────────────────────────────────────────────────────
 
-def _query(api_key: str, project_id: str, query: dict) -> dict:
+def _query(api_key: str, project_id: str, query: dict, name: str | None = None) -> dict:
+    """POST one query to PostHog.
+
+    `name` is echoed into PostHog's `query_log.name` column, which is what makes
+    a slow query in the query log traceable back to the endpoint that issued it
+    (the column is otherwise empty and every row looks anonymous). Always pass a
+    stable, descriptive name — never interpolate school ids or dates into it, or
+    the log fragments into one row per request.
+    """
+    body: dict[str, Any] = {"query": query}
+    if name:
+        body["name"] = name
     with httpx.Client(timeout=30) as client:
         r = client.post(
             f"{POSTHOG_API}/api/projects/{project_id}/query/",
-            json={"query": query},
+            json=body,
             headers={"Authorization": f"Bearer {api_key}"},
         )
         r.raise_for_status()
@@ -234,13 +245,19 @@ def get_hogql_query(
     api_key: str,
     project_id: str,
     hogql: str,
+    *,
+    name: str,
 ) -> list[list]:
     """Execute a raw HogQL query and return result rows.
 
     Callers are responsible for building safe HogQL using _hogql_date_clause /
     _hogql_school_clause — never interpolate raw user input directly.
+
+    `name` labels the query in PostHog's query log (required: an unnamed query
+    is unattributable when it turns up in the slow-query list). Keep it a fixed
+    string per call site, e.g. "content:breakdowns".
     """
-    result = _query(api_key, project_id, {"kind": "HogQLQuery", "query": hogql})
+    result = _query(api_key, project_id, {"kind": "HogQLQuery", "query": hogql}, name=name)
     return result.get("results", [])
 
 
@@ -285,7 +302,7 @@ def get_trend(
                 "interval": "day",
                 "filterTestAccounts": False,
                 "version": 2,
-            })
+            }, name="trend")
         except (httpx.HTTPError, httpx.TimeoutException) as exc:
             logger.warning("PostHog error in get_trend(%s): %s — serving stale", event, exc)
             stale = _db_get_stale(db, cache_key)
@@ -332,7 +349,7 @@ def get_funnel(
                 "properties": _school_filter(school_id) + _cycle_filter(cycle_name),
                 "funnelsFilter": {"funnelVizType": "steps", "funnelOrderType": "ordered", "funnelWindowInterval": 1, "funnelWindowIntervalUnit": "day"},
                 "filterTestAccounts": False,
-            })
+            }, name="funnel")
         except (httpx.HTTPError, httpx.TimeoutException) as exc:
             logger.warning("PostHog error in get_funnel: %s — serving stale", exc)
             stale = _db_get_stale(db, cache_key)
@@ -394,7 +411,7 @@ def get_top_breakdown(
                 "trendsFilter": {"display": "ActionsBarValue"},
                 "filterTestAccounts": False,
                 "version": 2,
-            })
+            }, name="top-breakdown")
         except (httpx.HTTPError, httpx.TimeoutException) as exc:
             logger.warning("PostHog error in get_top_breakdown(%s): %s — serving stale", event, exc)
             stale = _db_get_stale(db, cache_key)

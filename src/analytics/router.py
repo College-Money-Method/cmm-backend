@@ -217,7 +217,7 @@ def get_content(
     )
     totals = ContentEngagementTotals()
     try:
-        rows = ph.get_hogql_query(api_key, project_id, totals_hogql)
+        rows = ph.get_hogql_query(api_key, project_id, totals_hogql, name="content-engagement-totals")
         if rows:
             r0 = rows[0]
             totals = ContentEngagementTotals(
@@ -281,7 +281,7 @@ def get_content_breakdown(
     )
     all_rows: list[TopBreakdown] = []
     try:
-        result = ph.get_hogql_query(api_key, project_id, hogql)
+        result = ph.get_hogql_query(api_key, project_id, hogql, name="content-breakdown-page")
         all_rows = [
             TopBreakdown(label=str(r[0]), count=float(r[1]))
             for r in result
@@ -487,15 +487,23 @@ def _query_workshops_detail_ph(
             "GROUP BY properties.from"
         )
 
-        def _run(q: str):
+        def _run(named: tuple[str, str]):
+            name, q = named
             try:
-                return ph.get_hogql_query(api_key, project_id, q)
+                return ph.get_hogql_query(api_key, project_id, q, name=name)
             except Exception:
                 return None
 
         with ThreadPoolExecutor(max_workers=5) as ex:
             site_rows, rec_view_rows, rec_pct_rows, detail_rows, res_rows = ex.map(
-                _run, [site_hogql, hogql_rec_views, hogql_rec_pct, hogql_detail, hogql_res]
+                _run,
+                [
+                    ("workshops-site-totals", site_hogql),
+                    ("workshops-recording-views", hogql_rec_views),
+                    ("workshops-recording-pct-watched", hogql_rec_pct),
+                    ("workshops-detail-views", hogql_detail),
+                    ("workshops-resource-views", hogql_res),
+                ],
             )
 
         # Outage handling is deferred until AFTER parsing (see the guard before
@@ -727,7 +735,7 @@ def get_peak_usage(
             "GROUP BY 1, 2 ORDER BY 1, 2"
         )
         try:
-            rows = ph.get_hogql_query(api_key, project_id, hogql)
+            rows = ph.get_hogql_query(api_key, project_id, hogql, name="peak-usage")
         except Exception:
             stale = ph._db_get_stale(db, cache_key)
             if stale:
@@ -983,7 +991,7 @@ def get_workshop_engagement(
         )
 
         try:
-            resource_rows = ph.get_hogql_query(api_key, project_id, resources_hogql)
+            resource_rows = ph.get_hogql_query(api_key, project_id, resources_hogql, name="workshop-detail-resources")
         except Exception:
             resource_rows = None
 
@@ -1053,7 +1061,7 @@ def get_library_coverage(
     )
 
     try:
-        rows = ph.get_hogql_query(api_key, project_id, hogql)
+        rows = ph.get_hogql_query(api_key, project_id, hogql, name="library-coverage")
         viewed_assets = int(rows[0][0]) if rows else 0
         viewed_topics = int(rows[0][1]) if rows else 0
     except Exception:

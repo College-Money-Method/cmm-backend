@@ -127,7 +127,7 @@ def test_get_trend_uses_cache_on_second_call():
 def test_get_trend_includes_school_filter():
     captured: dict = {}
 
-    def fake_query(api_key, project_id, query):
+    def fake_query(api_key, project_id, query, name=None):
         captured["query"] = query
         return TREND_RESPONSE
 
@@ -141,7 +141,7 @@ def test_get_trend_includes_school_filter():
 def test_get_trend_no_filter_when_school_none():
     captured: dict = {}
 
-    def fake_query(api_key, project_id, query):
+    def fake_query(api_key, project_id, query, name=None):
         captured["query"] = query
         return TREND_RESPONSE
 

@@ -164,7 +164,7 @@ def get_topic_metrics(
             "GROUP BY tid"
         )
         try:
-            rows = ph.get_hogql_query(api_key, project_id, hogql)
+            rows = ph.get_hogql_query(api_key, project_id, hogql, name="topic-tree-metrics")
         except Exception:
             logger.warning("PostHog error computing topic metrics", exc_info=True)
             stale = ph._db_get_stale(db, cache_key)

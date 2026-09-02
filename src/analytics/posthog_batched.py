@@ -4,7 +4,7 @@ One dashboard tab used to make one PostHog Query API call PER series (7 for
 the content tab), each queueing server-side — slow enough to trip the
 frontend's stream timeout. These helpers collapse an endpoint to:
   - ONE query for all its daily trends   (countIf/uniqIf per series)
-  - ONE query for all its breakdowns     (UNION ALL with a discriminator col)
+  - ONE query for all its breakdowns     (one scan, discriminator col per row)
 
 Caching mirrors src.analytics.posthog: durable DB cache, stale-on-error.
 """
@@ -12,21 +12,25 @@ Caching mirrors src.analytics.posthog: durable DB cache, stale-on-error.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import date, timedelta
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from sqlalchemy.orm import Session
 
 from src.analytics import posthog as ph
+from src.analytics.breakdown_query_builder import (
+    EVENT_RE as _EVENT_RE,
+    PROP_RE as _PROP_RE,
+    build_breakdowns_hogql,
+    event_match as _event_match,
+    event_names as _event_names,
+    ident as _ident,
+)
 from src.analytics.query_cache import single_flight
 from src.analytics.schemas import TopBreakdown, TrendMetric
 
 logger = logging.getLogger(__name__)
 
-# Property names are code-supplied constants, but validate before interpolation
-_PROP_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
-_EVENT_RE = re.compile(r"^[A-Za-z0-9_$]+$")
 _MAX_DAYS = 750  # bound the zero-filled series (cycle window is ~15 months)
 _MAX_WEBINARS_PER_REQUEST = 50  # log warning if exceeded
 
@@ -57,12 +61,6 @@ def _validate_webinar_id(webinar_id: str) -> str:
     return validated
 
 
-def _ident(value: str, pattern: re.Pattern, what: str) -> str:
-    if not pattern.match(value):
-        raise ValueError(f"Invalid {what} for HogQL interpolation: {value!r}")
-    return value
-
-
 def _day_range(date_from: str, date_to: str | None) -> list[str]:
     """Zero-fill day list for the resolved range (relative -Nd or absolute)."""
     today = date.today()
@@ -84,23 +82,6 @@ def _scope_where(date_from: str, date_to: str | None, school_id: str | None, cyc
         + ph._hogql_school_clause(school_id)
         + ph._hogql_cycle_clause(cycle_name)
     )
-
-
-def _event_names(spec: dict) -> list[str]:
-    """Validated event name(s) for a series/breakdown spec.
-
-    `event` accepts a single name or a list — a list means "count these events
-    together as one series" (e.g. site search = search_query +
-    global_search_performed, which fire from two different search surfaces)."""
-    raw = spec["event"]
-    events = raw if isinstance(raw, list) else [raw]
-    return [_ident(e, _EVENT_RE, "event") for e in events]
-
-
-def _event_match(events: list[str]) -> str:
-    if len(events) == 1:
-        return f"event = '{events[0]}'"
-    return "event IN (" + ", ".join(f"'{e}'" for e in events) + ")"
 
 
 def get_batched_trends(
@@ -158,7 +139,7 @@ def get_batched_trends(
         )
 
         try:
-            rows = ph.get_hogql_query(api_key, project_id, hogql)
+            rows = ph.get_hogql_query(api_key, project_id, hogql, name="batched-trends")
         except Exception as exc:
             logger.warning("PostHog error in get_batched_trends: %s — serving stale", exc)
             stale = ph._db_get_stale(db, cache_key)
@@ -189,7 +170,7 @@ def get_batched_breakdowns(
     db: Session | None = None,
     force_refresh: bool = False,
 ) -> dict[str, list[TopBreakdown]]:
-    """All breakdowns for an endpoint in ONE HogQL query (UNION ALL + kind col).
+    """All breakdowns for an endpoint in ONE HogQL query (kind col per row).
 
     spec: {"key": str, "event": str | list[str], "prop": str,
            "math": "count" | "avg", "math_prop"?: str, "limit"?: int,
@@ -212,26 +193,12 @@ def get_batched_breakdowns(
             return {k: [TopBreakdown.model_validate(r) for r in v] for k, v in cached.items()}
 
         where = _scope_where(date_from, date_to, school_id, cycle_name)
-        branches: list[str] = []
-        for sp in specs:
-            match = _event_match(_event_names(sp))
-            prop = _ident(sp["prop"], _PROP_RE, "property")
-            if sp.get("math") == "avg":
-                mp = _ident(sp["math_prop"], _PROP_RE, "math property")
-                val = f"avg(toFloat(ifNull(properties.{mp}, '0')))"
-            else:
-                val = "toFloat(count())"
-            # extra_filter already carries its leading " AND " (see docstring)
-            extra = sp.get("extra_filter") or ""
-            branches.append(
-                f"SELECT '{sp['key']}' AS kind, toString(properties.{prop}) AS label, {val} AS val "
-                f"FROM events WHERE {match} AND {where}{extra} "
-                f"AND isNotNull(properties.{prop}) GROUP BY label"
-            )
-        hogql = " UNION ALL ".join(branches)
+        # ONE scan of events for all specs when their event sets don't overlap
+        # (see breakdown_query_builder); UNION ALL — one scan each — otherwise.
+        hogql = build_breakdowns_hogql(specs, where)
 
         try:
-            rows = ph.get_hogql_query(api_key, project_id, hogql)
+            rows = ph.get_hogql_query(api_key, project_id, hogql, name="batched-breakdowns")
         except Exception as exc:
             logger.warning("PostHog error in get_batched_breakdowns: %s — serving stale", exc)
             stale = ph._db_get_stale(db, cache_key)
@@ -341,7 +308,7 @@ def get_windowed_trends_by_webinar(
     hogql = " UNION ALL ".join(branches)
 
     try:
-        rows = ph.get_hogql_query(api_key, project_id, hogql)
+        rows = ph.get_hogql_query(api_key, project_id, hogql, name="workshops-windowed-trends")
     except Exception as exc:
         logger.warning("PostHog error in get_windowed_trends_by_webinar: %s", exc)
         return {spec["key"]: {} for spec in event_specs}

@@ -211,7 +211,7 @@ class TestWorkshopsDetail:
 
         # Views (video_view) and avg % watched (video_session_end) are now two
         # separate per-webinar reads — return the right shape for each.
-        def hogql(api_key, project_id, query):
+        def hogql(api_key, project_id, query, **kwargs):
             if "GROUP BY properties.object_id" in query and "video_view" in query:
                 return [["zoom-123", 7]]        # recording VIEWS
             if "GROUP BY properties.object_id" in query and "percent_watched" in query:
@@ -391,7 +391,7 @@ class TestWorkshopEngagementSchoolScoping:
         }
         captured: list[str] = []
 
-        def spy(api_key, project_id, query):
+        def spy(api_key, project_id, query, **kwargs):
             captured.append(query)
             return []
 
@@ -431,7 +431,7 @@ def test_workshops_detail_ph_force_partial_outage_keeps_complete_cache():
     ph._cache.clear()
     sid = str(SCHOOL_A)
 
-    def all_ok(api_key, project_id, query):
+    def all_ok(api_key, project_id, query, **kwargs):
         if "countIf(event = '$pageview') AS visits" in query:
             return [[100, 50, 20]]                       # site totals
         if "GROUP BY properties.object_id" in query and "video_view" in query:
@@ -451,7 +451,7 @@ def test_workshops_detail_ph_force_partial_outage_keeps_complete_cache():
     assert len(ph._cache) == 1
 
     # 2) Forced refresh while the detail-views query is down (partial outage).
-    def partial(api_key, project_id, query):
+    def partial(api_key, project_id, query, **kwargs):
         if "workshop_detail_view" in query:
             raise RuntimeError("posthog down")
         return all_ok(api_key, project_id, query)
@@ -494,7 +494,7 @@ _SAMPLE_TREE = (
 class TestTopicEngagement:
     def test_tree_metrics_and_rollups(self, configured):
         # engagement + video_views per topic id; TOPIC_2 has no activity at all.
-        def hogql(api_key, project_id, query):
+        def hogql(api_key, project_id, query, **kwargs):
             assert "topic_viewed" in query and "video_view" in query
             assert TOPIC_1 in query  # filtered by the tree's topic ids
             return [[TOPIC_1, 12, 4]]

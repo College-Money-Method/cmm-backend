@@ -404,7 +404,7 @@ def test_batched_trends_applies_extra_filter_and_event_lists(mock_posthog_config
 
     seen = {}
     with patch("src.analytics.posthog.get_hogql_query",
-               side_effect=lambda k, p, q: seen.setdefault("q", q) and []):
+               side_effect=lambda k, p, q, **kw: seen.setdefault("q", q) and []):
         get_batched_trends(
             "key", "123",
             [
@@ -428,7 +428,7 @@ def test_batched_breakdowns_applies_extra_filter(mock_posthog_configured):
 
     seen = {}
     with patch("src.analytics.posthog.get_hogql_query",
-               side_effect=lambda k, p, q: seen.setdefault("q", q) and []):
+               side_effect=lambda k, p, q, **kw: seen.setdefault("q", q) and []):
         get_batched_breakdowns(
             "key", "123",
             [{"key": "top_videos", "event": "video_view", "prop": "object_name",
@@ -436,7 +436,59 @@ def test_batched_breakdowns_applies_extra_filter(mock_posthog_configured):
             date_from="2026-06-09", date_to="2026-06-09",
         )
 
-    assert " AND properties.object_type = 'workshop' AND isNotNull(properties.object_name)" in seen["q"]
+    q = seen["q"]
+    # extra_filter narrows the spec's own multiIf arm, not the whole scan
+    assert "event = 'video_view' AND properties.object_type = 'workshop', 'top_videos'" in q
+    assert "event = 'video_view' AND properties.object_type = 'workshop', toString(properties.object_name)" in q
+    assert "UNION ALL" not in q  # one spec → one scan
+
+
+def test_batched_breakdowns_disjoint_specs_use_one_scan(mock_posthog_configured):
+    """Specs on different events collapse into a single pass over `events`."""
+    from src.analytics.posthog_batched import get_batched_breakdowns
+
+    seen = {}
+    with patch("src.analytics.posthog.get_hogql_query",
+               side_effect=lambda k, p, q, **kw: seen.setdefault("q", q) and []):
+        get_batched_breakdowns(
+            "key", "123",
+            [
+                {"key": "video_views", "event": "video_view", "prop": "object_name"},
+                {"key": "video_pct", "event": "video_session_end", "prop": "object_name",
+                 "math": "avg", "math_prop": "percent_watched"},
+                {"key": "resources", "event": "resource_viewed", "prop": "asset_id"},
+            ],
+            date_from="2026-06-09", date_to="2026-06-09",
+        )
+
+    q = seen["q"]
+    assert "UNION ALL" not in q
+    assert q.count("FROM events") == 1
+    # every event survives the outer prefilter
+    for ev in ("video_view", "video_session_end", "resource_viewed"):
+        assert f"'{ev}'" in q
+    # only the avg spec reads percent_watched; the count specs stay on count()
+    assert "if(kind IN ('video_pct'), avg(mval), toFloat(count()))" in q
+
+
+def test_batched_breakdowns_overlapping_events_fall_back_to_union(mock_posthog_configured):
+    """Two specs on the SAME event can't share a multiIf — one row would only
+    reach the first arm, so the builder keeps them on separate scans."""
+    from src.analytics.posthog_batched import get_batched_breakdowns
+
+    seen = {}
+    with patch("src.analytics.posthog.get_hogql_query",
+               side_effect=lambda k, p, q, **kw: seen.setdefault("q", q) and []):
+        get_batched_breakdowns(
+            "key", "123",
+            [
+                {"key": "by_name", "event": "video_view", "prop": "object_name"},
+                {"key": "by_type", "event": "video_view", "prop": "object_type"},
+            ],
+            date_from="2026-06-09", date_to="2026-06-09",
+        )
+
+    assert "UNION ALL" in seen["q"]
 
 
 def test_batched_helpers_reject_bad_event_names_in_lists(mock_posthog_configured):
