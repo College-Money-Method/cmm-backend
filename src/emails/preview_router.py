@@ -24,6 +24,7 @@ from src.db.deps import DbDep
 from src.emails.broadcast_schemas import SendTestResultOut
 from src.emails.link_resolver import resolve_plain_text
 from src.emails.renderer import render_email
+from src.emails.sender import InvalidSenderError, format_from_header, validate_sender
 from src.emails.ses_client import send_email
 from src.emails.template_preview import build_preview_context
 from src.cycles.models import Cycle
@@ -63,6 +64,11 @@ class PreviewContextIn(BaseModel):
     # Mirrors the template's "include CMM logo & footer" setting so the preview
     # shows the same shell the send will use.
     include_branding: bool = False
+    # The From identity chosen on the compose form, so a test send arrives from
+    # the same address the real send will use instead of the configured default.
+    # Omitted (or blank) means "use the configured default sender".
+    sender_name: str | None = None
+    sender_email: str | None = None
 
 
 class TemplatePreviewOut(BaseModel):
@@ -145,7 +151,10 @@ def render_preview(payload: PreviewContextIn, _admin: AdminDep, db: DbDep) -> Te
 def send_preview_test(payload: PreviewContextIn, admin: AdminDep, db: DbDep) -> SendTestResultOut:
     """Send the rendered preview to the requesting admin only. Recipient is the
     admin's own Contact email when they have one, else their authenticated login
-    email (super_admins are not Contacts)."""
+    email (super_admins are not Contacts).
+
+    The From identity is validated through the same allowlist a real send uses,
+    so a test can never be sent from an address a broadcast could not use."""
     contact = db.scalar(select(Contact).where(Contact.user_id == admin.user_id))
     to = contact.email if contact and contact.email else admin.email
     if not to:
@@ -153,6 +162,10 @@ def send_preview_test(payload: PreviewContextIn, admin: AdminDep, db: DbDep) -> 
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No email address on file for the current admin — cannot send a test",
         )
+    try:
+        sender_name, sender_email = validate_sender(payload.sender_name, payload.sender_email)
+    except InvalidSenderError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     html, text, subject, _recipients = _render(db, payload)
     send_email(
         db,
@@ -161,5 +174,6 @@ def send_preview_test(payload: PreviewContextIn, admin: AdminDep, db: DbDep) -> 
         html=html,
         text=text,
         source=_SOURCE_BY_CATEGORY[payload.category],
+        from_address=format_from_header(sender_name, sender_email),
     )
     return SendTestResultOut(sent_to=to, used_sample_contact=payload.contact_id is not None)

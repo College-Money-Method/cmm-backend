@@ -8,6 +8,7 @@ client is mocked, so send-test exercises the real send pipeline and lands as a
 
 from __future__ import annotations
 
+import email
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
@@ -170,10 +171,22 @@ def make_client(scheduler_sessionmaker, monkeypatch):
 
         client = TestClient(app)
         client._session_local = SessionLocal
+        # Exposed so a test can assert the From identity the send went out with.
+        client._mock_ses = mock_ses
         return client
 
     yield _build
     app.dependency_overrides.clear()
+
+
+def _sent_html(client) -> str:
+    """The text/html part of the last message handed to SES, decoded."""
+    raw = client._mock_ses.send_raw_email.call_args.kwargs["RawMessage"]["Data"]
+    message = email.message_from_bytes(raw)
+    for part in message.walk():
+        if part.get_content_type() == "text/html":
+            return part.get_payload(decode=True).decode("utf-8")
+    raise AssertionError("no text/html part in the sent message")
 
 
 def _broadcast_payload(**overrides) -> dict:
@@ -516,3 +529,64 @@ def test_send_test_returns_400_when_admin_has_no_email(make_client):
     )
     resp = client.post("/api/v1/emails/preview/send-test", json=_broadcast_payload())
     assert resp.status_code == 400
+
+
+def test_send_test_uses_the_selected_sender(make_client):
+    """The From identity chosen on the compose form must carry into the test
+    send — otherwise the test arrives from the configured default and tells the
+    admin nothing about how the real broadcast will look."""
+    client = make_client("super_admin")
+    resp = client.post(
+        "/api/v1/emails/preview/send-test",
+        json=_broadcast_payload(
+            sender_name="News Flash", sender_email="newsflash@collegemoneymethod.com"
+        ),
+    )
+    assert resp.status_code == 200, resp.text
+    kwargs = client._mock_ses.send_raw_email.call_args.kwargs
+    assert kwargs["Source"] == "News Flash <newsflash@collegemoneymethod.com>"
+    assert b"newsflash@collegemoneymethod.com" in kwargs["RawMessage"]["Data"]
+
+
+def test_send_test_falls_back_to_default_sender_when_none_chosen(make_client):
+    client = make_client("super_admin")
+    resp = client.post("/api/v1/emails/preview/send-test", json=_broadcast_payload())
+    assert resp.status_code == 200, resp.text
+    kwargs = client._mock_ses.send_raw_email.call_args.kwargs
+    assert "noreply@collegemoneymethod.com" in kwargs["Source"]
+
+
+def test_send_test_rejects_off_domain_sender(make_client):
+    client = make_client("super_admin")
+    resp = client.post(
+        "/api/v1/emails/preview/send-test",
+        json=_broadcast_payload(sender_email="spoof@evil.example"),
+    )
+    assert resp.status_code == 400
+    client._mock_ses.send_raw_email.assert_not_called()
+
+
+def test_send_test_without_branding_sends_bare_html(make_client):
+    """A send-test that did not opt into branding must carry no brand fonts,
+    colors, or the CMM shell — it should look like a plain typed message."""
+    client = make_client("super_admin")
+    resp = client.post(
+        "/api/v1/emails/preview/send-test", json=_broadcast_payload(include_branding=False)
+    )
+    assert resp.status_code == 200, resp.text
+    html = _sent_html(client)
+    assert "font-family" not in html
+    assert "Lora" not in html
+    # Bare paragraph — not even an empty style attribute.
+    assert "<p>Hi " in html
+    assert "<p style" not in html
+
+
+def test_send_test_with_branding_sends_the_cmm_shell(make_client):
+    client = make_client("super_admin")
+    resp = client.post(
+        "/api/v1/emails/preview/send-test", json=_broadcast_payload(include_branding=True)
+    )
+    assert resp.status_code == 200, resp.text
+    html = _sent_html(client)
+    assert "font-family" in html
