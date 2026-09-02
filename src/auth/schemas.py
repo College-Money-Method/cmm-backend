@@ -19,6 +19,11 @@ class UserRoleOut(BaseModel):
     # workshop times on the browser's own clock. Screen-only — see
     # `MePreferencesUpdate`.
     timezone: str | None = None
+    # The two email opt-ins from the same Contact row. None (not False) when the
+    # account has no Contact at all — a super_admin — so the Hub can tell
+    # "opted out" apart from "has no mailing preferences to show".
+    auto_emails: bool | None = None
+    broadcast_emails: bool | None = None
 
 
 class MePreferencesUpdate(BaseModel):
@@ -27,12 +32,17 @@ class MePreferencesUpdate(BaseModel):
     Distinct from `ContactUpdate`, which is the teammate-management endpoint and
     carries fields a director may set on somebody else. Nothing here can affect
     another person, and nothing here changes what is emailed to families:
-    `timezone` moves the clock on this user's own Hub screen and nothing more.
+    `timezone` moves the clock on this user's own Hub screen and nothing more,
+    and the two opt-ins govern only what this counselor is sent.
     """
 
     # None is a real value (clear the preference, fall back to the browser), so
     # the caller must send the field explicitly to change anything.
     timezone: DisplayTimezoneField = None
+    # Omitted (None) means "leave as is" — these are booleans with no third
+    # state, so there is nothing for an explicit null to mean.
+    auto_emails: bool | None = None
+    broadcast_emails: bool | None = None
 
 
 class CurrentUser(BaseModel):
