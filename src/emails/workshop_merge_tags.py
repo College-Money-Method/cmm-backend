@@ -122,7 +122,6 @@ def build_workshop_merge_replacements(
     origin: str | None = None,
     registration_count: int = 0,
     attendee_count: int = 0,
-    display_timezone: str | None = None,
 ) -> dict[str, str]:
     """Builds the full ``{{tag}}`` -> value map for all ``WORKSHOP_MERGE_TAGS``.
 
@@ -137,10 +136,9 @@ def build_workshop_merge_replacements(
     webinar, counted by the caller at render time (``registrations_to_date`` is
     "as of now", so it is never a stored value).
 
-    ``display_timezone`` is the school's IANA zone; ``start_datetime`` is
-    converted into it before ``{{date}}``/``{{time}}`` are formatted, so an
-    evening workshop does not advertise itself as the next day in UTC. None
-    falls back to the app-wide default.
+    ``start_datetime`` is converted into the app-wide display zone before
+    ``{{date}}``/``{{time}}`` are formatted, so an evening workshop does not
+    advertise itself as the next day in UTC.
 
     ``recipient_first_names`` is the greeting name(s) for whoever this copy is
     addressed to, already joined by the caller (``broadcast_send.format_name_list``).
@@ -149,7 +147,7 @@ def build_workshop_merge_replacements(
     open with "Hi {{recipient_first_names}}," the same way a broadcast does.
     """
     resolved_origin = origin or ""
-    local_start = _in_display_tz(start_datetime, resolve_display_timezone(display_timezone))
+    local_start = _in_display_tz(start_datetime, resolve_display_timezone())
     slug = workshop_slug(workshop_name, webinar_id)
     workshop_page_path = f"/school/{school_slug}/workshops/{slug}?via=email" if school_slug else None
     workshop_page_url = (

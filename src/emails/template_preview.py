@@ -176,6 +176,5 @@ def build_preview_context(
         origin=settings.app_public_url or None,
         registration_count=registration_count,
         attendee_count=attendee_count,
-        display_timezone=school.display_timezone,
     )
     return PreviewContext(replacements, school.slug)

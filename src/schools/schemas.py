@@ -62,8 +62,6 @@ class SchoolListItem(BaseModel):
     # Airtable sync only overwrites it while it still tracks the Airtable value.
     slug: str | None = None
     nickname: str | None = None
-    # IANA zone workshop {{date}}/{{time}} render in; None = app-wide default.
-    display_timezone: str | None = None
     cohort_id: uuid.UUID | None = None
     cohort: CohortSummary | None = None
     grade_set_id: uuid.UUID | None = None
@@ -91,7 +89,6 @@ class SchoolCreate(BaseModel):
     # Optional custom public URL segment; derived from `name` when omitted.
     slug: str | None = None
     nickname: str | None = None
-    display_timezone: DisplayTimezoneField = None
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
@@ -115,7 +112,6 @@ class SchoolUpdate(BaseModel):
     # Custom public URL segment. Changing it changes the school's SRC URL.
     slug: str | None = None
     nickname: str | None = None
-    display_timezone: DisplayTimezoneField = None
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
@@ -193,9 +189,6 @@ class SchoolPublic(BaseModel):
     name: str
     slug: str | None = None
     nickname: str | None = None
-    # Read-only here: the Hub previews workshop emails client-side and needs the
-    # same zone the backend renders the real send in.
-    display_timezone: str | None = None
     city: str | None = None
     state: str | None = None
     logo_url: CdnUrl = None

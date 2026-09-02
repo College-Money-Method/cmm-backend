@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from src.schools.display_timezone import DisplayTimezoneField
+
 
 class UserRoleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -13,6 +15,24 @@ class UserRoleOut(BaseModel):
     role: Literal["super_admin", "hub_admin", "hub_user", "viewer"]
     school_id: uuid.UUID | None = None
     school_role: str | None = None  # cosmetic Airtable title, e.g. "Director"
+    # Hub display preference from the signed-in user's Contact row. None = read
+    # workshop times on the browser's own clock. Screen-only — see
+    # `MePreferencesUpdate`.
+    timezone: str | None = None
+
+
+class MePreferencesUpdate(BaseModel):
+    """Settings a signed-in hub user changes for themselves alone.
+
+    Distinct from `ContactUpdate`, which is the teammate-management endpoint and
+    carries fields a director may set on somebody else. Nothing here can affect
+    another person, and nothing here changes what is emailed to families:
+    `timezone` moves the clock on this user's own Hub screen and nothing more.
+    """
+
+    # None is a real value (clear the preference, fall back to the browser), so
+    # the caller must send the field explicitly to change anything.
+    timezone: DisplayTimezoneField = None
 
 
 class CurrentUser(BaseModel):

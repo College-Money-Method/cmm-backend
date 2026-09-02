@@ -295,8 +295,7 @@ def _process_due_mapping(
             origin=origin,
             registration_count=registration_count,
             attendee_count=attendee_count,
-            display_timezone=school.display_timezone,
-        )
+            )
         unsubscribe_url = None if omit_unsubscribe else build_unsubscribe_url(contact.id)
         html, text = render_email(
             template.body_json,

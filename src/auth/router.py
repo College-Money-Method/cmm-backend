@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 logger = logging.getLogger(__name__)
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from src.auth.deps import AdminDep, CurrentUserDep, get_current_user
@@ -27,6 +27,7 @@ from src.auth.schemas import (
     ContactUpdate,
     HubPasswordResetOut,
     HubPasswordResetRequest,
+    MePreferencesUpdate,
     UserRoleOut,
 )
 from supabase import create_client
@@ -41,13 +42,50 @@ router = APIRouter(tags=["auth"])
 
 
 @router.get("/api/v1/auth/me", response_model=UserRoleOut)
-def get_me(user: CurrentUserDep) -> UserRoleOut:
-    """Return the current user's role and school assignment."""
+def get_me(user: CurrentUserDep, db: DbDep) -> UserRoleOut:
+    """Return the current user's role, school assignment, and hub preferences.
+
+    The timezone is read from the Contact row rather than the role record: a
+    super_admin has no Contact and simply gets None, which the Hub reads as
+    "use the browser's zone".
+    """
+    timezone = db.scalar(select(Contact.timezone).where(Contact.user_id == user.user_id))
     return UserRoleOut(
         user_id=user.user_id,
         role=user.role,
         school_id=user.school_id,
         school_role=user.school_role,
+        timezone=timezone,
+    )
+
+
+@router.patch("/api/v1/auth/me/preferences", response_model=UserRoleOut)
+def update_my_preferences(
+    body: MePreferencesUpdate, user: CurrentUserDep, db: DbDep
+) -> UserRoleOut:
+    """Update the signed-in user's own hub preferences.
+
+    Scoped to the caller's own Contact row by `user_id`, so it needs no role
+    check: there is no request shape that reaches somebody else's settings.
+    """
+    contact = db.query(Contact).filter(Contact.user_id == user.user_id).first()
+    if contact is None:
+        # No Contact row (a super_admin, typically). Nothing to store, and
+        # nothing is broken — the Hub falls back to the browser's zone.
+        raise HTTPException(status_code=404, detail="No contact record for this account")
+
+    fields = body.model_dump(exclude_unset=True)
+    if "timezone" in fields:
+        contact.timezone = fields["timezone"]
+    db.commit()
+    db.refresh(contact)
+
+    return UserRoleOut(
+        user_id=user.user_id,
+        role=user.role,
+        school_id=user.school_id,
+        school_role=user.school_role,
+        timezone=contact.timezone,
     )
 
 

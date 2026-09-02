@@ -33,9 +33,9 @@ class AppConfig(Base):
     # (the "Watch video overview" button is hidden).
     topic_overview_video_url: Mapped[str | None] = mapped_column(Text)
 
-    # IANA zone that workshop dates/times render in for schools with no
-    # display_timezone of their own. Null = fall back to the env seed
-    # (settings.workshop_display_timezone). See src/schools/display_timezone.py.
+    # IANA zone that workshop dates/times render in, for every school. Null =
+    # fall back to the env seed (settings.workshop_display_timezone).
+    # See src/schools/display_timezone.py.
     workshop_display_timezone: Mapped[str | None] = mapped_column(Text)
 
     # Feature flags

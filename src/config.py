@@ -144,7 +144,7 @@ class Settings(BaseSettings):
     ses_no_unsubscribe_senders: str = "paul.martin@collegemoneymethod.com"
 
     # IANA zone that workshop {{date}}/{{time}} merge tags render in when the
-    # school has no `display_timezone` of its own. Workshop datetimes are stored
+    # admin has not set one in Global Settings. Workshop datetimes are stored
     # in UTC, which is a day ahead for any US evening event — see
     # src/schools/display_timezone.py. Keep in step with DEFAULT_DISPLAY_TIMEZONE
     # in cmm-frontend's app/lib/us-timezones.ts, or the Hub preview of an email
