@@ -123,6 +123,8 @@ def _log_send(
     rendered_html: str | None = None,
     broadcast_id: uuid.UUID | None = None,
     automation_id: uuid.UUID | None = None,
+    webinar_id: uuid.UUID | None = None,
+    school_id: uuid.UUID | None = None,
 ) -> EmailSendLog:
     log = EmailSendLog(
         recipient_email=to,
@@ -133,6 +135,8 @@ def _log_send(
         rendered_html=rendered_html,
         broadcast_id=broadcast_id,
         automation_id=automation_id,
+        webinar_id=webinar_id,
+        school_id=school_id,
     )
     db.add(log)
     db.commit()
@@ -151,6 +155,8 @@ def send_email(
     *,
     broadcast_id: uuid.UUID | None = None,
     automation_id: uuid.UUID | None = None,
+    webinar_id: uuid.UUID | None = None,
+    school_id: uuid.UUID | None = None,
     unsubscribe_url: str | None = None,
     sandbox_enabled: bool | None = None,
     from_address: str | None = None,
@@ -177,6 +183,9 @@ def send_email(
     (source="pre_workshop"/"post_workshop" callers) link the logged row back
     to the Broadcast/EmailAutomation it was sent as part of — mutually
     exclusive in practice, both accepted here for a single shared log path.
+    ``webinar_id``/``school_id`` add the workshop context an automation send has
+    and a broadcast does not — they are what lets the send log be scoped to a
+    cycle (through ``webinars.cycle_id``) and attributed to a school.
     ``unsubscribe_url``, when given, is attached as a one-click
     ``List-Unsubscribe`` header on the raw message — every sender that resolves
     an unsubscribe link gets CAN-SPAM compliance for free.
@@ -215,6 +224,8 @@ def send_email(
                 rendered_html=rendered_html,
                 broadcast_id=broadcast_id,
                 automation_id=automation_id,
+                webinar_id=webinar_id,
+                school_id=school_id,
             )
             for address in addresses
         ]

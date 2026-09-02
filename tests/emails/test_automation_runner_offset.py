@@ -250,3 +250,44 @@ def test_missing_template_skips_and_leaves_no_ledger_row(scheduler_sessionmaker)
     )
     assert ledger_rows == []
     session.close()
+
+
+def test_recipient_first_names_resolves_to_the_recipients_own_first_name(template):
+    """Automations send one email per contact, so `{{recipient_first_names}}`
+    — the greeting tag broadcasts already support — must resolve to that one
+    contact rather than rendering empty."""
+    session = template
+    session.get(EmailTemplate, TEMPLATE_ID).body_json = (
+        '{"type":"doc","content":[{"type":"paragraph","content":'
+        '[{"type":"mergeTag","attrs":{"tag":"recipient_first_names"}}]}]}'
+    )
+    school_id, contact_id, workshop_id, webinar_id, mapping_id, automation_id = (uuid.uuid4() for _ in range(6))
+    now = datetime.now(timezone.utc)
+    _seed_base(
+        session,
+        school_id=school_id,
+        contact_id=contact_id,
+        workshop_id=workshop_id,
+        webinar_id=webinar_id,
+        start_datetime=now - timedelta(days=8),
+        mapping_id=mapping_id,
+    )
+    session.get(Contact, contact_id).first_name = "Caroline"
+    session.add(
+        EmailAutomation(
+            id=automation_id,
+            name="Post-Workshop Follow-up",
+            type="post_workshop_reminder",
+            enabled=True,
+            offset_value=7,
+            offset_unit="days",
+            offset_direction="after",
+            template_id=TEMPLATE_ID,
+        )
+    )
+    session.commit()
+
+    assert run_automations_check(session) == 1
+
+    log = session.query(EmailSendLog).filter(EmailSendLog.automation_id == automation_id).one()
+    assert "Caroline" in (log.rendered_html or "")

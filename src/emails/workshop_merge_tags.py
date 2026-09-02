@@ -4,13 +4,13 @@
 Kept as a straight line-by-line port (same tag set, same URL construction, same
 grade-label pluralization) so a workshop email rendered server-side by the
 automation scheduler (``scheduler.py``) matches what a counselor previews in
-the Hub. Only the date/time formatting differs by necessity: the frontend
-calls ``toLocaleDateString``/``toLocaleTimeString`` with no explicit
-``timeZone``, which renders in the *viewer's* browser-local timezone — there is
-no equivalent "viewer" for a server-rendered batch send, so this module
-formats using whatever tzinfo the caller's ``start_datetime`` already carries
-(expected: UTC, per the ``TIMESTAMP(timezone=True)`` column type). Documented
-here rather than silently guessed at.
+the Hub.
+
+Dates and times are rendered in the *school's* display timezone rather than in
+the stored UTC (see ``src.schools.display_timezone``). Both repos resolve that
+zone the same way — school setting, then app-wide default — so the Hub preview
+and the sent email agree; neither uses the viewer's browser zone, which has
+nothing to do with when the workshop actually starts.
 """
 
 from __future__ import annotations
@@ -19,8 +19,10 @@ import re
 import unicodedata
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from src.emails.school_links import resource_center_url
+from src.schools.display_timezone import resolve_display_timezone
 
 
 def _slugify(text: str) -> str:
@@ -39,6 +41,17 @@ def workshop_slug(name: str, webinar_id: uuid.UUID | str) -> str:
     """
     prefix = str(webinar_id).replace("-", "")[:8]
     return f"{_slugify(name)}-{prefix}"
+
+
+def _in_display_tz(dt: datetime | None, tz: ZoneInfo) -> datetime | None:
+    """``dt`` moved into the school's display zone.
+
+    A naive datetime is assumed to already BE local time — it carries no offset
+    to convert from, and guessing UTC would shift a correct value by hours.
+    """
+    if dt is None or dt.tzinfo is None:
+        return dt
+    return dt.astimezone(tz)
 
 
 def _format_date(dt: datetime | None) -> str:
@@ -96,6 +109,7 @@ def build_workshop_merge_replacements(
     counselor_name: str,
     counselor_first_name: str = "",
     counselor_last_name: str = "",
+    recipient_first_names: str = "",
     school_slug: str | None,
     workshop_name: str,
     webinar_id: uuid.UUID | str,
@@ -121,8 +135,19 @@ def build_workshop_merge_replacements(
     ``registration_count``/``attendee_count`` are this school's numbers for this
     webinar, counted by the caller at render time (``registrations_to_date`` is
     "as of now", so it is never a stored value).
+
+    ``start_datetime`` is converted into the app-wide display zone before
+    ``{{date}}``/``{{time}}`` are formatted, so an evening workshop does not
+    advertise itself as the next day in UTC.
+
+    ``recipient_first_names`` is the greeting name(s) for whoever this copy is
+    addressed to, already joined by the caller (``broadcast_send.format_name_list``).
+    Workshop automations send one email per contact, so it is that contact's
+    first name there; the tag exists on this path so an automation template can
+    open with "Hi {{recipient_first_names}}," the same way a broadcast does.
     """
     resolved_origin = origin or ""
+    local_start = _in_display_tz(start_datetime, resolve_display_timezone())
     slug = workshop_slug(workshop_name, webinar_id)
     workshop_page_path = f"/school/{school_slug}/workshops/{slug}?via=email" if school_slug else None
     workshop_page_url = (
@@ -145,11 +170,12 @@ def build_workshop_merge_replacements(
         "counselor_name": counselor_name,
         "counselor_first_name": counselor_first_name,
         "counselor_last_name": counselor_last_name,
+        "recipient_first_names": recipient_first_names,
         "resource_center_url": resource_center_url(resolved_origin, school_slug),
         "resource_center_password": resource_center_password or "",
         "workshop_name": workshop_name,
-        "date": _format_date(start_datetime),
-        "time": _format_time(start_datetime),
+        "date": _format_date(local_start),
+        "time": _format_time(local_start),
         "grade_label": _grade_label(suggested_grades),
         "registration_link": workshop_page_url,
         "cycle_name": cycle_name or "",

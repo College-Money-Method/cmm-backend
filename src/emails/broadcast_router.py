@@ -34,7 +34,13 @@ from src.emails.broadcast_schemas import (
 )
 from src.emails.broadcast_send import send_broadcast_batch, send_test
 from src.emails.models import EmailSendLog
-from src.emails.sender import InvalidSenderError, allowed_sender_domains, sender_presets, validate_sender
+from src.emails.sender import (
+    InvalidSenderError,
+    allowed_sender_domains,
+    no_unsubscribe_senders,
+    sender_presets,
+    validate_sender,
+)
 from src.schools.models import Contact
 
 router = APIRouter(prefix="/api/v1/emails/broadcasts", tags=["emails"])
@@ -73,6 +79,7 @@ def get_sender_options(_admin: AdminDep) -> SenderOptionsOut:
     return SenderOptionsOut(
         presets=[SenderOptionOut(**p) for p in sender_presets()],
         allowed_domains=allowed_sender_domains(),
+        no_unsubscribe_senders=sorted(no_unsubscribe_senders()),
     )
 
 

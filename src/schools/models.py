@@ -153,6 +153,10 @@ class Contact(Base):
     auto_emails: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     broadcast_emails: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     softr_access: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # Hub display preference: the IANA zone this counselor reads workshop times
+    # on. NULL = their browser's own zone. Screen-only — emails are rendered in
+    # the app-wide zone for everyone (see src/schools/display_timezone.py).
+    timezone: Mapped[str | None] = mapped_column(Text)
     # Set when a contact is removed entirely from Airtable (soft-deactivation).
     # Row is kept so the provisioned auth account can be reconciled/revoked.
     deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)

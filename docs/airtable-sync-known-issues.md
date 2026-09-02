@@ -94,9 +94,11 @@ Records removed from Airtable persist forever for these entity rows. Only contac
 
 **Resolved sub-case — webinar↔school mappings (ISSUE-3b):** removing a school from a webinar's `Schools` list in Airtable now deletes the corresponding `portal_mapping` on the next sync. `_reconcile_portal_mappings` runs post-loop, scoped to webinars whose Airtable `Schools` list is **non-empty** (an empty list is treated as "unmanaged / lookup glitch", never as "wipe all mappings"), and is protected by the same `sync_deactivation_max_missing_fraction` guard (skips + logs `reconciliation SKIPPED` if the stale fraction exceeds the threshold). Known limitation: removing the *last* school from a webinar (Airtable `Schools` → empty) is not reconciled — remove it via `DELETE /webinars/{id}/schools/{school_id}` if needed.
 
-### ISSUE-5 — School descriptive fields are write-once [MEDIUM]
-`sync_schools.py` update branch refreshes only `airtable_id`, `is_current_customer`, `cohort_id`, `airtable_slug`. `name`, address, and URL fields are set on create and never updated — Airtable edits to them are ignored.
-- [ ] Document field ownership; update Airtable-owned fields on existing schools (keep `slug` app-owned for URL stability).
+### ISSUE-5 — School field ownership [MEDIUM]
+`sync_schools.py` update branch refreshes `airtable_id`, `name`, address fields, `enrollment_9_12`, `cmm_website_password`, the URL fields, `is_current_customer`, `cohort_id` and `airtable_slug` from Airtable.
+- [ ] Finish documenting per-field ownership for the remaining columns.
+
+**Resolved sub-case — school slug ownership:** `schools.slug` is the authoritative public URL segment (`/school/<slug>`) and is admin-editable in the school form. It used to be shadowed at serialization time by `airtable_slug` (the API returned `airtable_slug or slug`), which made it un-editable and broke every direct `School.slug ==` lookup — grade-config and search school scoping — for any school whose effective slug came from Airtable. Migration `0108` backfilled `slug` from `airtable_slug` where they disagreed, so public URLs were unchanged. The sync now propagates an Airtable slug change into `slug` **only** while `slug` still equals the previous `airtable_slug`; once an admin customizes the slug it is never overwritten. `airtable_slug` is retained and still resolves in `_find_public_school` as a legacy URL alias, so previously shared links keep working.
 
 ### ISSUE-8 — Reassignment to an un-synced school unlinks [LOW]
 If a contact's `Sch` points to a school not yet in Supabase, `school_id` → NULL. Under the access rule this now means access is (log-)revoked until the school syncs. Because cohorts+schools sync before contacts in one run, a full sync self-corrects; still silent per-contact when it happens.

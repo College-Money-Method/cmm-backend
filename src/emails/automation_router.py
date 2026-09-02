@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
 from src.emails.automation_models import EmailAutomation
+from src.emails.automation_send_log_queries import AutomationSendPage, automation_sends
 from src.emails.email_template_models import EmailTemplate
 from src.emails.models import EmailSendLog
 from src.emails.sender import InvalidSenderError, validate_sender
@@ -212,6 +213,22 @@ def update_automation(
     db.commit()
     db.refresh(automation)
     return _automation_out(db, automation)
+
+
+@router.get("/{automation_id}/sends", response_model=AutomationSendPage)
+def list_automation_sends(
+    automation_id: uuid.UUID,
+    _admin: AdminDep,
+    db: DbDep,
+    cycle_id: uuid.UUID | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> AutomationSendPage:
+    """One page of this automation's individual sends, newest first — the
+    per-recipient detail behind the row's `sent_count`. `cycle_id` scopes to
+    sends for that cycle's webinars; omit it for every send ever."""
+    _get_automation_or_404(db, automation_id)
+    return automation_sends(db, automation_id, cycle_id=cycle_id, offset=offset, limit=limit)
 
 
 @router.delete("/{automation_id}", status_code=status.HTTP_204_NO_CONTENT)

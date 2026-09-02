@@ -24,7 +24,7 @@ from src.emails.broadcast_models import Broadcast
 from src.emails.counselor_resolver import contact_is_school_counselor, resolve_counselor_name
 from src.emails.renderer import render_email
 from src.emails.school_links import resource_center_url
-from src.emails.sender import format_from_header
+from src.emails.sender import format_from_header, sender_omits_unsubscribe
 from src.emails.ses_client import _sandbox_enabled, send_email
 from src.emails.unsubscribe import build_unsubscribe_url
 from src.schools.models import Contact, School
@@ -150,8 +150,14 @@ def send_to_contacts(
     # for the sample contact would let the tester unsubscribe a real family.
     # A grouped email carries one token covering every recipient, so whoever
     # clicks can actually stop the mail they received.
+    #
+    # A sender on the no-unsubscribe list opts out of the mechanism entirely:
+    # leaving the URL None drops the footer link AND the List-Unsubscribe header
+    # together, so the two can never disagree.
     unsubscribe_url = (
-        build_unsubscribe_url([c.id for c in contacts]) if contacts and not override_to else None
+        build_unsubscribe_url([c.id for c in contacts])
+        if contacts and not override_to and not sender_omits_unsubscribe(broadcast.sender_email)
+        else None
     )
     html, text = render_email(
         broadcast.body_json,

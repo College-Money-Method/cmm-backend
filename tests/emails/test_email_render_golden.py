@@ -162,3 +162,27 @@ def test_render_email_branded_shell_adds_logo_and_footer():
 def test_node_to_html_raises_on_unsupported_node_type():
     with pytest.raises(ValueError, match="Unsupported Tiptap node type"):
         node_to_html({"type": "image", "attrs": {"src": "https://x.com/y.png"}})
+
+
+def test_plain_shell_renders_the_body_with_no_styling_at_all():
+    """Non-branded sends must carry zero inline styling — not on the shell, and
+    not on any body node. Brand fonts/colors belong to the branded shell only."""
+    html, _text = render_email(
+        _kitchen_sink_doc(), {}, "Subject", unsubscribe_url="https://x.com/u?t=tok"
+    )
+
+    assert "style=" not in html
+    assert "font-family" not in html
+    # Structure still survives — only the styling is gone.
+    assert "<h1>Title</h1>" in html
+    assert "<blockquote>" in html
+    assert "<ul>" in html and "<li>" in html
+    assert '<a href="https://zoom.us/j/1"' in html
+    assert 'href="https://x.com/u?t=tok"' in html
+
+
+def test_branded_shell_keeps_the_brand_inline_styles_on_the_body():
+    html, _text = render_email(_kitchen_sink_doc(), {}, "Subject", include_branding=True)
+
+    assert "font-family: 'Lora'" in html or "Lora" in html
+    assert "font-family" in html

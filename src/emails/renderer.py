@@ -51,8 +51,10 @@ def render_email(
         origin: Absolute origin for internal links. Defaults to
             ``settings.app_public_url`` when omitted.
         include_branding: Wrap the body in the CMM shell (logo, card, footer
-            rule) instead of the default plain, Gmail-like message. Opt-in per
-            template — see ``EmailTemplate.include_branding``.
+            rule) instead of the default plain, Gmail-like message, AND apply
+            the brand's inline typography/colors to the body. Off means bare,
+            unstyled markup. Opt-in per template — see
+            ``EmailTemplate.include_branding``.
 
     Returns:
         ``(html, text)`` — inlined-CSS HTML ready for SES, and a plain-text
@@ -72,7 +74,9 @@ def render_email(
         school_slug=school_slug,
     )
 
-    body_html = render_doc_to_html(resolved_doc)
+    # Inline brand styles belong to the branded shell only — a plain send is
+    # bare HTML so it renders in the recipient client's own default styling.
+    body_html = render_doc_to_html(resolved_doc, styled=include_branding)
     plain_text = tiptap_to_plain_text(resolved_doc)
     resolved_subject = resolve_plain_text(subject, merge_tag_replacements)
 
