@@ -65,13 +65,16 @@ from src.emails.automation_router import router as emails_automation_router
 from src.emails.template_router import router as emails_template_router
 from src.emails.preview_router import router as emails_preview_router
 from src.emails.scheduler import init_scheduler, shutdown_scheduler
+from src.emails.school_links import check_email_origin
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: ensure Supabase client is created, start the in-process
-    email-automation scheduler. Shutdown: stop the scheduler."""
+    """Startup: ensure Supabase client is created, report the origin outgoing
+    email links are built from, start the in-process email-automation
+    scheduler. Shutdown: stop the scheduler."""
     get_supabase()
+    check_email_origin()
     init_scheduler(app)
     yield
     shutdown_scheduler()

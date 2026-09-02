@@ -24,6 +24,7 @@ from src.db.deps import DbDep
 from src.emails.broadcast_schemas import SendTestResultOut
 from src.emails.link_resolver import resolve_plain_text
 from src.emails.renderer import render_email
+from src.emails.school_links import email_origin
 from src.emails.sender import InvalidSenderError, format_from_header, validate_sender
 from src.emails.ses_client import send_email
 from src.emails.template_preview import build_preview_context
@@ -104,7 +105,7 @@ def _render(db: Session, payload: PreviewContextIn) -> tuple[str, str, str, list
         ctx.replacements,
         payload.subject,
         school_slug=ctx.school_slug,
-        origin=settings.app_public_url or None,
+        origin=email_origin() or None,
         include_branding=payload.include_branding,
     )
     subject = resolve_plain_text(payload.subject, ctx.replacements)

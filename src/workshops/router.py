@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -18,6 +19,8 @@ from src.integrations import zoom as zoom_client
 from src.utils.tiptap import extract_text
 from src.content.models import ContentAsset, WorkshopResource, Objective, ObjectiveWorkshop
 from src.cycles.models import Cycle
+from src.emails.automation_rearm import rearm_automations_for_webinar
+from src.emails.models import EmailSendLog
 from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
 from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopEmailTemplate, WorkshopNotificationSubscriber, WorkshopRegistration
@@ -53,14 +56,53 @@ from src.workshops.schemas import (
     WorkshopUpdate,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/workshops", tags=["workshops"])
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _webinar_out(webinar: Webinar) -> WebinarOut:
+def _delete_impact(db, webinar_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[int, int]]:
+    """``{webinar_id: (school_count, email_send_count)}`` for a batch of webinars.
+
+    Two grouped queries rather than per-row counts: the Sessions list renders
+    every webinar in a cycle, and a delete prompt on each row must not cost a
+    query per row.
+
+    Both numbers answer "is this webinar real?" for the delete confirmation.
+    `portal_mapping` rows cascade away with the webinar; `email_send_log` rows
+    survive (ON DELETE SET NULL) but lose their linkage, so mail that already
+    went out becomes unattributable.
+    """
+    if not webinar_ids:
+        return {}
+    schools = dict(
+        db.execute(
+            select(PortalMapping.webinar_id, func.count())
+            .where(PortalMapping.webinar_id.in_(webinar_ids))
+            .group_by(PortalMapping.webinar_id)
+        ).all()
+    )
+    sends = dict(
+        db.execute(
+            select(EmailSendLog.webinar_id, func.count())
+            .where(EmailSendLog.webinar_id.in_(webinar_ids))
+            .group_by(EmailSendLog.webinar_id)
+        ).all()
+    )
+    return {wid: (schools.get(wid, 0), sends.get(wid, 0)) for wid in webinar_ids}
+
+
+def _webinar_out(webinar: Webinar, db=None, rearmed_automation_sends: int = 0) -> WebinarOut:
+    school_count, email_send_count = (
+        _delete_impact(db, [webinar.id]).get(webinar.id, (0, 0)) if db is not None else (0, 0)
+    )
     return WebinarOut(
+        school_count=school_count,
+        email_send_count=email_send_count,
+        rearmed_automation_sends=rearmed_automation_sends,
         id=webinar.id,
         workshop_id=webinar.workshop_id,
         cohort_id=webinar.cohort_id,
@@ -83,6 +125,71 @@ def _webinar_out(webinar: Webinar) -> WebinarOut:
         cohort_name=webinar.cohort.name if webinar.cohort else None,
         registration_count=len(webinar.registrations),
         slug=webinar.slug,
+        previous_start_datetime=webinar.previous_start_datetime,
+        rescheduled_at=webinar.rescheduled_at,
+    )
+
+
+# A start time that moves by less than this is a correction, not a reschedule.
+# The distinction decides who gets emailed: a material move re-arms the workshop
+# automations, so every mapped counselor receives the reminder again. One hour
+# absorbs timezone nudges and minor fixes without doing that.
+MATERIAL_RESCHEDULE_DELTA = timedelta(hours=1)
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Comparable UTC datetime. `start_datetime` is stored with a timezone, but a
+    client can still post an offset-less ISO string, which pydantic keeps naive —
+    and comparing naive to aware raises."""
+    if dt is None or dt.tzinfo is not None:
+        return dt
+    return dt.replace(tzinfo=timezone.utc)
+
+
+def _validate_webinar_schedule(obj: Webinar, requested: dict, *, allow_past: bool) -> bool:
+    """Guard a webinar datetime change; report whether it is a real reschedule.
+
+    ``requested`` must hold only the fields the client explicitly sent. Values
+    filled in from Zoom are deliberately excluded, and the Airtable sync
+    (``sync_webinars.py``) writes the ORM directly rather than coming through
+    this endpoint — both are backfill of what already happened, so neither
+    should be refused for being historical.
+
+    Two operations look identical in the payload and must not be conflated:
+    correcting a wrong recorded date (past, legitimate, must not email anyone)
+    and moving a session (future, must re-arm automations). The caller's
+    ``allow_past`` flag is what separates them — never a guess from the dates.
+    """
+    now = datetime.now(timezone.utc)
+    old_start = _as_utc(obj.start_datetime)
+    new_start = _as_utc(requested.get("start_datetime")) if "start_datetime" in requested else old_start
+    new_end = _as_utc(requested["end_datetime"]) if "end_datetime" in requested else _as_utc(obj.end_datetime)
+    changing_start = "start_datetime" in requested and new_start != old_start
+
+    if changing_start and new_start is not None and new_start < now and not allow_past:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "That start time is already in the past. Confirm you are correcting a "
+                "historical date rather than rescheduling, and save again."
+            ),
+        )
+
+    # duration_minutes is a generated column computed from the pair, so an
+    # inverted pair silently stores a negative duration today.
+    if new_start is not None and new_end is not None and new_end <= new_start:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The end time must be after the start time.",
+        )
+
+    return bool(
+        changing_start
+        and not allow_past
+        and old_start is not None  # first-time scheduling is not a reschedule
+        and new_start is not None
+        and new_start > now  # moving into the past would only re-fire follow-ups
+        and abs(new_start - old_start) > MATERIAL_RESCHEDULE_DELTA
     )
 
 
@@ -277,8 +384,11 @@ def list_all_webinars(
     )
 
     webinars = db.execute(stmt).scalars().all()
+    impact = _delete_impact(db, [w.id for w in webinars])
     return [
         WebinarListItem(
+            school_count=impact[w.id][0],
+            email_send_count=impact[w.id][1],
             id=w.id,
             webinar_name=w.webinar_name,
             cohort_id=w.cohort_id,
@@ -308,7 +418,7 @@ def get_webinar(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
     ).scalar_one_or_none()
     if not obj:
         raise HTTPException(status_code=404, detail="Webinar not found")
-    return _webinar_out(obj)
+    return _webinar_out(obj, db)
 
 
 @router.patch("/webinars/{webinar_id}", response_model=WebinarOut)
@@ -321,6 +431,10 @@ def update_webinar(webinar_id: uuid.UUID, body: WebinarUpdate, _admin: AdminDep,
     if not obj:
         raise HTTPException(status_code=404, detail="Webinar not found")
     update_data = body.model_dump(exclude_unset=True)
+    # Not a webinar column — it only says how to read the datetime change.
+    allow_past = bool(update_data.pop("allow_past_datetime", False))
+    is_reschedule = _validate_webinar_schedule(obj, update_data, allow_past=allow_past)
+    previous_start = obj.start_datetime
 
     # Auto-populate fields from Zoom API when zoom_webinar_id is being set
     if "zoom_webinar_id" in update_data and update_data["zoom_webinar_id"]:
@@ -330,16 +444,69 @@ def update_webinar(webinar_id: uuid.UUID, body: WebinarUpdate, _admin: AdminDep,
 
     for k, v in update_data.items():
         setattr(obj, k, v)
+
+    rearmed = 0
+    if is_reschedule:
+        # Recorded in the same transaction as the move, so a failed commit
+        # cannot leave a webinar claiming a reschedule that did not happen.
+        obj.previous_start_datetime = previous_start
+        obj.rescheduled_at = datetime.now(timezone.utc)
+        # The session moved, so anything already "sent" for the old date has to
+        # be re-evaluated against the new one — otherwise counselors keep a date
+        # that no longer happens and no further mail is ever sent for it.
+        rearmed = rearm_automations_for_webinar(db, obj.id)
     db.commit()
+    if is_reschedule:
+        # Counselors receiving a second reminder will be asked about, so leave a
+        # trail of exactly which move caused it and how much it re-armed.
+        logger.info(
+            "webinar %s rescheduled from %s to %s; cleared %d automation ledger row(s)",
+            obj.id,
+            previous_start,
+            obj.start_datetime,
+            rearmed,
+        )
     db.refresh(obj)
-    return _webinar_out(obj)
+    return _webinar_out(obj, db, rearmed_automation_sends=rearmed)
 
 
 @router.delete("/webinars/{webinar_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_webinar(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
+def delete_webinar(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep, force: bool = False):
+    """Hard-delete a webinar. Blocked by default once the session has history.
+
+    The delete is a *hard* one and the FKs cascade: every
+    `workshop_registrations` row for this session — registrations and their
+    attendance — is destroyed with it, along with the school `portal_mapping`
+    rows and their `automation_send_ledger` entries. There is no soft-cancel
+    state to fall back on, so this is unrecoverable.
+
+    That is fine for the case this exists to serve (a webinar created by
+    mistake, which has nothing attached). It is not fine for a session families
+    registered for or that already generated mail, so those need `force=true`,
+    which the admin only reaches through a prompt naming the counts.
+    """
     obj = db.get(Webinar, webinar_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Webinar not found")
+
+    if not force:
+        registration_count = db.execute(
+            select(func.count())
+            .select_from(WorkshopRegistration)
+            .where(WorkshopRegistration.webinar_id == webinar_id)
+        ).scalar_one()
+        _, email_send_count = _delete_impact(db, [webinar_id])[webinar_id]
+        if registration_count or email_send_count:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"This session has {registration_count} registration(s) and "
+                    f"{email_send_count} email(s) already sent. Deleting it destroys "
+                    "those registrations and their attendance permanently. Confirm the "
+                    "delete to proceed anyway."
+                ),
+            )
+
     db.delete(obj)
     db.commit()
 
@@ -365,7 +532,7 @@ def sync_attendance(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep):
         )
 
     db.refresh(obj)
-    return _webinar_out(obj)
+    return _webinar_out(obj, db)
 
 
 @router.get("/webinars/{webinar_id}/registrations", response_model=list[RegistrationOut])
@@ -1112,8 +1279,11 @@ def list_workshop_webinars(
         stmt = stmt.order_by(Webinar.start_datetime.desc().nulls_last())
 
     webinars = db.execute(stmt).scalars().all()
+    impact = _delete_impact(db, [w.id for w in webinars])
     return [
         WebinarSummary(
+            school_count=impact[w.id][0],
+            email_send_count=impact[w.id][1],
             id=w.id,
             webinar_name=w.webinar_name,
             cohort_id=w.cohort_id,
@@ -1327,4 +1497,4 @@ def create_webinar(workshop_id: uuid.UUID, body: WebinarCreate, _admin: AdminDep
         .where(Webinar.id == obj.id)
         .options(selectinload(Webinar.workshop), selectinload(Webinar.cohort), selectinload(Webinar.registrations))
     ).scalar_one()
-    return _webinar_out(obj)
+    return _webinar_out(obj, db)
