@@ -166,6 +166,8 @@ def build_preview_context(
             [contact.first_name or contact.full_name or ""] if contact else []
         ),
         school_slug=school.slug,
+        school_state=school.state,
+        school_timezone=school.display_timezone,
         resource_center_password=school.cmm_website_password,
         workshop_name=workshop.name,
         webinar_id=webinar.id,

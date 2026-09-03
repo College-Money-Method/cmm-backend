@@ -22,6 +22,11 @@ class School(Base):
     city: Mapped[str | None] = mapped_column(Text)
     state: Mapped[str | None] = mapped_column(String(2))
     zip_code: Mapped[str | None] = mapped_column(Text)
+    # Explicit override for the zone this school's workshop emails are written
+    # in. NULL = derive it from `state` (see src/schools/display_timezone.py).
+    # Set it for a school on the wrong side of a zone boundary within its state
+    # — Chattanooga and Knoxville are Eastern while Tennessee maps to Central.
+    display_timezone: Mapped[str | None] = mapped_column(Text)
     enrollment_9_12: Mapped[int | None] = mapped_column(Integer)
     # Self-reported by counselors in the Hub; enrollment_9_12 is kept in sync
     # as the total whenever any per-grade value is updated (see update_school)

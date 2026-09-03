@@ -8,9 +8,10 @@ the Hub.
 
 Dates and times are rendered in the *school's* display timezone rather than in
 the stored UTC (see ``src.schools.display_timezone``). Both repos resolve that
-zone the same way — school setting, then app-wide default — so the Hub preview
-and the sent email agree; neither uses the viewer's browser zone, which has
-nothing to do with when the workshop actually starts.
+zone the same way — the school's override, then its state, then the app-wide
+default — so the Hub preview and the sent email agree; neither uses the
+viewer's browser zone, which has nothing to do with when the workshop actually
+starts.
 """
 
 from __future__ import annotations
@@ -111,6 +112,8 @@ def build_workshop_merge_replacements(
     counselor_last_name: str = "",
     recipient_first_names: str = "",
     school_slug: str | None,
+    school_state: str | None = None,
+    school_timezone: str | None = None,
     workshop_name: str,
     webinar_id: uuid.UUID | str,
     start_datetime: datetime | None,
@@ -136,9 +139,13 @@ def build_workshop_merge_replacements(
     webinar, counted by the caller at render time (``registrations_to_date`` is
     "as of now", so it is never a stored value).
 
-    ``start_datetime`` is converted into the app-wide display zone before
+    ``start_datetime`` is converted into the school's display zone before
     ``{{date}}``/``{{time}}`` are formatted, so an evening workshop does not
-    advertise itself as the next day in UTC.
+    advertise itself as the next day in UTC, and a family reads the hour they
+    will actually join at. ``school_timezone`` is the school's explicit
+    override and ``school_state`` the two-letter code the zone is otherwise
+    derived from; with neither, this falls back to the app-wide default, which
+    is what a preview with no school attached gets.
 
     ``recipient_first_names`` is the greeting name(s) for whoever this copy is
     addressed to, already joined by the caller (``broadcast_send.format_name_list``).
@@ -152,7 +159,9 @@ def build_workshop_merge_replacements(
     # resource's own link) rather than emitting a path — a missing link is
     # recoverable, a hostless one is not.
     resolved_origin = (origin or "").rstrip("/")
-    local_start = _in_display_tz(start_datetime, resolve_display_timezone())
+    local_start = _in_display_tz(
+        start_datetime, resolve_display_timezone(school_timezone, school_state)
+    )
     slug = workshop_slug(workshop_name, webinar_id)
     workshop_page_path = (
         f"/school/{school_slug}/workshops/{slug}?via=email"
