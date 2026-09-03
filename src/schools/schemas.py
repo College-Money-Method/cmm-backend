@@ -27,10 +27,11 @@ class ContactSummary(BaseModel):
     last_name: str | None = None
     full_name: str | None = None
     email: str | None = None
+    # Airtable-owned job label ("Director"/"Counselor") — display only.
     role: str | None = None
+    # Hub permission from user_roles; None when the contact has no hub login.
+    hub_role: str | None = None
     receive_comms: bool = True
-    # False when the contact was removed from Airtable (soft-deactivated).
-    is_active: bool = True
 
 
 class GradeSetRef(BaseModel):
@@ -48,6 +49,9 @@ class SchoolListItem(BaseModel):
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
+    # None means "derived from state" — the effective zone is resolved at send
+    # time, not stored here.
+    display_timezone: str | None = None
     enrollment_9_12: int | None = None
     enrollment_grade_9: int | None = None
     enrollment_grade_10: int | None = None
@@ -92,6 +96,7 @@ class SchoolCreate(BaseModel):
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
+    display_timezone: DisplayTimezoneField = None
     street_address: str | None = None
     enrollment_9_12: int | None = None
     cohort_id: uuid.UUID | None = None
@@ -115,6 +120,7 @@ class SchoolUpdate(BaseModel):
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
+    display_timezone: DisplayTimezoneField = None
     street_address: str | None = None
     enrollment_9_12: int | None = None
     enrollment_grade_9: int | None = None
@@ -191,6 +197,10 @@ class SchoolPublic(BaseModel):
     nickname: str | None = None
     city: str | None = None
     state: str | None = None
+    # Exposed so the Hub can preview a workshop email in the same zone the
+    # backend will render the sent copy in. Not sensitive — it is the zone the
+    # school's own families already read every workshop time in.
+    display_timezone: str | None = None
     logo_url: CdnUrl = None
     logo_thumb_url: CdnUrl = None
     is_current_customer: bool = False

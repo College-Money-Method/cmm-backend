@@ -44,6 +44,17 @@ from src.schools.schemas import (
 
 router = APIRouter(prefix="/api/v1/schools", tags=["schools"])
 
+# Eager loads for every `SchoolDetail` response. Contacts are soft-deleted
+# (`deleted_at`) both by the admin delete action and by the Airtable sync's
+# offboarding sweep; a deleted contact must leave no trace in the admin UI, so
+# the collection is filtered here rather than at each call site.
+_SCHOOL_DETAIL_LOADS = (
+    joinedload(School.cohort),
+    joinedload(School.grade_set),
+    selectinload(School.contacts.and_(Contact.deleted_at.is_(None)))
+    .selectinload(Contact.user_role),
+)
+
 # Shown to unauthenticated visitors when a school slug/id is missing OR belongs
 # to a non-customer. Identical for both cases so the response never reveals that
 # a non-partnered school exists in the database.
@@ -369,7 +380,7 @@ def create_school(body: SchoolCreate, _admin: AdminDep, db: DbDep) -> SchoolDeta
     db.refresh(school)
     school = (
         db.query(School)
-        .options(joinedload(School.cohort), joinedload(School.grade_set), selectinload(School.contacts))
+        .options(*_SCHOOL_DETAIL_LOADS)
         .filter(School.id == school.id)
         .one()
     )
@@ -440,7 +451,7 @@ def get_school(school_id: uuid.UUID, db: DbDep, user: CurrentUserDep) -> SchoolD
     _check_school_access(school_id, user)
     school = (
         db.query(School)
-        .options(joinedload(School.cohort), joinedload(School.grade_set), selectinload(School.contacts))
+        .options(*_SCHOOL_DETAIL_LOADS)
         .filter(School.id == school_id)
         .first()
     )
@@ -507,7 +518,7 @@ def update_school(
     db.commit()
     school = (
         db.query(School)
-        .options(joinedload(School.cohort), joinedload(School.grade_set), selectinload(School.contacts))
+        .options(*_SCHOOL_DETAIL_LOADS)
         .filter(School.id == school_id)
         .one()
     )
@@ -678,7 +689,7 @@ def assign_grade_set(
     db.commit()
     school = (
         db.query(School)
-        .options(joinedload(School.cohort), joinedload(School.grade_set), selectinload(School.contacts))
+        .options(*_SCHOOL_DETAIL_LOADS)
         .filter(School.id == school_id)
         .one()
     )

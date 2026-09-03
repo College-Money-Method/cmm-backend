@@ -285,6 +285,8 @@ def _process_due_mapping(
             # this recipient alone. Same fallback chain broadcasts use.
             recipient_first_names=format_name_list([contact.first_name or contact.full_name or ""]),
             school_slug=school.slug,
+            school_state=school.state,
+            school_timezone=school.display_timezone,
             resource_center_password=school.cmm_website_password,
             workshop_name=workshop.name,
             webinar_id=webinar.id,

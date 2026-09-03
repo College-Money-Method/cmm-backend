@@ -4,10 +4,11 @@
 already the *next day* in UTC, so rendering the stored value straight out gets
 the date wrong, not just the hour — which is what these tests pin down.
 
-One zone serves every school: the rendered time carries its abbreviation
-("7:00 PM EDT"), so it reads unambiguously wherever the family lives. A
-counselor's own `Contact.timezone` moves their Hub screen only and is
-deliberately absent from this path.
+The zone is the recipient *school's*: its explicit `display_timezone` override,
+else the one derived from its `state`, else the app-wide default. A counselor's
+own `Contact.timezone` moves their Hub screen only and is deliberately absent
+from this path — a person's screen setting must never decide what a family
+reads.
 """
 
 from __future__ import annotations
@@ -25,8 +26,11 @@ from src.emails.workshop_merge_tags import build_workshop_merge_replacements
 from src.schools import display_timezone as tz_module
 from src.schools.display_timezone import (
     FALLBACK_TIMEZONE,
+    STATE_TIMEZONES,
     resolve_display_timezone,
+    timezone_for_state,
 )
+from src.schools.schemas import SchoolUpdate
 
 # Bound before the autouse fixture below stubs the module attribute, so one test
 # can still exercise the real database read.
@@ -38,12 +42,19 @@ EVENING_ET = datetime(2026, 4, 2, 23, 0, tzinfo=timezone.utc)
 LATE_PT = datetime(2026, 4, 3, 4, 0, tzinfo=timezone.utc)
 
 
-def _tags(start: datetime | None) -> dict[str, str]:
+def _tags(
+    start: datetime | None,
+    *,
+    school_state: str | None = None,
+    school_timezone: str | None = None,
+) -> dict[str, str]:
     return build_workshop_merge_replacements(
         school_name="Test High",
         family_label="Test High families",
         counselor_name="Casey Counselor",
         school_slug="test-high",
+        school_state=school_state,
+        school_timezone=school_timezone,
         workshop_name="FAFSA Basics",
         webinar_id=uuid.uuid4(),
         start_datetime=start,
@@ -184,10 +195,79 @@ def test_clearing_a_counselors_zone_means_use_their_browser():
 
 
 def test_a_counselor_preference_cannot_reach_the_email_renderer():
-    """The Hub preference is screen-only. If a zone argument ever reappears on
-    the merge-tag builder, one person's screen setting could start deciding what
-    a family reads — so the absence of that seam is the thing under test."""
+    """The Hub preference is screen-only. The builder takes a zone now, but only
+    a school-scoped one; a parameter carrying a person's or a viewer's zone
+    would let one screen setting decide what every family reads, so the absence
+    of that seam is the thing under test."""
     import inspect
 
     params = inspect.signature(build_workshop_merge_replacements).parameters
-    assert not [p for p in params if "timezone" in p or p == "tz"]
+    zone_params = [p for p in params if "timezone" in p or p == "tz"]
+    assert zone_params == ["school_timezone"]
+
+
+# ── Per-school zone ─────────────────────────────────────────────────────────
+
+
+def test_the_zone_comes_from_the_schools_state():
+    """A California school advertises the same instant in Pacific, not in the
+    app-wide Eastern default — the whole point of deriving from location."""
+    assert _tags(EVENING_ET, school_state="CA")["time"] == "4:00 PM PDT"
+    assert _tags(EVENING_ET, school_state="NY")["time"] == "7:00 PM EDT"
+
+
+def test_a_late_workshop_keeps_the_right_date_in_the_schools_zone():
+    """9:00 PM Pacific is already April 3 in UTC. A Pacific school must still
+    read April 2, which is the failure that motivates all of this."""
+    tags = _tags(LATE_PT, school_state="CA")
+    assert tags["date"] == "Thursday, April 2, 2026"
+    assert tags["time"] == "9:00 PM PDT"
+
+
+def test_the_state_lookup_is_case_and_space_insensitive():
+    assert timezone_for_state(" ca ") == "America/Los_Angeles"
+    assert timezone_for_state("Ca") == "America/Los_Angeles"
+
+
+def test_an_unknown_state_falls_through_instead_of_guessing():
+    """A blank, a full state name or a territory outside the map must not
+    resolve to a zone — being confidently an hour wrong is worse than using the
+    app-wide default."""
+    assert timezone_for_state(None) is None
+    assert timezone_for_state("") is None
+    assert timezone_for_state("California") is None
+    assert timezone_for_state("PR") is None
+    assert _tags(EVENING_ET, school_state="ZZ")["time"] == "7:00 PM EDT"
+
+
+def test_an_override_beats_the_state_map():
+    """Chattanooga is Eastern while Tennessee maps to Central. The override is
+    the only thing standing between those schools and an hour's error."""
+    assert _tags(EVENING_ET, school_state="TN")["time"] == "6:00 PM CDT"
+    assert (
+        _tags(EVENING_ET, school_state="TN", school_timezone="America/New_York")["time"]
+        == "7:00 PM EDT"
+    )
+
+
+def test_every_mapped_state_uses_a_zone_the_picker_offers():
+    """The map may only produce zones an admin could also have picked by hand,
+    so a derived value and an override are always the same kind of thing."""
+    assert set(STATE_TIMEZONES.values()) <= set(tz_module.TIMEZONE_NAMES)
+    assert len(STATE_TIMEZONES) == 51  # 50 states + DC
+
+
+def test_a_school_override_is_validated_against_the_supported_list():
+    with pytest.raises(ValidationError):
+        SchoolUpdate(display_timezone="Mars/Olympus")
+    assert SchoolUpdate(display_timezone="America/Denver").display_timezone == "America/Denver"
+
+
+def test_a_blank_school_override_clears_it_back_to_the_state_map():
+    assert SchoolUpdate(display_timezone="   ").display_timezone is None
+
+
+def test_no_school_at_all_is_the_app_wide_zone():
+    """Admin screens and a preview with no school attached must keep getting a
+    single reference zone, so two schools' webinars stay comparable."""
+    assert str(resolve_display_timezone()) == FALLBACK_TIMEZONE
