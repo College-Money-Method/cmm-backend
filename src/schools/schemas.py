@@ -27,10 +27,11 @@ class ContactSummary(BaseModel):
     last_name: str | None = None
     full_name: str | None = None
     email: str | None = None
+    # Airtable-owned job label ("Director"/"Counselor") — display only.
     role: str | None = None
+    # Hub permission from user_roles; None when the contact has no hub login.
+    hub_role: str | None = None
     receive_comms: bool = True
-    # False when the contact was removed from Airtable (soft-deactivated).
-    is_active: bool = True
 
 
 class GradeSetRef(BaseModel):

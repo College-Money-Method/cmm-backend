@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, Computed, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import TIMESTAMP
@@ -11,6 +12,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.db.base import Base
+
+if TYPE_CHECKING:
+    from src.auth.models import UserRole
 
 
 class School(Base):
@@ -173,6 +177,26 @@ class Contact(Base):
         return self.deleted_at is None
 
     school: Mapped[School | None] = relationship(back_populates="contacts")
+
+    # The hub role provisioned for this contact. Joined on user_id rather than a
+    # real FK because user_id points at Supabase's auth.users (no cross-schema
+    # FK). Read-only: sync_provisioning owns writes to user_roles.
+    user_role: Mapped["UserRole | None"] = relationship(
+        "UserRole",
+        primaryjoin="foreign(UserRole.user_id) == Contact.user_id",
+        viewonly=True,
+        uselist=False,
+    )
+
+    @property
+    def hub_role(self) -> str | None:
+        """Hub permission (``hub_admin``/``hub_user``) or None when no login.
+
+        Surfaced on school detail so an admin can see the column the hub
+        actually scopes a session by, instead of inferring it from the
+        Airtable-owned `role` label.
+        """
+        return self.user_role.role if self.user_role else None
 
     __table_args__ = (
         Index("idx_contacts_school_id", "school_id"),
