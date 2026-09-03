@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -239,6 +240,7 @@ def _contact_out(
         auth_email=auth_email,
         auto_emails=contact.auto_emails,
         broadcast_emails=contact.broadcast_emails,
+        is_airtable_managed=bool(contact.airtable_id),
     )
 
 
@@ -786,15 +788,42 @@ def update_contact(
     return _contact_out(contact, role_record, school)
 
 
-@router.delete("/api/v1/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_contact(
+def _revoke_hub_login(db: Session, supabase, contact: Contact) -> None:
+    """Strip a contact's hub login: delete the Supabase user, role record and profile,
+    then detach the login from the contact. Does not commit.
+
+    The contacts row survives — the person remains a contact without access.
+    """
+    user_id = contact.user_id
+    if user_id is None:
+        return
+    try:
+        supabase.auth.admin.delete_user(str(user_id))
+    except Exception:
+        pass
+
+    role_record = db.query(UserRole).filter(UserRole.user_id == user_id).first()
+    contact.user_id = None
+    if role_record is not None:
+        db.delete(role_record)
+    delete_profile(db, user_id)
+
+
+@router.post(
+    "/api/v1/contacts/{contact_id}/revoke-access", status_code=status.HTTP_204_NO_CONTENT
+)
+def revoke_contact_access(
     contact_id: uuid.UUID,
     _admin: AdminDep,
     db: DbDep,
     supabase=Depends(get_supabase),
 ) -> None:
-    """Revoke a contact's hub login: deletes the Supabase user + role record but keeps
-    the contacts row (the person remains a contact without access)."""
+    """Revoke a contact's hub login but keep them as a contact.
+
+    Deletes the Supabase user + role record; the contacts row stays so the person
+    still receives email and appears in the school's contact list. To remove the
+    person entirely, use DELETE (which cascades through this first).
+    """
     contact = (
         db.query(Contact)
         .filter(Contact.id == contact_id, Contact.deleted_at.is_(None))
@@ -805,18 +834,41 @@ def delete_contact(
     if contact.user_id is None:
         raise HTTPException(status_code=400, detail="Contact has no hub login to revoke")
 
-    user_id = contact.user_id
-    try:
-        supabase.auth.admin.delete_user(str(user_id))
-    except Exception:
-        pass
+    _revoke_hub_login(db, supabase, contact)
+    db.commit()
 
-    role_record = db.query(UserRole).filter(UserRole.user_id == user_id).first()
-    # Detach the login but keep the contact — the person remains a contact without access.
-    contact.user_id = None
-    if role_record is not None:
-        db.delete(role_record)
-    delete_profile(db, user_id)
+
+@router.delete("/api/v1/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_contact(
+    contact_id: uuid.UUID,
+    _admin: AdminDep,
+    db: DbDep,
+    supabase=Depends(get_supabase),
+) -> None:
+    """Soft-delete an admin-created contact: cascades through hub-login revocation,
+    then sets ``deleted_at`` so the person drops out of every list and email audience.
+
+    Airtable-sourced contacts are rejected — Airtable owns those rows, and the next
+    sync would reactivate them (see sync_contacts.py). Offboard them by removing the
+    record in Airtable instead.
+    """
+    contact = (
+        db.query(Contact)
+        .filter(Contact.id == contact_id, Contact.deleted_at.is_(None))
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if contact.airtable_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This contact is managed in Airtable — remove the record there instead.",
+        )
+
+    # A contact with a login can't just be hidden: leaving the Supabase user alive
+    # would keep a working password for a person who no longer exists here.
+    _revoke_hub_login(db, supabase, contact)
+    contact.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
 

@@ -111,6 +111,11 @@ class ContactOut(BaseModel):
     # `_contact_out_from_role`.
     auto_emails: bool = False
     broadcast_emails: bool = False
+    # True when the contact originates from Airtable (`airtable_id` set). Airtable
+    # is the source of truth for those rows, so they can't be deleted here — the
+    # sync would recreate/reactivate them on the next run. Admin-created contacts
+    # (no `airtable_id`) are the only ones the delete endpoint accepts.
+    is_airtable_managed: bool = False
 
 
 class ContactListResponse(BaseModel):
