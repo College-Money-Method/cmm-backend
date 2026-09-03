@@ -124,6 +124,7 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
     }
 
     counselors_created = school_roles_updated = skipped = 0
+    roles_reassigned = 0
 
     for contact in contacts:
         email = (contact.email or "").strip()
@@ -203,6 +204,19 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
             if existing_role.school_role != school_role:
                 existing_role.school_role = school_role
                 school_roles_updated += 1
+            # The hub a counselor lands in is read from UserRole.school_id, so it
+            # must follow the contact when Airtable moves them between schools —
+            # otherwise they keep signing in to their previous school's hub.
+            # Only ever set to a real school: an unlinked contact (school_id NULL)
+            # means offboarding, which _reconcile_revocations handles by deleting
+            # the role, not by blanking it here.
+            if contact.school_id is not None and existing_role.school_id != contact.school_id:
+                logger.info(
+                    "Reassigning counselor %s from school_id=%s to %s",
+                    email, existing_role.school_id, contact.school_id,
+                )
+                existing_role.school_id = contact.school_id
+                roles_reassigned += 1
             continue
 
         # No existing role and no Airtable role → no hub access, don't provision.
@@ -238,12 +252,13 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
 
     db.commit()
     logger.info(
-        "Counselor provisioning complete: created=%d roles_updated=%d revoked=%d skipped=%d",
-        counselors_created, school_roles_updated, counselors_revoked, skipped,
+        "Counselor provisioning complete: created=%d roles_updated=%d reassigned=%d revoked=%d skipped=%d",
+        counselors_created, school_roles_updated, roles_reassigned, counselors_revoked, skipped,
     )
     return {
         "counselors_created": counselors_created,
         "school_roles_updated": school_roles_updated,
+        "roles_reassigned": roles_reassigned,
         "counselors_revoked": counselors_revoked,
         "skipped": skipped,
     }
