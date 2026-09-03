@@ -19,6 +19,7 @@ from src.auth.rate_limit import allow
 from src.auth.schemas import (
     AuthEmailSyncOut,
     ChangePasswordRequest,
+    CurrentUser,
     CheckEmailOut,
     CheckEmailRequest,
     ContactCreate,
@@ -838,15 +839,43 @@ def revoke_contact_access(
     db.commit()
 
 
+def _authorize_contact_delete(user: CurrentUser, contact: Contact) -> None:
+    """Decide whether `user` may delete `contact`. Raises 400/403 otherwise.
+
+    Super admins may delete any contact. Directors (hub_admin) may delete their own
+    school's contacts, so they can offboard a teammate they added themselves without
+    filing a request. Counselors and viewers may not delete anyone — mirrors
+    `update_contact`, where managing somebody else is hub-admin only.
+
+    Nobody may delete their own contact: the cascade destroys the caller's Supabase
+    user, so it would revoke the session mid-request and lock a school's last
+    director out of their own hub.
+    """
+    if contact.user_id is not None and contact.user_id == user.user_id:
+        raise HTTPException(
+            status_code=400, detail="You can't delete your own contact — ask another admin."
+        )
+    if user.role == "super_admin":
+        return
+    if user.role != "hub_admin":
+        raise HTTPException(status_code=403, detail="Hub admin access required")
+    # A contact with no school (never assigned) belongs to no director.
+    if contact.school_id is None or contact.school_id != user.school_id:
+        raise HTTPException(status_code=403, detail="Access restricted to your own school")
+
+
 @router.delete("/api/v1/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_contact(
     contact_id: uuid.UUID,
-    _admin: AdminDep,
+    user: CurrentUserDep,
     db: DbDep,
     supabase=Depends(get_supabase),
 ) -> None:
-    """Soft-delete an admin-created contact: cascades through hub-login revocation,
-    then sets ``deleted_at`` so the person drops out of every list and email audience.
+    """Soft-delete a contact: cascades through hub-login revocation, then sets
+    ``deleted_at`` so the person drops out of every list and email audience.
+
+    Open to super admins and to directors for their own school — see
+    `_authorize_contact_delete`.
 
     Airtable-sourced contacts are rejected — Airtable owns those rows, and the next
     sync would reactivate them (see sync_contacts.py). Offboard them by removing the
@@ -859,6 +888,7 @@ def delete_contact(
     )
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
+    _authorize_contact_delete(user, contact)
     if contact.airtable_id:
         raise HTTPException(
             status_code=400,
