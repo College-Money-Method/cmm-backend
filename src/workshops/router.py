@@ -340,9 +340,10 @@ def list_all_webinars(
     school_id: uuid.UUID | None = None,
     workshop_id: uuid.UUID | None = None,
     cycle_id: uuid.UUID | None = None,
+    cohort_id: uuid.UUID | None = None,
     zoom_webinar_id: str | None = None,
 ):
-    """Admin: global webinar list filterable by cycle, school, workshop, status, search, and zoom webinar id."""
+    """Admin: global webinar list filterable by cycle, cohort, school, workshop, status, search, and zoom webinar id."""
     now = datetime.now(tz=timezone.utc)
     stmt = select(Webinar).options(
         selectinload(Webinar.workshop),
@@ -356,6 +357,9 @@ def list_all_webinars(
 
     if workshop_id:
         stmt = stmt.where(Webinar.workshop_id == workshop_id)
+
+    if cohort_id:
+        stmt = stmt.where(Webinar.cohort_id == cohort_id)
 
     if school_id:
         # Filter to webinars mapped to this school via portal_mapping
