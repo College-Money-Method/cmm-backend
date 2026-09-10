@@ -1,4 +1,5 @@
-"""Zoom webhook handler — URL validation and webinar.ended attendance sync."""
+"""Zoom webhook handler — URL validation, webinar.ended attendance sync,
+recording.completed video pipeline trigger."""
 
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
 from src.config import settings
 from src.db.base import get_session_factory
+from src.video_pipeline.intake import intake_recording
 from src.workshops.attendance_sync_service import sync_webinar_attendance
 
 logger = logging.getLogger(__name__)
@@ -67,6 +69,36 @@ async def _sync_with_retry(zoom_webinar_id: str) -> None:
     )
 
 
+def _schedule_recording_intake(payload: dict, background_tasks: BackgroundTasks) -> None:
+    """Queue video pipeline intake for a finished cloud recording.
+
+    ``object.uuid`` is the per-instance recording UUID and the pipeline's
+    idempotency key; ``object.id`` is the webinar number that maps to a
+    ``Webinar`` row. The DB work happens in a background task because the
+    handler must answer inside 2 s, and because ``recording.completed`` fires
+    when Zoom finishes *processing* — routinely minutes and occasionally hours
+    after the webinar ended, so nothing here may assume fresh timing.
+
+    The webhook's ``download_token`` is deliberately ignored rather than
+    persisted: the task re-fetches a fresh download URL over S2S OAuth, which
+    leaves no Zoom credential at rest.
+    """
+    obj = payload.get("payload", {}).get("object", {})
+    recording_uuid = str(obj.get("uuid") or "")
+    zoom_webinar_id = str(obj.get("id") or "")
+
+    if not recording_uuid or not zoom_webinar_id:
+        logger.warning("recording.completed payload missing object.uuid/object.id — payload=%s", payload)
+        return
+
+    logger.info(
+        "recording.completed received — scheduling video job intake webinar=%s recording=%s",
+        zoom_webinar_id,
+        recording_uuid,
+    )
+    background_tasks.add_task(intake_recording, zoom_webinar_id, recording_uuid)
+
+
 @router.post("/webhook", status_code=status.HTTP_200_OK)
 async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
     """
@@ -75,6 +107,7 @@ async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
     Handles:
     - ``endpoint.url_validation``: Zoom challenge-response to activate the subscription.
     - ``webinar.ended``: kicks off an async attendance sync (with retries for report delay).
+    - ``recording.completed``: creates and dispatches a webinar video pipeline job.
     """
     raw_body = await request.body()
     payload = json.loads(raw_body)
@@ -105,6 +138,16 @@ async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
             background_tasks.add_task(_sync_with_retry, zoom_webinar_id)
         else:
             logger.warning("webinar.ended payload missing object.id — payload=%s", payload)
+
+    elif event == "recording.completed":
+        # Never let a handler error reach the response. Zoom disables an
+        # endpoint that returns non-2xx repeatedly, and losing the webhook
+        # entirely is far worse than losing one recording to the hourly
+        # reconcile sweep, which would pick this up anyway.
+        try:
+            _schedule_recording_intake(payload, background_tasks)
+        except Exception as exc:
+            logger.exception("recording.completed handling failed — error=%s", exc)
 
     # Always return 200 so Zoom doesn't retry unhandled event types
     return {"status": "ok"}

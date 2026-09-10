@@ -24,6 +24,7 @@ class WorkshopCreate(BaseModel):
     suggested_grades: str | None = None
     resource_center_slug: str | None = None
     workshop_art_url: str | None = None
+    recording_thumbnail_url: str | None = None
     action_items: list[str] | None = None
 
 
@@ -37,6 +38,7 @@ class WorkshopUpdate(BaseModel):
     suggested_grades: str | None = None
     resource_center_slug: str | None = None
     workshop_art_url: str | None = None
+    recording_thumbnail_url: str | None = None
     action_items: list[str] | None = None
 
 
@@ -129,6 +131,7 @@ class WorkshopOut(BaseModel):
     suggested_grades: str | None
     resource_center_slug: str | None
     workshop_art_url: str | None
+    recording_thumbnail_url: str | None = None
     created_at: datetime
     webinar_count: int
     objectives: list[WorkshopObjectiveWithResources] = []

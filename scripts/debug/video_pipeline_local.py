@@ -161,12 +161,14 @@ def main() -> int:
         logger.info(
             "stage 4: filter = %s",
             build_sampling_filter(
-                fps=args.fps, width=args.width, crop_w=crop_w, crop_h=crop_h
+                fps=args.fps, width=args.width, crop_w=crop_w, crop_h=crop_h,
+                scene_threshold=args.scene_threshold,
             ),
         )
         candidates = sample_distinct_frames(
             trimmed, frames_dir,
             fps=args.fps, width=args.width, crop_w=crop_w, crop_h=crop_h,
+            scene_threshold=args.scene_threshold,
         )
         dump_json(stages[4].output, [c.as_dict() for c in candidates])
     else:
@@ -304,6 +306,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-crop", action="store_true",
         help="sample without cropping, to see what the overlays do",
+    )
+    parser.add_argument(
+        "--scene-threshold", type=float, default=0.05,
+        help="how much of the picture must change to sample a frame (0..1)",
     )
     parser.add_argument(
         "--concurrency", type=int, default=4, help="parallel vision calls"

@@ -18,6 +18,7 @@ env:
   AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: "283209027441"
   ECR_REPOSITORY: cmm/backend
+  VIDEO_ECR_REPOSITORY: cmm/video-pipeline
   ECS_APP_NAME: cmm-backend
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -53,6 +54,16 @@ jobs:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: .github/scripts/build-push-image.sh
+
+      # The video pipeline task pulls "$ENV-latest" on every RunTask, so pushing
+      # the image is the whole deploy for it — no service to roll, no revision to
+      # register. Built after the API image so a broken ffmpeg layer cannot hold
+      # up the API deploy.
+      - name: Build and push video pipeline image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: .github/scripts/build-push-video-image.sh
 
       - name: Download current task definition
         run: .github/scripts/download-task-definition.sh

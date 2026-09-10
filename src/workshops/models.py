@@ -37,6 +37,11 @@ class Workshop(Base):
     resource_center_slug: Mapped[str | None] = mapped_column(Text, unique=True)
     airtable_id: Mapped[str | None] = mapped_column(Text, unique=True, index=True)
     workshop_art_url: Mapped[str | None] = mapped_column(Text)
+    # The poster frame the replay pipeline puts on Vimeo. Read once, when a
+    # session is uploaded, so replacing it only affects sessions recorded
+    # afterwards — the videos already published keep the image they were
+    # given.
+    recording_thumbnail_url: Mapped[str | None] = mapped_column(Text)
     action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     key_action_items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     search_text: Mapped[str | None] = mapped_column(Text, nullable=True)

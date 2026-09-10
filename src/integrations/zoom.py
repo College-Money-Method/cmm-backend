@@ -293,3 +293,182 @@ def get_webinar(zoom_webinar_id: str) -> dict | None:
             exc,
         )
         return None
+
+
+def encode_recording_uuid(recording_uuid: str) -> str:
+    """URL-encode a recording UUID for use as a Zoom API path segment.
+
+    Zoom recording UUIDs are base64 and can legitimately begin with ``/`` or
+    contain ``//``. Dropped into a path unescaped, those collapse the route and
+    the API answers 404 for a recording that plainly exists. Zoom's own
+    documentation is explicit that such a UUID must be **double** encoded, so
+    ``/`` survives one round of decoding by the gateway and still reaches the
+    handler as data.
+
+    Encoding twice unconditionally is safe: a UUID with no reserved characters
+    is unchanged by either pass.
+    """
+    from urllib.parse import quote
+
+    return quote(quote(recording_uuid, safe=""), safe="")
+
+
+def list_account_recordings(from_date: str, to_date: str) -> list[dict] | None:
+    """List cloud recordings across the whole account for a date range.
+
+    ``GET /accounts/me/recordings`` rather than the per-host endpoint: the
+    reconcile sweep has to see recordings whoever hosted them, and enumerating
+    hosts first would make a missed webhook depend on the host list being
+    current. Requires the ``recording:read:admin`` scope.
+
+    ``from_date`` / ``to_date`` are ``YYYY-MM-DD``. Zoom caps the span at one
+    month, which is far wider than the sweep's 48-hour window.
+
+    Returns the recording entries (each with ``uuid``, ``id``, ``topic``,
+    ``recording_files``), or ``None`` if credentials are missing or the call
+    failed — ``None`` and ``[]`` mean different things to the caller, which must
+    not create jobs on the strength of a failed listing.
+    """
+    if not (settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret):
+        logger.debug("Zoom credentials not configured — skipping recording list")
+        return None
+
+    try:
+        token = _get_access_token()
+        recordings: list[dict] = []
+        next_page_token = ""
+
+        while True:
+            params: dict[str, str] = {
+                "from": from_date,
+                "to": to_date,
+                "page_size": "300",
+            }
+            if next_page_token:
+                params["next_page_token"] = next_page_token
+
+            resp = httpx.get(
+                f"{_ZOOM_API_BASE}/accounts/me/recordings",
+                headers={"Authorization": f"Bearer {token}"},
+                params=params,
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            recordings.extend(data.get("meetings", []))
+
+            next_page_token = data.get("next_page_token", "")
+            if not next_page_token:
+                break
+
+        logger.info(
+            "Zoom account recordings listed — from=%s to=%s count=%d",
+            from_date,
+            to_date,
+            len(recordings),
+        )
+        return recordings
+
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Zoom recording list failed — status=%s body=%s",
+            exc.response.status_code,
+            exc.response.text,
+        )
+        return None
+    except Exception as exc:
+        logger.warning("Zoom recording list failed — error=%s", exc)
+        return None
+
+
+def get_recording(recording_uuid: str) -> dict | None:
+    """Fetch one cloud recording's metadata, including fresh download URLs.
+
+    Called at the start of every processing run rather than reading a URL saved
+    at webhook time. Zoom's ``download_url`` is only usable with a credential,
+    and re-deriving it from S2S OAuth here means no Zoom credential is ever
+    persisted — the webhook's ``download_token`` is deliberately dropped.
+
+    Returns the recording object (``recording_files``, ``topic``, ``duration``,
+    ...), or ``None`` when credentials are missing or the call failed.
+    """
+    if not (settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret):
+        logger.debug("Zoom credentials not configured — cannot fetch recording")
+        return None
+
+    try:
+        token = _get_access_token()
+        resp = httpx.get(
+            f"{_ZOOM_API_BASE}/meetings/{encode_recording_uuid(recording_uuid)}/recordings",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Zoom get_recording failed — recording=%s status=%s body=%s",
+            recording_uuid,
+            exc.response.status_code,
+            exc.response.text[:400],
+        )
+        return None
+    except Exception as exc:
+        logger.warning("Zoom get_recording failed — recording=%s error=%s", recording_uuid, exc)
+        return None
+
+
+def recording_access_token() -> str:
+    """Bearer token for streaming a ``download_url``.
+
+    Zoom's download endpoints accept the same S2S access token as the API, so
+    this is just a named accessor — it exists so callers do not reach into the
+    private token helper, and so the token stays a value passed to one request
+    rather than something written down anywhere.
+    """
+    return _get_access_token()
+
+
+def delete_recording(recording_uuid: str) -> bool:
+    """Delete every recording file for one meeting instance. Never raises.
+
+    ``recording:write:admin`` is account-wide, so the call is addressed by the
+    exact UUID carried on the job row and by nothing else — no topic match, no
+    date range, nothing that could widen to a recording this job never touched.
+
+    Returns True when Zoom confirmed the delete. A False is deliberately
+    non-fatal for the caller: the recording is already published to Vimeo by
+    this point, and Zoom's 7-day auto-delete is the backstop.
+    """
+    if not recording_uuid:
+        logger.warning("Zoom delete_recording called with no UUID — refusing")
+        return False
+    if not (settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret):
+        logger.debug("Zoom credentials not configured — skipping recording delete")
+        return False
+
+    try:
+        token = _get_access_token()
+        resp = httpx.delete(
+            f"{_ZOOM_API_BASE}/meetings/{encode_recording_uuid(recording_uuid)}/recordings",
+            headers={"Authorization": f"Bearer {token}"},
+            # Trash rather than permanent delete: it frees the cloud pool the
+            # same way but leaves a 30-day undo in the Zoom UI, which costs
+            # nothing and covers the case where the S3 archive also went wrong.
+            params={"action": "trash"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        logger.info("Zoom recording deleted — recording=%s", recording_uuid)
+        return True
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Zoom delete_recording failed — recording=%s status=%s body=%s",
+            recording_uuid,
+            exc.response.status_code,
+            exc.response.text[:400],
+        )
+        return False
+    except Exception as exc:
+        logger.warning("Zoom delete_recording failed — recording=%s error=%s", recording_uuid, exc)
+        return False
