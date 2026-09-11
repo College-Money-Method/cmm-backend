@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from src.app_config.models import AppConfig
+from src.app_config.operator_settings import reset_vimeo_audit_folder_cache
 from src.app_config.schemas import AppConfigOut, AppConfigUpdate
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
@@ -47,8 +48,11 @@ def update_app_config(body: AppConfigUpdate, _admin: AdminDep, db: DbDep):
     cfg.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(cfg)
-    # The rendered-email path caches this value; drop it so the admin who just
-    # changed the default sees it take effect on the next preview, not in five
-    # minutes.
+    # Both of these are read behind a short in-process cache, on paths that
+    # cannot open a session per call. Dropping them here means the admin who
+    # just changed a value sees it take effect on the next run, not in five
+    # minutes. Only this process's cache is cleared; another one catches up
+    # when its own window expires.
     reset_app_default_timezone_cache()
+    reset_vimeo_audit_folder_cache()
     return cfg

@@ -13,6 +13,7 @@ import logging
 import re
 from dataclasses import dataclass
 
+from src.config import settings
 from src.video_pipeline.frame_classify import (
     BLANK,
     CONTENT_SLIDE,
@@ -26,19 +27,28 @@ from src.video_pipeline.transcript import Cue
 
 logger = logging.getLogger(__name__)
 
-LABEL_INTRODUCTION = "Introduction"
-LABEL_TOUR = "Resource center tour"
-LABEL_QNA = "Q&A"
+# Read from config at import so a recurring segment reads identically on every
+# school's page, and so a rename is a deploy setting rather than a code change.
+LABEL_INTRODUCTION = settings.video_chapter_label_introduction
+LABEL_TOUR = settings.video_chapter_label_tour
+LABEL_QNA = settings.video_chapter_label_qna
 
 # A brief screen share is a detour; a long one is the tour.
-TOUR_MIN_SECONDS = 120.0
+TOUR_MIN_SECONDS = settings.video_tour_min_seconds
 # How far back into the final slide section to look for the sentence that opens
 # the Q&A. The camera cut lands on the sampling grid; the presenter announces
 # the Q&A a little earlier, while the last slide is still up. Bounded so an
 # early "we'll take questions at the end" cannot match.
-QNA_LOOKBACK_SECONDS = 180.0
+QNA_LOOKBACK_SECONDS = settings.video_qna_lookback_seconds
 # Vimeo's real ceiling is undocumented in what we checked, so cap defensively.
-MAX_CHAPTERS = 40
+MAX_CHAPTERS = settings.video_max_chapters
+# Sources that name a recurring segment rather than a slide section. Exempt from
+# the minimum-length floor: a tour running straight into the Q&A is two real
+# chapters two minutes apart.
+RECURRING_SOURCES = frozenset({"intro", "tour", "qna", "qna_transcript"})
+# Effectively no cap, for callers that want the full list first so they can
+# record whether applying the cap actually dropped anything.
+NO_CAP = 1_000_000
 
 # Phrases that open a Q&A block. Missing one is cosmetic — the trailing-speaker
 # rule still produces the chapter, just with a less precise start.
@@ -75,12 +85,21 @@ class Chapter:
     timecode: int  # whole seconds, as Vimeo's chapters API expects
     title: str
     source: str    # which rule produced it, for the admin view
+    # Advisory result of the transcript cross-check, filled in by
+    # `chapter_confidence`. Empty on the fixed-label segments, whose titles are
+    # not model output and so have nothing to confirm.
+    confidence: str = ""
 
     def as_dict(self) -> dict[str, object]:
-        return {"timecode": self.timecode, "title": self.title, "source": self.source}
+        return {
+            "timecode": self.timecode,
+            "title": self.title,
+            "source": self.source,
+            "confidence": self.confidence,
+        }
 
 
-def _normalise_heading(heading: str) -> str:
+def normalise_heading(heading: str) -> str:
     """Compare headings by their words, so re-read whitespace or a trailing
     space cannot split one section in two."""
     return " ".join(heading.split()).casefold()
@@ -102,7 +121,7 @@ def _same_section(current_type: str, current_heading: str, frame: Classified) ->
         # Same card, heading came back blank on the re-read. Keep it in this run
         # rather than opening a chapter that has no title to show.
         return True
-    return _normalise_heading(frame.heading) == _normalise_heading(current_heading)
+    return normalise_heading(frame.heading) == normalise_heading(current_heading)
 
 
 def collapse_runs(frames: list[Classified], duration: float | None = None) -> list[Run]:
@@ -161,6 +180,7 @@ def build_chapters(
     duration: float | None = None,
     tour_min_seconds: float = TOUR_MIN_SECONDS,
     max_chapters: int = MAX_CHAPTERS,
+    min_section_seconds: float = 0.0,
 ) -> tuple[list[Chapter], list[Run]]:
     """Map classified frames onto chapters. Returns (chapters, runs)."""
     runs = collapse_runs(frames, duration)
@@ -170,6 +190,16 @@ def build_chapters(
     title_positions = [i for i, run in enumerate(runs) if run.type == TITLE_CARD]
     first_title = title_positions[0] if title_positions else None
     last_title = title_positions[-1] if title_positions else None
+
+    # A session with no slides at all still has shape: the shared screen is the
+    # material, and a speaker run on either side of it plays the same role a
+    # speaker run either side of the deck does. Without this anchor every
+    # speaker run in such a recording is labelled the introduction, so a
+    # walkthrough that returns to camera at the end gets a second chapter
+    # called "Introduction" two thirds of the way in.
+    share_positions = [i for i, run in enumerate(runs) if run.type == SCREEN_SHARE_OTHER]
+    first_share = share_positions[0] if share_positions else None
+    last_share = share_positions[-1] if share_positions else None
 
     chapters: list[Chapter] = []
     for i, run in enumerate(runs):
@@ -186,8 +216,13 @@ def build_chapters(
                 chapters.append(Chapter(int(run.start), LABEL_INTRODUCTION, "intro"))
             elif last_title is not None and i > last_title:
                 chapters.append(Chapter(int(run.start), LABEL_QNA, "qna"))
-            elif first_title is None:
-                # No slides at all — the whole thing is one talking-head session.
+            elif first_share is not None and i < first_share:
+                chapters.append(Chapter(int(run.start), LABEL_INTRODUCTION, "intro"))
+            elif last_share is not None and i > last_share:
+                chapters.append(Chapter(int(run.start), LABEL_QNA, "qna"))
+            elif first_title is None and first_share is None:
+                # Nothing was ever shared — the whole thing is one talking-head
+                # session, so the opening label covers all of it.
                 chapters.append(Chapter(int(run.start), LABEL_INTRODUCTION, "intro"))
             # A speaker run between sections is a camera cut, not a new section.
         elif run.type == SCREEN_SHARE_OTHER:
@@ -198,8 +233,13 @@ def build_chapters(
 
     # The transcript locates the Q&A more precisely than a camera switch does.
     if cues:
-        if last_title is not None:
-            last_run = runs[last_title]
+        # The look-back is bounded so an early "any questions so far?" during the
+        # material cannot be mistaken for the Q&A proper. A recording with no
+        # slides needs that bound just as much, so fall back to the last shared
+        # screen before giving up and searching the whole transcript.
+        anchor = last_title if last_title is not None else last_share
+        if anchor is not None:
+            last_run = runs[anchor]
             floor = max(last_run.start, last_run.end - QNA_LOOKBACK_SECONDS)
         else:
             floor = 0.0
@@ -209,7 +249,7 @@ def build_chapters(
             chapters.append(Chapter(int(qna_ts), LABEL_QNA, "qna_transcript"))
 
     chapters.sort(key=lambda chapter: chapter.timecode)
-    chapters = _dedupe(chapters)
+    chapters = dedupe(chapters)
 
     # Vimeo expects the timeline to start at zero; the first chapter is the
     # opening section either way, so pull it back rather than risk a rejection.
@@ -217,15 +257,69 @@ def build_chapters(
         first = chapters[0]
         chapters[0] = Chapter(0, first.title, first.source)
 
-    if len(chapters) > max_chapters:
-        logger.warning(
-            "truncating %d chapters to the %d-chapter cap", len(chapters), max_chapters
-        )
-        chapters = chapters[:max_chapters]
+    chapters = merge_short_sections(chapters, min_section_seconds)
+    chapters, _ = apply_cap(chapters, max_chapters)
     return chapters, runs
 
 
-def _dedupe(chapters: list[Chapter]) -> list[Chapter]:
+def apply_cap(chapters: list[Chapter], max_chapters: int) -> tuple[list[Chapter], bool]:
+    """Cut the list to the cap. Returns ``(chapters, truncated)``.
+
+    Callable on its own because the job row records whether anything was
+    dropped, and a length equal to the cap cannot tell a list that was cut short
+    from one that happened to end there.
+    """
+    if len(chapters) <= max_chapters:
+        return chapters, False
+    logger.warning("truncating %d chapters to the %d-chapter cap", len(chapters), max_chapters)
+    return chapters[:max_chapters], True
+
+
+# No two chapters are this close together, whatever produced them. A title card
+# reading "Resource Center Tour + Q&A" and the tour it announces land seconds
+# apart and are one boundary, not two, so the recurring exemption below cannot
+# reach this far down.
+COINCIDENT_SECONDS = 30.0
+
+
+def merge_short_sections(chapters: list[Chapter], min_seconds: float) -> list[Chapter]:
+    """Fold a chapter back into the one above it when it starts too soon after.
+
+    The deck drops a heading-only slide whenever the presenter changes emphasis,
+    and nothing about the frame distinguishes that from a section divider — both
+    are one line of text on a plain background. Length does: a section runs for
+    many minutes, a change of emphasis for one or two.
+
+    This is the crude version of the question the transcript answers properly,
+    and it is only used when the transcript could not be read. Both recurring
+    segments and the chapter at zero are exempt.
+    """
+    if min_seconds <= 0:
+        return chapters
+    kept: list[Chapter] = []
+    for chapter in chapters:
+        if not kept:
+            kept.append(chapter)
+            continue
+        previous = kept[-1]
+        gap = chapter.timecode - previous.timecode
+        recurring = (
+            chapter.source in RECURRING_SOURCES or previous.source in RECURRING_SOURCES
+        )
+        if gap < COINCIDENT_SECONDS or (not recurring and gap < min_seconds):
+            logger.info(
+                "folding %r at %ds into %r — %ds after it",
+                chapter.title,
+                chapter.timecode,
+                previous.title,
+                gap,
+            )
+            continue
+        kept.append(chapter)
+    return kept
+
+
+def dedupe(chapters: list[Chapter]) -> list[Chapter]:
     """Drop repeated titles and colliding timecodes, keeping the earliest."""
     out: list[Chapter] = []
     for chapter in chapters:

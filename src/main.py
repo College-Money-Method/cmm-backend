@@ -35,6 +35,7 @@ import src.emails.broadcast_models  # noqa: F401
 import src.emails.automation_models  # noqa: F401
 import src.emails.email_template_models  # noqa: F401
 import src.emails.automation_ledger_models  # noqa: F401
+import src.video_pipeline.models  # noqa: F401
 
 from src.auth.router import router as auth_router
 from src.config import settings
@@ -58,6 +59,9 @@ from src.surveys.config_router import router as survey_configs_router
 from src.zoom.webhook_router import router as zoom_webhook_router
 from src.content.translation_router import router as translation_router
 from src.content.video_cc_router import router as video_cc_router
+from src.video_pipeline.job_stream import router as video_pipeline_stream_router
+from src.video_pipeline.router import router as video_pipeline_router
+from src.video_pipeline.scheduler_jobs import register_video_pipeline_jobs
 from src.emails.webhook_router import router as emails_webhook_router
 from src.emails.email_preferences_router import router as emails_preferences_router
 from src.emails.broadcast_router import router as emails_broadcast_router
@@ -72,10 +76,11 @@ from src.emails.school_links import check_email_origin
 async def lifespan(app: FastAPI):
     """Startup: ensure Supabase client is created, report the origin outgoing
     email links are built from, start the in-process email-automation
-    scheduler. Shutdown: stop the scheduler."""
+    scheduler and register the video pipeline's sweep/reconcile jobs on it.
+    Shutdown: stop the scheduler."""
     get_supabase()
     check_email_origin()
-    init_scheduler(app)
+    register_video_pipeline_jobs(init_scheduler(app))
     yield
     shutdown_scheduler()
 
@@ -116,6 +121,8 @@ app.include_router(survey_configs_router)
 app.include_router(zoom_webhook_router)
 app.include_router(translation_router)
 app.include_router(video_cc_router)
+app.include_router(video_pipeline_router)
+app.include_router(video_pipeline_stream_router)
 app.include_router(emails_webhook_router)
 app.include_router(emails_preferences_router)
 app.include_router(emails_broadcast_router)

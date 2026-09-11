@@ -340,9 +340,10 @@ def list_all_webinars(
     school_id: uuid.UUID | None = None,
     workshop_id: uuid.UUID | None = None,
     cycle_id: uuid.UUID | None = None,
+    cohort_id: uuid.UUID | None = None,
     zoom_webinar_id: str | None = None,
 ):
-    """Admin: global webinar list filterable by cycle, school, workshop, status, search, and zoom webinar id."""
+    """Admin: global webinar list filterable by cycle, cohort, school, workshop, status, search, and zoom webinar id."""
     now = datetime.now(tz=timezone.utc)
     stmt = select(Webinar).options(
         selectinload(Webinar.workshop),
@@ -356,6 +357,9 @@ def list_all_webinars(
 
     if workshop_id:
         stmt = stmt.where(Webinar.workshop_id == workshop_id)
+
+    if cohort_id:
+        stmt = stmt.where(Webinar.cohort_id == cohort_id)
 
     if school_id:
         # Filter to webinars mapped to this school via portal_mapping
@@ -1150,6 +1154,7 @@ def create_workshop(body: WorkshopCreate, _admin: AdminDep, db: DbDep):
         suggested_grades=obj.suggested_grades,
         resource_center_slug=obj.resource_center_slug,
         workshop_art_url=obj.workshop_art_url,
+        recording_thumbnail_url=obj.recording_thumbnail_url,
         created_at=obj.created_at,
         webinar_count=0,
     )
@@ -1194,6 +1199,7 @@ def get_workshop(workshop_id: uuid.UUID, _admin: AdminDep, db: DbDep):
         suggested_grades=obj.suggested_grades,
         resource_center_slug=obj.resource_center_slug,
         workshop_art_url=obj.workshop_art_url,
+        recording_thumbnail_url=obj.recording_thumbnail_url,
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
@@ -1236,6 +1242,7 @@ def update_workshop(workshop_id: uuid.UUID, body: WorkshopUpdate, _admin: AdminD
         suggested_grades=obj.suggested_grades,
         resource_center_slug=obj.resource_center_slug,
         workshop_art_url=obj.workshop_art_url,
+        recording_thumbnail_url=obj.recording_thumbnail_url,
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
@@ -1385,6 +1392,7 @@ def update_workshop_objectives(
         suggested_grades=obj.suggested_grades,
         resource_center_slug=obj.resource_center_slug,
         workshop_art_url=obj.workshop_art_url,
+        recording_thumbnail_url=obj.recording_thumbnail_url,
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],
@@ -1445,6 +1453,7 @@ def update_workshop_resources(
         suggested_grades=obj.suggested_grades,
         resource_center_slug=obj.resource_center_slug,
         workshop_art_url=obj.workshop_art_url,
+        recording_thumbnail_url=obj.recording_thumbnail_url,
         created_at=obj.created_at,
         webinar_count=len(obj.webinars),
         objectives=[_objective_with_resources(o) for o in obj.objectives],

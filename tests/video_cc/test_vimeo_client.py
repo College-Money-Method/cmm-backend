@@ -254,3 +254,76 @@ def test_scope_check_is_cached_per_token(monkeypatch):
     monkeypatch.setattr(vimeo.settings, "vimeo_access_token", "token-b")
     assert vimeo.missing_scopes() == []
     assert calls["n"] == 2
+
+
+# ── Error messages ────────────────────────────────────────────────────────────
+
+
+def test_a_rejected_field_is_named_in_the_message():
+    """Vimeo's 400 body says only "check the `invalid_parameters` list" and puts
+    the field it rejected inside that list. Dropping it records a failure that
+    tells an admin to look at something they cannot see."""
+    resp = FakeResp(
+        400,
+        payload={
+            "error": "The parameters passed to this API endpoint didn't pass Vimeo's validation.",
+            "invalid_parameters": [
+                {
+                    "field": "privacy.view",
+                    "developer_message": "Your account type cannot set this privacy.",
+                }
+            ],
+        },
+    )
+
+    message = vimeo._describe_error(resp, "/me/videos")
+
+    assert "privacy.view" in message
+    assert "Your account type cannot set this privacy." in message
+
+
+def test_every_rejected_field_survives_not_just_the_first():
+    resp = FakeResp(
+        400,
+        payload={
+            "error": "Bad request.",
+            "invalid_parameters": [
+                {"field": "name", "error": "Too long."},
+                {"field": "privacy.embed", "error": "Not allowed."},
+            ],
+        },
+    )
+
+    message = vimeo._describe_error(resp, "/me/videos")
+
+    assert "name: Too long." in message
+    assert "privacy.embed: Not allowed." in message
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"error": "Bad request."},
+        {"error": "Bad request.", "invalid_parameters": "not a list"},
+        {"error": "Bad request.", "invalid_parameters": ["not a dict"]},
+    ],
+)
+def test_a_body_without_a_usable_list_still_describes_the_failure(payload):
+    """The list is optional and its shape is Vimeo's to change. A malformed one
+    must not turn a reportable failure into an unhandled exception."""
+    message = vimeo._describe_error(FakeResp(400, payload=payload), "/me/videos")
+
+    assert "Bad request." in message
+
+
+def test_a_denied_scope_still_names_the_scopes_to_regenerate():
+    """The 403 branch reads `developer_message`; appending rejected fields must
+    not shadow the guidance that branch exists to give."""
+    resp = FakeResp(
+        403, payload={"developer_message": "Your token has insufficient scope for this."}
+    )
+
+    message = vimeo._describe_error(resp, "/me/videos")
+
+    assert "insufficient scope" in message
+    assert "developer.vimeo.com" in message

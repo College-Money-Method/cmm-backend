@@ -47,6 +47,24 @@ def strip_code_fences(text: str) -> str:
     return _FENCE_RE.sub("", text).strip()
 
 
+def parse_leading_object(text: str) -> dict[str, Any]:
+    """Read the JSON object at the front of a reply, ignoring anything after it.
+
+    Asking for JSON and nothing else does not always get it: the model sometimes
+    appends a sentence explaining its answer, and a plain ``json.loads`` rejects
+    the whole reply over trailing prose it does not need. That cost frames — a
+    classification the model got right was thrown away because it was too
+    talkative about it.
+
+    Only trailing text is tolerated. A reply that does not *begin* with an object
+    is still an error, because there is then no answer to take.
+    """
+    obj, _end = json.JSONDecoder().raw_decode(text)
+    if not isinstance(obj, dict):
+        raise json.JSONDecodeError("expected an object", text, 0)
+    return obj
+
+
 def call_json(
     *,
     system: str,
@@ -89,15 +107,10 @@ def call_json(
         raise BedrockCallError("Bedrock returned no text content")
 
     try:
-        parsed = json.loads(strip_code_fences(raw))
+        parsed = parse_leading_object(strip_code_fences(raw))
     except json.JSONDecodeError as exc:
         logger.error("Bedrock returned non-JSON: %r", raw[:500])
         raise BedrockCallError(f"Bedrock response was not valid JSON: {exc}") from exc
-
-    if not isinstance(parsed, dict):
-        raise BedrockCallError(
-            f"Expected a JSON object, got {type(parsed).__name__}"
-        )
 
     usage = message.usage
     return (

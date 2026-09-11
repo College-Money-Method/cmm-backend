@@ -14,9 +14,11 @@ from src.video_pipeline.chapter_build import (
     LABEL_INTRODUCTION,
     LABEL_QNA,
     LABEL_TOUR,
+    Chapter,
     build_chapters,
     collapse_runs,
     find_qna_start,
+    merge_short_sections,
 )
 from src.video_pipeline.frame_classify import (
     BLANK,
@@ -136,6 +138,38 @@ class TestFixedLabels:
         frames = [frame(0, SPEAKER), frame(30, SPEAKER)]
         chapters, _ = build_chapters(frames, cues=[], duration=60)
         assert titles(chapters) == [(0, LABEL_INTRODUCTION)]
+
+    def test_a_walkthrough_that_returns_to_camera_does_not_repeat_the_intro(self):
+        """The shape of a real resource-centre walkthrough: talking head, a long
+        shared screen, then back to camera. With no title card anywhere, every
+        speaker run used to be labelled the introduction, so the closing
+        discussion became a second "Introduction" two thirds of the way in.
+        """
+        frames = [
+            frame(27, SPEAKER),
+            frame(337, SCREEN_SHARE_OTHER),
+            frame(1950, SPEAKER),
+        ]
+        chapters, _ = build_chapters(frames, cues=[], duration=2307, tour_min_seconds=120)
+        assert titles(chapters) == [(0, LABEL_INTRODUCTION), (337, LABEL_TOUR), (1950, LABEL_QNA)]
+
+    def test_the_share_anchors_the_qna_lookback_when_there_is_no_title_card(self):
+        """The bounded look-back stops an early "any questions?" being read as the
+        Q&A proper. Without a title card to anchor it the search would start at
+        zero and match the aside during the tour."""
+        frames = [
+            frame(0, SPEAKER),
+            frame(300, SCREEN_SHARE_OTHER),
+            frame(1800, SPEAKER),
+        ]
+        cues = [
+            Cue(start=600.0, end=604.0, text="any questions so far before I move on"),
+            Cue(start=1810.0, end=1814.0, text="alright let us take your questions"),
+        ]
+        chapters, _ = build_chapters(frames, cues=cues, duration=2000, tour_min_seconds=120)
+        qna = [c for c in chapters if c.title == LABEL_QNA]
+        assert len(qna) == 1
+        assert qna[0].timecode >= 1700, "the aside during the tour is not the Q&A"
 
     def test_long_screen_share_becomes_the_tour(self):
         frames = [
@@ -286,3 +320,82 @@ class TestGuardrails:
         chapters, runs = build_chapters([], cues=[], duration=60)
         assert chapters == []
         assert runs == []
+
+
+class TestTheMinimumSectionLength:
+    """The floor that stands in for the transcript when it could not be read.
+
+    Nothing about a frame separates a section divider from a heading-only slide
+    marking a change of emphasis — both are one line of text on a plain
+    background. Length does: a section runs for many minutes.
+    """
+
+    def test_a_chapter_starting_too_soon_folds_into_the_one_above(self):
+        chapters = [
+            Chapter(0, "Preparing a Financial Plan", TITLE_CARD),
+            Chapter(120, "Investment and Value", TITLE_CARD),
+            Chapter(900, "Next Steps", TITLE_CARD),
+        ]
+
+        kept = merge_short_sections(chapters, 240.0)
+
+        assert [c.timecode for c in kept] == [0, 900]
+
+    def test_the_gap_is_measured_from_the_chapter_that_survived(self):
+        """Otherwise a run of short hops keeps its last entry, which is the one
+        furthest from where the section actually began."""
+        chapters = [
+            Chapter(0, "A", TITLE_CARD),
+            Chapter(50, "B", TITLE_CARD),
+            Chapter(100, "C", TITLE_CARD),
+            Chapter(161, "D", TITLE_CARD),
+        ]
+
+        assert [c.timecode for c in merge_short_sections(chapters, 240.0)] == [0]
+
+    def test_a_recurring_segment_is_exempt_on_either_side(self):
+        """A tour running straight into the Q&A is two real chapters minutes
+        apart, and both are what a viewer scrubs for."""
+        chapters = [
+            Chapter(0, LABEL_INTRODUCTION, "intro"),
+            Chapter(3634, LABEL_TOUR, "tour"),
+            Chapter(3797, LABEL_QNA, "qna"),
+        ]
+
+        assert merge_short_sections(chapters, 240.0) == chapters
+
+    def test_a_recurring_segment_seconds_after_a_card_is_still_folded(self):
+        """A card reading "Resource Center Tour + Q&A" and the tour it announces
+        are one boundary. The exemption is for minutes apart, not seconds."""
+        chapters = [
+            Chapter(3634, "Resource Center Tour + Q&A", TITLE_CARD),
+            Chapter(3639, LABEL_TOUR, "tour"),
+            Chapter(3797, LABEL_QNA, "qna"),
+        ]
+
+        kept = merge_short_sections(chapters, 240.0)
+
+        assert [(c.timecode, c.title) for c in kept] == [
+            (3634, "Resource Center Tour + Q&A"),
+            (3797, LABEL_QNA),
+        ]
+
+    def test_no_floor_leaves_the_list_alone(self):
+        """The default, so every existing caller keeps its behaviour — including
+        two chapters that no floor would let stand."""
+        chapters = [Chapter(0, "A", TITLE_CARD), Chapter(10, "B", TITLE_CARD)]
+
+        assert merge_short_sections(chapters, 0.0) == chapters
+
+    def test_the_floor_reaches_the_chapters_a_build_produces(self):
+        frames = [
+            frame(0, TITLE_CARD, "Preparing a Financial Plan"),
+            frame(120, TITLE_CARD, "Investment and Value"),
+            frame(900, TITLE_CARD, "Next Steps"),
+        ]
+
+        chapters, _ = build_chapters(
+            frames, cues=[], duration=1200, min_section_seconds=240.0
+        )
+
+        assert titles(chapters) == [(0, "Preparing a Financial Plan"), (900, "Next Steps")]

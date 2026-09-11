@@ -38,6 +38,12 @@ class AppConfig(Base):
     # See src/schools/display_timezone.py.
     workshop_display_timezone: Mapped[str | None] = mapped_column(Text)
 
+    # Vimeo folder that audit runs are uploaded into. Null = fall back to the
+    # env seed (settings.vimeo_audit_folder_uri). Editable because which folder
+    # an audit lands in is an operator's call, not a deploy's.
+    # See src/app_config/operator_settings.py.
+    vimeo_audit_folder_uri: Mapped[str | None] = mapped_column(Text)
+
     # Feature flags
     survey_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
 

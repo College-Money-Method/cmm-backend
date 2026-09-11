@@ -175,13 +175,40 @@ def _request(method: str, path: str, **kwargs) -> httpx.Response:
     raise VimeoError(f"Vimeo request failed after {_RATE_LIMIT_ATTEMPTS} attempts")
 
 
+def _invalid_parameters(body: dict) -> str:
+    """Flatten Vimeo's ``invalid_parameters`` into ``field: reason`` pairs.
+
+    A 400 body says only "check the `invalid_parameters` list" and puts the one
+    fact that matters — which field Vimeo rejected and why — in that list. Without
+    it the recorded failure tells an admin to look at something they cannot see,
+    so the whole point of the message is lost.
+    """
+    entries = body.get("invalid_parameters")
+    if not isinstance(entries, list):
+        return ""
+
+    parts = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        field = entry.get("field") or "?"
+        reason = entry.get("developer_message") or entry.get("error") or ""
+        parts.append(f"{field}: {reason}".rstrip(": "))
+    return "; ".join(parts)
+
+
 def _describe_error(resp: httpx.Response, path: str) -> str:
     """Turn a Vimeo error response into a message an admin can act on."""
+    invalid = ""
     try:
         body = resp.json()
         detail = body.get("developer_message") or body.get("error") or ""
+        invalid = _invalid_parameters(body)
     except Exception:
         detail = resp.text[:200]
+
+    if invalid:
+        detail = f"{detail.rstrip('.')}. Rejected — {invalid}".lstrip(". ")
 
     if resp.status_code == 404:
         return "Video not found on Vimeo, or your account cannot see it."

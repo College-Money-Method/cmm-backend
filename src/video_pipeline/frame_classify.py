@@ -4,12 +4,20 @@ Extracting text off a title card is the easy half; deciding *which* frames are
 title cards is the hard half, and it is why this is a vision call rather than OCR.
 The classifier also has to name the frames that carry no text at all, because the
 introduction, resource-center tour, and Q&A are real sections with no card to read.
+
+It does not decide where the sections are. The deck drops a heading-only slide
+whenever the presenter changes emphasis, and no property of the frame separates
+that from a section divider — see `topic_segment`, which asks the transcript.
+This call answers a narrower question: is there a heading here, and what does it
+say — a slide carrying anything besides its heading is content, however section-
+like the heading reads.
 """
 
 from __future__ import annotations
 
 import base64
 import logging
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,17 +45,20 @@ You classify single frames from a recorded webinar about college financial aid. 
 The frame has already been cropped to remove overlays.
 
 Choose exactly one type:
-- "title_card": a slide whose only real content is a short section title, on a \
-plain or lightly decorated background. This marks the start of a new section.
-- "content_slide": a slide carrying substantive content — bullet lists, tables, \
-charts, numbers, screenshots, or several paragraphs. Belongs inside a section \
-rather than starting one.
+- "title_card": a slide that is one short heading and nothing else — typically a \
+single line of large text on a full-bleed colour or plain background, with no \
+body text, bullets, photos, or figures anywhere on it.
+- "content_slide": a slide carrying anything besides that heading — bullet lists, \
+tables, charts, numbers, screenshots, photographs, or several paragraphs. A \
+presenter bio and an agenda are content slides: they have a heading, but they \
+also have the thing the heading introduces.
 - "speaker": a person on camera with no shared material.
 - "screen_share_other": a shared screen that is not a slide — a website, browser, \
 document, spreadsheet, or application window.
 - "blank": empty, near-black, a loading state, or otherwise unreadable.
 
-Reply with only a JSON object:
+Reply with the JSON object alone — no code fence, no sentence before or after \
+it, no reasoning:
 {"type": "<one of the five>", "heading": "<title text or empty string>"}
 
 Rules for "heading":
@@ -55,7 +66,7 @@ Rules for "heading":
 - Copy the title exactly as written, preserving its capitalisation.
 - Take only the title. Leave out subtitles, presenter names, logos, slide numbers, \
 dates, and footers.
-- A slide with a heading AND substantive content below it is "content_slide", not \
+- A slide with a heading AND anything else on it is "content_slide", not \
 "title_card".\
 """
 
@@ -159,4 +170,13 @@ def classify_frames(
     failed = sum(1 for item in results if item.type == ERROR)
     if failed:
         logger.warning("%d of %d frames could not be classified", failed, len(results))
+
+    # The histogram is the drift detector. Chapter counts alone cannot tell a
+    # webinar with fewer sections from a prompt that has started calling title
+    # cards content slides; a sudden shift in these proportions can.
+    histogram = Counter(item.type for item in results)
+    logger.info(
+        "frame classification histogram — %s",
+        ", ".join(f"{name}={count}" for name, count in sorted(histogram.items())),
+    )
     return results

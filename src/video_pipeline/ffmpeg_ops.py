@@ -1,9 +1,18 @@
 """ffmpeg operations: probe, stream-copy trim, and distinct-state frame sampling.
 
-The sampling pass is the mechanical heart of the pipeline. It answers "is this the
-same frame as the last one I kept?" via mpdecimate rather than "was the change big
-enough?" via a tuned scene threshold, and emits the surviving frames plus their
-timestamps in a single pass.
+The sampling pass is the mechanical heart of the pipeline. It asks "was the change
+big enough?" against ffmpeg's own scene score and emits the surviving frames plus
+their timestamps in a single pass.
+
+It used to ask "is this the same frame as the last one I kept?" via mpdecimate,
+which needs no threshold and so looked like the safer choice. On a real webinar it
+is not: mpdecimate keeps a frame as soon as any single 8x8 block differs enough,
+and the presenter's own camera feed fills the frame, so an 82-minute recording
+yielded 2,667 frames instead of the intended ~150 — 90% of them the same face in a
+different pose. It also cannot be tuned out of that: sweeping its `hi` threshold
+over a 3.3x range moved the count by 1.5% (2,667 -> 2,627). A scene score
+separates the two cases cleanly, because a slide replacing the picture and a head
+turning are not close on that scale. See ``build_sampling_filter``.
 """
 
 from __future__ import annotations
@@ -17,7 +26,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# showinfo prints one stderr line per frame that survived mpdecimate.
+# showinfo prints one stderr line per frame that survived the scene filter.
 _PTS_RE = re.compile(r"pts_time:(\d+(?:\.\d+)?)")
 
 # Lead-in subtracted from a detected trim point. A stream copy snaps to the
@@ -100,19 +109,27 @@ def trim_stream_copy(source: Path, dest: Path, offset: float) -> Path:
 
 
 def build_sampling_filter(
-    *, fps: float, width: int, crop_w: float | None, crop_h: float | None
+    *,
+    fps: float,
+    width: int,
+    crop_w: float | None,
+    crop_h: float | None,
+    scene_threshold: float,
 ) -> str:
     """Compose the sampling filter chain.
 
-    Order matters: crop must precede mpdecimate. Burned-in overlays that change
-    constantly (moving speaker PiP, per-second Zoom clock, rolling captions) make
-    every frame differ from the last, so without the crop mpdecimate drops nothing
-    and a 90-minute file yields thousands of "distinct" states instead of ~150.
+    Order matters: the crop must precede the scene filter. Burned-in overlays that
+    change constantly (a per-second Zoom clock, rolling captions) score on every
+    frame, so with one left in the threshold has to be raised until it stops
+    seeing slide changes too.
+
+    The comma inside ``gt(scene, x)`` is escaped because the filtergraph parser
+    splits on commas first — unescaped, ffmpeg reads the threshold as a filter.
     """
     chain = [f"fps={fps}", f"scale={width}:-1"]
     if crop_w and crop_h:
         chain.append(f"crop=iw*{crop_w}:ih*{crop_h}:0:0")
-    chain += ["mpdecimate", "showinfo"]
+    chain += [rf"select=gt(scene\,{scene_threshold})", "showinfo"]
     return ",".join(chain)
 
 
@@ -124,17 +141,24 @@ def sample_distinct_frames(
     width: int = 960,
     crop_w: float | None = 0.83,
     crop_h: float | None = 0.88,
+    scene_threshold: float = 0.05,
 ) -> list[Candidate]:
     """Extract one frame per distinct visual state, with its timestamp.
 
-    `-fps_mode vfr` is load-bearing: without it ffmpeg re-pads the dropped frames
-    and mpdecimate has no effect on the output at all.
+    `-fps_mode vfr` is load-bearing: without it ffmpeg re-pads the frames the
+    filter rejected and the selection has no effect on the output at all.
     """
     frames_dir.mkdir(parents=True, exist_ok=True)
     for stale in frames_dir.glob("frame_*.jpg"):
         stale.unlink()
 
-    vf = build_sampling_filter(fps=fps, width=width, crop_w=crop_w, crop_h=crop_h)
+    vf = build_sampling_filter(
+        fps=fps,
+        width=width,
+        crop_w=crop_w,
+        crop_h=crop_h,
+        scene_threshold=scene_threshold,
+    )
     proc = _run([
         "ffmpeg", "-y", "-v", "info", "-i", str(source),
         "-vf", vf, "-fps_mode", "vfr", "-q:v", "3",
@@ -159,3 +183,54 @@ def sample_distinct_frames(
         Candidate(index=i + 1, timestamp=timestamps[i], path=files[i])
         for i in range(count)
     ]
+
+
+# silencedetect output, one pair of lines per detected silent run.
+_SILENCE_START_RE = re.compile(r"silence_start:\s*(-?\d+(?:\.\d+)?)")
+_SILENCE_END_RE = re.compile(r"silence_end:\s*(\d+(?:\.\d+)?)")
+
+# Only a silence that begins essentially at the head of the file counts as
+# "dead opening"; a pause mid-talk is just a pause.
+_LEADING_SILENCE_TOLERANCE = 2.0
+
+
+def detect_speech_start(
+    source: Path, *, noise_db: int = -30, min_silence: float = 2.0, max_offset: float = 900.0
+) -> float:
+    """Seconds of leading silence, for recordings that have no transcript.
+
+    This is the degraded path. The normal trim point is semantic — the presenter
+    talks through the dead opening, so silence cannot find it — and this only
+    catches the case where the recording genuinely starts with dead air. It
+    exists so a missing transcript still produces something sane rather than
+    failing the job.
+
+    Returns 0.0 whenever there is no leading silence, the detection fails, or the
+    answer falls outside ``max_offset``. Erring towards no trim is deliberate:
+    dead air looks sloppy, a late cut destroys content.
+    """
+    try:
+        proc = _run([
+            "ffmpeg", "-hide_banner", "-i", str(source),
+            "-af", f"silencedetect=noise={noise_db}dB:d={min_silence}",
+            "-f", "null", "-",
+        ])
+    except FfmpegError as exc:
+        logger.warning("silencedetect failed, publishing untrimmed: %s", exc)
+        return 0.0
+
+    stderr = proc.stderr or ""
+    starts = [float(m) for m in _SILENCE_START_RE.findall(stderr)]
+    ends = [float(m) for m in _SILENCE_END_RE.findall(stderr)]
+    if not starts or not ends or starts[0] > _LEADING_SILENCE_TOLERANCE:
+        return 0.0
+
+    speech_start = ends[0]
+    if speech_start > max_offset:
+        logger.warning(
+            "silencedetect put first speech at %.1fs, beyond the %.0fs bound — not trimming",
+            speech_start,
+            max_offset,
+        )
+        return 0.0
+    return max(0.0, speech_start - TRIM_LEAD_IN_SECONDS)
