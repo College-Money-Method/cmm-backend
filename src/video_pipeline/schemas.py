@@ -57,6 +57,9 @@ class VideoJobSummary(BaseModel):
     # run has changed nothing a school can see.
     audit_only: bool = False
     source_url: str | None = None
+    # The transcript an operator supplied with the source, if any. Shown because
+    # its absence explains a frames-only chapter list.
+    transcript_url: str | None = None
     # The step the job is on, finer than `state` — `processing` covers the Zoom
     # download, the trim, the Vimeo upload and the transcode wait, which is most
     # of the runtime. None for a job that ran before stages were recorded.
@@ -112,6 +115,11 @@ class VideoRunCreate(BaseModel):
     # Names the Vimeo video and nothing else. An audit run never writes to the
     # webinar it names.
     webinar_id: uuid.UUID | None = None
+    # Optional https URL for the WebVTT transcript. A separate field rather than
+    # a second guess at the paste field, because a source and its captions are
+    # two different things and a run needs both to chapter the way the
+    # unattended pipeline does. Empty means none was supplied.
+    transcript_url: str | None = Field(default=None, max_length=2048)
 
 
 class VideoRunStarted(BaseModel):

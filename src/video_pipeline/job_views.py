@@ -47,6 +47,7 @@ def to_summary(job: WebinarVideoJob) -> VideoJobSummary:
         unconfirmed_chapters=sum(1 for c in chapters if c.get("confidence") == NO_MATCH),
         audit_only=job.audit_only,
         source_url=job.source_url,
+        transcript_url=job.transcript_url,
         stage=stage_progress.current(job),
         captions_state=job.captions_state,
         captions_error=job.captions_error,

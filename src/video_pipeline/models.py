@@ -41,6 +41,12 @@ class WebinarVideoJob(Base):
     # Recorded, not re-derived: it is the only account of where the bytes came
     # from, and a presigned URL is expired by the time anyone reads it back.
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # An operator-supplied transcript, which takes precedence over Zoom's own.
+    # A pasted download URL carries no captions with it, and without a
+    # transcript the trim falls back to silence detection and the chapters come
+    # from frames alone — so for a URL source this is the difference between an
+    # audit run that exercises the real chaptering path and one that does not.
+    transcript_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     # An audit run stops after Vimeo: it never writes
     # `webinars.video_embed_code` and never deletes the Zoom recording, so
     # auditing what the pipeline produces cannot change what families see.

@@ -51,17 +51,30 @@ class SamplingError(RuntimeError):
 def _download_source(job: WebinarVideoJob, work_dir: Path) -> tuple[Path, Path | None, int]:
     """Fetch the source from wherever this job's descriptor points.
 
-    A URL source has no transcript and no duration to report: the trim then
-    falls back to silence detection and the duration is probed from the file
-    after trimming, exactly as it is for a Zoom recording whose account has
-    audio transcript switched off.
+    A URL source reports no duration — it is probed from the file after
+    trimming — and carries no transcript of its own, so it has one only if the
+    operator supplied a URL for it. An operator-supplied transcript wins over
+    Zoom's, which is how a recording whose account had transcription switched
+    off gets chaptered from speech rather than from frames alone.
     """
+    operator_transcript = (
+        url_recording_fetch.fetch_transcript_from_url(
+            job.transcript_url, work_dir / "operator-transcript.vtt"
+        )
+        if job.transcript_url
+        else None
+    )
+
     if job.source_url:
         video = url_recording_fetch.fetch_from_url(job.source_url, work_dir / "source.mp4")
-        return video, None, 0
+        return video, operator_transcript, 0
 
     fetched = fetch_recording(job.zoom_recording_uuid, work_dir)
-    return fetched.video_path, fetched.transcript_path, fetched.duration_seconds
+    return (
+        fetched.video_path,
+        operator_transcript or fetched.transcript_path,
+        fetched.duration_seconds,
+    )
 
 
 def _acquire_source(db: Session, job: WebinarVideoJob, work_dir: Path) -> tuple[Path, Path | None]:

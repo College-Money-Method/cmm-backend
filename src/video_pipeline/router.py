@@ -139,7 +139,12 @@ def create_run(payload: VideoRunCreate, _admin: AdminDep, db: DbDep) -> VideoRun
         )
 
     try:
-        started = manual_run.start(db, source=payload.source, webinar_id=payload.webinar_id)
+        started = manual_run.start(
+            db,
+            source=payload.source,
+            webinar_id=payload.webinar_id,
+            transcript_url=payload.transcript_url,
+        )
     except manual_run.RunConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (SourceError, UrlFetchError, manual_run.RunError) as exc:

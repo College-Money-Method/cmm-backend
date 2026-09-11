@@ -183,3 +183,71 @@ def test_a_dispatched_run_reports_it(db, audit_folder, monkeypatch, zoom_has_the
     monkeypatch.setattr(manual_run.task_dispatch, "dispatch", lambda db_, job: True)
 
     assert manual_run.start(db, source="88812345678").dispatched is True
+
+
+# ── the operator's transcript ────────────────────────────────────────────────
+
+VTT_URL = "https://cmm-media.s3.amazonaws.com/raw/session.vtt"
+
+
+def test_a_transcript_url_is_recorded_against_the_job(
+    db, audit_folder, no_dispatch, public_url
+):
+    """The whole point of the field: a pasted URL brings no captions, so
+    without this the run trims from silence and chapters from frames alone."""
+    job = manual_run.start(db, source=S3_URL, transcript_url=VTT_URL).job
+
+    assert job.transcript_url == VTT_URL
+    assert job.source_url == S3_URL
+
+
+def test_a_transcript_can_be_supplied_for_a_zoom_source_too(
+    db, audit_folder, no_dispatch, public_url, zoom_has_the_recording
+):
+    """Zoom hands over its own transcript, but only when the account had
+    transcription switched on. Overriding it is the way to chapter a recording
+    that did not."""
+    job = manual_run.start(db, source="88812345678", transcript_url=VTT_URL).job
+
+    assert job.transcript_url == VTT_URL
+
+
+def test_no_transcript_url_stays_null(db, audit_folder, no_dispatch, public_url):
+    job = manual_run.start(db, source=S3_URL).job
+
+    assert job.transcript_url is None
+
+
+def test_a_blank_transcript_url_is_not_supplied_rather_than_empty(
+    db, audit_folder, no_dispatch, public_url
+):
+    """An operator who clears the field means the same as one who never filled
+    it, so the column stays null instead of holding whitespace."""
+    job = manual_run.start(db, source=S3_URL, transcript_url="   ").job
+
+    assert job.transcript_url is None
+
+
+def test_a_transcript_url_is_trimmed(db, audit_folder, no_dispatch, public_url):
+    job = manual_run.start(db, source=S3_URL, transcript_url=f"  {VTT_URL}  ").job
+
+    assert job.transcript_url == VTT_URL
+
+
+def test_a_transcript_host_the_task_would_refuse_fails_at_the_paste(
+    db, audit_folder, no_dispatch, monkeypatch
+):
+    """Same rule as the source URL, and for the same reason: the task fetches it
+    from inside the VPC, and the message is only useful while the person who
+    pasted it is still looking at the form."""
+
+    def refuse(url):
+        if url == VTT_URL:
+            raise UrlFetchError("resolves to 127.0.0.1")
+
+    monkeypatch.setattr(manual_run.url_recording_fetch, "assert_public_url", refuse)
+
+    with pytest.raises(UrlFetchError, match="127.0.0.1"):
+        manual_run.start(db, source=S3_URL, transcript_url=VTT_URL)
+
+    assert job_service.get_by_recording_uuid(db, RECORDING_UUID) is None

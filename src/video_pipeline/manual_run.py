@@ -63,6 +63,21 @@ def _require_audit_destination() -> None:
         )
 
 
+def _validated_transcript_url(raw: str | None) -> str | None:
+    """Check an optional transcript URL now, or return None if none was given.
+
+    Blank is "not supplied", not "supplied empty": the field is optional and an
+    operator who clears it means the same as one who never filled it. A URL that
+    is given is held to the same host rules as the source, here rather than in
+    the task, so a typo comes back on the form.
+    """
+    value = (raw or "").strip()
+    if not value:
+        return None
+    url_recording_fetch.assert_public_url(value)
+    return value
+
+
 def _resolve_zoom_recording(reference: str) -> str:
     """Turn a meeting ID or recording UUID into the recording's own UUID.
 
@@ -83,12 +98,25 @@ def _resolve_zoom_recording(reference: str) -> str:
     return recording_uuid
 
 
-def start(db: Session, *, source: str, webinar_id: uuid.UUID | None = None) -> StartedRun:
+def start(
+    db: Session,
+    *,
+    source: str,
+    webinar_id: uuid.UUID | None = None,
+    transcript_url: str | None = None,
+) -> StartedRun:
     """Create an audit job for ``source`` and dispatch it.
 
     ``webinar_id`` only names the Vimeo video. An audit run never publishes to
     the webinar it names, so attaching one is a convenience for whoever reviews
     the folder, not a commitment to anything.
+
+    ``transcript_url`` is optional and worth supplying: without a transcript the
+    trim comes from silence detection and the chapters from frames alone, so an
+    audit run on a pasted URL would otherwise exercise a different, degraded
+    path from the one a real webinar takes. For a Zoom source it overrides
+    Zoom's own transcript, which is how a recording with transcription switched
+    off can still be chaptered properly.
 
     Raises:
         SourceError: the paste is not a source this can act on.
@@ -98,6 +126,7 @@ def start(db: Session, *, source: str, webinar_id: uuid.UUID | None = None) -> S
     """
     _require_audit_destination()
     parsed = parse_source(source)
+    transcript = _validated_transcript_url(transcript_url)
 
     if parsed.is_zoom:
         recording_uuid = _resolve_zoom_recording(parsed.zoom_reference)
@@ -126,6 +155,7 @@ def start(db: Session, *, source: str, webinar_id: uuid.UUID | None = None) -> S
         zoom_recording_uuid=recording_uuid,
         webinar_id=webinar_id,
         source_url=source_url,
+        transcript_url=transcript,
         audit_only=True,
     )
     if not created:  # pragma: no cover - the checks above already returned
@@ -133,9 +163,10 @@ def start(db: Session, *, source: str, webinar_id: uuid.UUID | None = None) -> S
 
     dispatched = task_dispatch.dispatch(db, job)
     logger.info(
-        "Audit run started — job=%s source=%s dispatched=%s",
+        "Audit run started — job=%s source=%s transcript=%s dispatched=%s",
         job.id,
         source_url or recording_uuid,
+        transcript or "none",
         dispatched,
     )
     return StartedRun(job=job, dispatched=dispatched)

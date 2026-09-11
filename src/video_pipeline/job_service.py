@@ -36,6 +36,7 @@ def create_from_recording(
     zoom_recording_uuid: str,
     webinar_id: uuid.UUID | None = None,
     source_url: str | None = None,
+    transcript_url: str | None = None,
     audit_only: bool = False,
 ) -> tuple[WebinarVideoJob, bool]:
     """Insert a `pending` job for a recording, or return the existing one.
@@ -53,7 +54,8 @@ def create_from_recording(
     and ``source_url`` carries a download URL for a source that is not a Zoom
     recording. Such a source has no identity of its own, so its caller supplies
     a synthetic ``zoom_recording_uuid`` rather than the constraint being
-    relaxed to let it through.
+    relaxed to let it through. ``transcript_url`` is the transcript an operator
+    supplied for it, since a download URL carries no captions of its own.
     """
     existing = get_by_recording_uuid(db, zoom_recording_uuid)
     if existing is not None:
@@ -63,6 +65,7 @@ def create_from_recording(
         webinar_id=webinar_id,
         zoom_recording_uuid=zoom_recording_uuid,
         source_url=source_url,
+        transcript_url=transcript_url,
         audit_only=audit_only,
         state=JobState.PENDING.value,
         stage_events=stage_progress.initial(),

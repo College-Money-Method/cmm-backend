@@ -43,6 +43,11 @@ _MAX_BYTES = 8 * 1024 * 1024 * 1024
 # "moov atom not found" is a poor way to learn you copied the wrong link.
 _REJECTED_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
 
+# A transcript is text. Zoom's VTT for a three-hour webinar is a few hundred
+# kilobytes, so anything past this is not a transcript and reading it into
+# memory to parse would be the wrong thing to do with it.
+_MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024
+
 
 class UrlFetchError(RuntimeError):
     """The URL was refused, or the download failed."""
@@ -143,4 +148,42 @@ def fetch_from_url(url: str, dest: Path) -> Path:
     if written == 0:
         raise UrlFetchError(f"'{url}' returned an empty file")
     logger.info("Downloaded audit source — %d bytes from %s", written, url)
+    return dest
+
+
+def fetch_transcript_from_url(url: str, dest: Path) -> Path:
+    """Stream a WebVTT transcript from ``url`` to ``dest``. Returns the path.
+
+    Shares :func:`_open_stream` with the video download, so the transcript URL
+    is checked against its resolved address on every redirect hop exactly as
+    the source is — it is the same class of operator paste and reaches the same
+    process from inside the VPC.
+
+    Read whole rather than streamed to a size probe because the parser wants a
+    file, and the ceiling is low enough that the difference does not matter.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    try:
+        with httpx.Client(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=False) as client:
+            stream, resp = _open_stream(client, url)
+            try:
+                with dest.open("wb") as handle:
+                    for chunk in resp.iter_bytes(_STREAM_CHUNK):
+                        written += len(chunk)
+                        if written > _MAX_TRANSCRIPT_BYTES:
+                            raise UrlFetchError(
+                                f"'{url}' is larger than the "
+                                f"{_MAX_TRANSCRIPT_BYTES // (1024**2)} MB transcript limit — "
+                                "it does not look like a WebVTT file"
+                            )
+                        handle.write(chunk)
+            finally:
+                stream.__exit__(None, None, None)
+    except httpx.HTTPError as exc:
+        raise UrlFetchError(f"Downloading transcript {url} failed: {exc}") from exc
+
+    if written == 0:
+        raise UrlFetchError(f"'{url}' returned an empty transcript")
+    logger.info("Downloaded audit transcript — %d bytes from %s", written, url)
     return dest
