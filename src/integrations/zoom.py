@@ -12,6 +12,41 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+class ZoomApiError(RuntimeError):
+    """Zoom answered, and the answer was a refusal.
+
+    Exists so a caller can repeat what Zoom said instead of guessing. The
+    guesses are what made this necessary: a missing API scope, an expired
+    credential and a genuinely deleted recording all arrived as the same empty
+    result, and the operator-facing message picked one of them at random.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _zoom_refusal(resp: httpx.Response) -> str:
+    """Zoom's own words for why a call failed, safe to show an operator.
+
+    Zoom answers errors with ``{"code": ..., "message": ...}``, and the message
+    names the actual problem — which scope is missing, that the meeting does not
+    exist. Nothing on this path carries a credential: the token travels in the
+    request header and is never echoed back. Truncated anyway, because an
+    unexpected body should not become an unbounded job-row message.
+    """
+    try:
+        body = resp.json()
+        detail = str(body.get("message") or "").strip()
+        code = body.get("code")
+    except Exception:
+        detail, code = "", None
+    if not detail:
+        detail = resp.text[:300].strip() or "no detail"
+    return f"HTTP {resp.status_code}" + (f" (code {code})" if code else "") + f": {detail}"
+
+
 _ZOOM_TOKEN_URL = "https://zoom.us/oauth/token"
 _ZOOM_API_BASE = "https://api.zoom.us/v2"
 
@@ -390,7 +425,10 @@ def get_recording(recording_uuid: str) -> dict | None:
     persisted — the webhook's ``download_token`` is deliberately dropped.
 
     Returns the recording object (``recording_files``, ``topic``, ``duration``,
-    ...), or ``None`` when credentials are missing or the call failed.
+    ...). ``None`` means one thing only — no Zoom credentials are configured.
+    Every other failure raises ``ZoomApiError`` carrying Zoom's own words, so
+    the job row that reports it does not have to guess between a deleted
+    recording, an expired credential and a scope the app was never granted.
     """
     if not (settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret):
         logger.debug("Zoom credentials not configured — cannot fetch recording")
@@ -406,16 +444,12 @@ def get_recording(recording_uuid: str) -> dict | None:
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "Zoom get_recording failed — recording=%s status=%s body=%s",
-            recording_uuid,
-            exc.response.status_code,
-            exc.response.text[:400],
-        )
-        return None
+        refusal = _zoom_refusal(exc.response)
+        logger.warning("Zoom get_recording failed — recording=%s %s", recording_uuid, refusal)
+        raise ZoomApiError(refusal, exc.response.status_code) from exc
     except Exception as exc:
         logger.warning("Zoom get_recording failed — recording=%s error=%s", recording_uuid, exc)
-        return None
+        raise ZoomApiError(f"{type(exc).__name__}: {exc}") from exc
 
 
 def recording_access_token() -> str:

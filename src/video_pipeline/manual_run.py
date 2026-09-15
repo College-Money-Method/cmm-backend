@@ -86,11 +86,16 @@ def _resolve_zoom_recording(reference: str) -> str:
     response is what lets a pasted meeting ID share the same idempotency key as
     the webhook for the same recording, instead of creating a second job for it.
     """
-    payload = zoom.get_recording(reference)
+    try:
+        payload = zoom.get_recording(reference)
+    except zoom.ZoomApiError as exc:
+        # Reaches the operator while the form is still open, in Zoom's words —
+        # a refused scope and a deleted recording need different people to fix
+        # them, and only Zoom's message distinguishes the two.
+        raise RunError(f"Zoom refused the recording '{reference}' — {exc}") from exc
     if payload is None:
         raise RunError(
-            f"Zoom returned no recording for '{reference}'. Check the ID, that the "
-            "recording finished processing, and that it has not been deleted."
+            f"Cannot look up '{reference}' — Zoom credentials are not configured"
         )
     recording_uuid = str(payload.get("uuid") or "").strip()
     if not recording_uuid:
