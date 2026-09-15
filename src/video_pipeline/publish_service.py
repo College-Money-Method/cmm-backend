@@ -10,6 +10,12 @@ a school's page — writing it first would publish a replay whose chapter menu
 might be empty or half-written. A failure anywhere leaves the job in
 `chaptering` for the caller to record, and the whole sequence is safe to rerun:
 the frames are still in S3 and the chapter list is replaced wholesale.
+
+Deleting the Zoom copy is deliberately the very last thing that happens, after
+the row says published. Until then the run can still be sent back through the
+pipeline, and the Zoom cloud holds the only copy of the source that is not in
+Glacier — so anything that frees it earlier trades a recoverable failure for an
+unrecoverable one.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from src.config import settings
+from src.integrations import zoom
 from src.integrations.vimeo_chapters import set_chapters
 from src.video_pipeline import (
     artifact_store,
@@ -173,6 +180,25 @@ def _write_embed_code(job: WebinarVideoJob) -> None:
     webinar.video_embed_code = build_embed_code(job.vimeo_player_embed_url, video_title(job))
 
 
+def _delete_zoom_copy(db: Session, job: WebinarVideoJob) -> None:
+    """Free the Zoom cloud pool. Never fatal — the replay is already published.
+
+    Skipped for an audit run and for a URL source. An audit run must leave the
+    account exactly as it found it: the recording it just read may still be
+    waiting for its real production run, and deleting it would destroy the
+    source to prove the pipeline works on it.
+    """
+    if job.audit_only or job.source_url:
+        logger.info("Audit run %s — leaving the source recording in place", job.id)
+        return
+    stage_progress.record(db, job, stage_progress.DELETING_ZOOM_COPY)
+    if not zoom.delete_recording(job.zoom_recording_uuid):
+        logger.warning(
+            "Zoom recording %s was not deleted — leaving it to the 7-day auto-delete",
+            job.zoom_recording_uuid,
+        )
+
+
 def publish(db: Session, job: WebinarVideoJob) -> WebinarVideoJob:
     """Chapter, publish, and mark ``job`` published.
 
@@ -234,6 +260,11 @@ def publish(db: Session, job: WebinarVideoJob) -> WebinarVideoJob:
         chapters=[c.as_dict() for c in chapters],
         chapters_truncated=truncated,
     )
+
+    # Only now, with the player on the page: up to this line a failure is worth
+    # re-running, and a re-run needs a source. `delete_recording` never raises,
+    # so nothing here can undo the publish above.
+    _delete_zoom_copy(db, job)
     stage_progress.record(db, job, stage_progress.DONE)
 
     # After the row says published, not before: the alert says the replay is

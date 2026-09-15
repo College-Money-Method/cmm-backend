@@ -1,9 +1,10 @@
-"""What an audit run does differently once the ECS task picks it up.
+"""What an audit run does differently once it is running.
 
 Three differences, and each one is the difference between a safe audit and an
 unsafe one: the video goes into the audit folder or nowhere at all, the source
-recording is left alone, and the Vimeo video is labelled so it stays
-identifiable if it is ever moved out of that folder.
+recording is left alone (the last step of a publish, which an audit skips), and
+the Vimeo video is labelled so it stays identifiable if it is ever moved out of
+that folder.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import pytest
 
 from src.config import settings
 from src.integrations.vimeo import VimeoError
-from src.video_pipeline import job_service, process_recording, stage_progress
+from src.video_pipeline import job_service, process_recording, publish_service, stage_progress
 from src.video_pipeline.video_title import video_title
 from src.video_pipeline.states import JobState
 
@@ -87,22 +88,22 @@ def test_an_audit_run_does_not_delete_the_zoom_recording(db, monkeypatch):
     """The recording may still be waiting for its real production run. Deleting
     it to prove the pipeline works on it would destroy what it proved."""
     monkeypatch.setattr(
-        process_recording.zoom,
+        publish_service.zoom,
         "delete_recording",
         lambda uuid_: pytest.fail("must not delete a source it only audited"),
     )
 
-    process_recording._delete_zoom_copy(db, _job(db, audit_only=True))
+    publish_service._delete_zoom_copy(db, _job(db, audit_only=True))
 
 
 def test_a_url_source_has_no_zoom_copy_to_delete(db, monkeypatch):
     monkeypatch.setattr(
-        process_recording.zoom,
+        publish_service.zoom,
         "delete_recording",
         lambda uuid_: pytest.fail("there is no Zoom recording behind a pasted URL"),
     )
 
-    process_recording._delete_zoom_copy(
+    publish_service._delete_zoom_copy(
         db, _job(db, audit_only=True, source_url="https://example.com/a.mp4")
     )
 
@@ -110,11 +111,11 @@ def test_a_url_source_has_no_zoom_copy_to_delete(db, monkeypatch):
 def test_a_production_run_still_frees_the_zoom_pool(db, webinar, monkeypatch):
     deleted: list[str] = []
     monkeypatch.setattr(
-        process_recording.zoom, "delete_recording", lambda uuid_: deleted.append(uuid_) or True
+        publish_service.zoom, "delete_recording", lambda uuid_: deleted.append(uuid_) or True
     )
     job = _job(db, webinar_id=webinar.id)
 
-    process_recording._delete_zoom_copy(db, job)
+    publish_service._delete_zoom_copy(db, job)
 
     assert deleted == [job.zoom_recording_uuid]
 
@@ -175,10 +176,10 @@ def test_a_zoom_source_still_goes_through_zoom(db, monkeypatch, tmp_path):
 
 
 def test_freeing_the_zoom_pool_is_recorded_as_a_step(db, webinar, monkeypatch):
-    monkeypatch.setattr(process_recording.zoom, "delete_recording", lambda uuid_: True)
+    monkeypatch.setattr(publish_service.zoom, "delete_recording", lambda uuid_: True)
     job = _job(db, webinar_id=webinar.id)
 
-    process_recording._delete_zoom_copy(db, job)
+    publish_service._delete_zoom_copy(db, job)
 
     assert stage_progress.current(job) == stage_progress.DELETING_ZOOM_COPY
 
@@ -186,9 +187,9 @@ def test_freeing_the_zoom_pool_is_recorded_as_a_step(db, webinar, monkeypatch):
 def test_a_step_the_run_never_takes_is_never_recorded(db, monkeypatch):
     """An audit run keeps the recording, so a delete step on its timeline would
     say it did something it is designed not to do."""
-    monkeypatch.setattr(process_recording.zoom, "delete_recording", lambda uuid_: True)
+    monkeypatch.setattr(publish_service.zoom, "delete_recording", lambda uuid_: True)
     job = _job(db, audit_only=True)
 
-    process_recording._delete_zoom_copy(db, job)
+    publish_service._delete_zoom_copy(db, job)
 
     assert stage_progress.current(job) == stage_progress.QUEUED

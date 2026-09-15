@@ -29,6 +29,19 @@ PREFIX = "video-pipeline/frames/job/"
 ALERT_ADDRESS = "video-alerts@collegemoneymethod.com"
 
 
+@pytest.fixture(autouse=True)
+def zoom_delete(monkeypatch):
+    """Freeing the Zoom pool is the last step of a publish, so every test here
+    reaches it. Stubbed for all of them — a unit test must never reach out to
+    the real Zoom account — and returned so a test can assert what was deleted.
+    """
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        publish_service.zoom, "delete_recording", lambda uuid_: deleted.append(uuid_) or True
+    )
+    return deleted
+
+
 @pytest.fixture
 def job(db, webinar):
     """A job parked in `chaptering`, exactly as the ECS task leaves it."""
@@ -456,6 +469,7 @@ def test_publishing_records_each_step_in_order(db, job, artefacts, vimeo_ok):
         stage_progress.BUILDING_CHAPTERS,
         stage_progress.SETTING_CHAPTERS,
         stage_progress.WRITING_EMBED_CODE,
+        stage_progress.DELETING_ZOOM_COPY,
         stage_progress.DONE,
     ]
 
@@ -467,6 +481,33 @@ def test_an_audit_run_records_no_embed_code_step(db, audit_job, artefacts, vimeo
     recorded = [e["stage"] for e in stage_progress.events_of(audit_job)]
     assert stage_progress.WRITING_EMBED_CODE not in recorded
     assert recorded[-1] == stage_progress.DONE
+
+
+def test_the_zoom_copy_survives_a_run_that_never_reaches_published(
+    db, job, artefacts, monkeypatch, zoom_delete
+):
+    """The reason the delete sits last. A job that breaks here goes back through
+    the pipeline, and the Zoom cloud holds the only copy of the source that is
+    not in Glacier — freeing it earlier turns a re-runnable failure into a lost
+    recording.
+    """
+    monkeypatch.setattr(
+        publish_service,
+        "set_chapters",
+        lambda ref, chapters: (_ for _ in ()).throw(VimeoError("kept 1 of 2 chapters")),
+    )
+
+    with pytest.raises(VimeoError):
+        publish(db, job)
+
+    assert zoom_delete == []
+
+
+def test_a_published_run_frees_the_zoom_pool(db, job, artefacts, vimeo_ok, zoom_delete):
+    publish(db, job)
+
+    assert zoom_delete == [job.zoom_recording_uuid]
+    assert job.job_state is JobState.PUBLISHED
 
 
 def test_a_vimeo_failure_leaves_the_timeline_on_the_step_that_broke(db, job, artefacts, monkeypatch):

@@ -41,13 +41,13 @@ UPLOADING_ARTIFACTS = "uploading_artifacts"
 UPLOADING_TO_VIMEO = "uploading_to_vimeo"
 SETTING_THUMBNAIL = "setting_thumbnail"
 AWAITING_TRANSCODE = "awaiting_transcode"
-DELETING_ZOOM_COPY = "deleting_zoom_copy"
 LOADING_ARTIFACTS = "loading_artifacts"
 SEGMENTING_TRANSCRIPT = "segmenting_transcript"
 CLASSIFYING_FRAMES = "classifying_frames"
 BUILDING_CHAPTERS = "building_chapters"
 SETTING_CHAPTERS = "setting_chapters"
 WRITING_EMBED_CODE = "writing_embed_code"
+DELETING_ZOOM_COPY = "deleting_zoom_copy"
 DONE = "done"
 
 # Recorded when a run ends badly. Deliberately outside the plan: it is not a
@@ -67,13 +67,13 @@ PLAN: tuple[str, ...] = (
     UPLOADING_TO_VIMEO,
     SETTING_THUMBNAIL,
     AWAITING_TRANSCODE,
-    DELETING_ZOOM_COPY,
     LOADING_ARTIFACTS,
     SEGMENTING_TRANSCRIPT,
     CLASSIFYING_FRAMES,
     BUILDING_CHAPTERS,
     SETTING_CHAPTERS,
     WRITING_EMBED_CODE,
+    DELETING_ZOOM_COPY,
     DONE,
 )
 
