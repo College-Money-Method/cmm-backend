@@ -54,6 +54,9 @@ def _zoom_refusal(resp: httpx.Response) -> str:
 # and the shortest rejected one 142, so the ceiling sits at 128.
 _ZOOM_ANSWER_MAX_CHARS = 128
 
+# Zoom's batch registration endpoint takes at most this many people per call.
+_ZOOM_BATCH_MAX = 30
+
 _ZOOM_TOKEN_URL = "https://zoom.us/oauth/token"
 _ZOOM_API_BASE = "https://api.zoom.us/v2"
 
@@ -235,6 +238,66 @@ def register_webinar(
             exc,
         )
         return None
+
+
+def batch_register_webinar(
+    zoom_webinar_id: str,
+    people: list[dict[str, str | None]],
+) -> dict[str, str]:
+    """Register a group of attendees in one call, returning email -> registrant_id.
+
+    Zoom's batch endpoint accepts only name and email — it has no
+    ``custom_questions`` field, so it cannot be rejected over a stale dropdown
+    answer list or an over-long free-text answer, the two faults that stranded
+    registrations in the first place. Everything the host actually reads (grade,
+    school, the parent's question) already lives in our own tables, so nothing
+    is lost by leaving it out of Zoom's copy.
+
+    Confirmation emails are on: the join link Zoom mails back is the entire
+    point of re-sending these.
+
+    Raises ``ZoomApiError`` when Zoom refuses, rather than returning an empty
+    result — a backfill that quietly registers nobody is the failure this is
+    meant to repair.
+    """
+    if not people:
+        return {}
+    if len(people) > _ZOOM_BATCH_MAX:
+        raise ValueError(f"batch takes at most {_ZOOM_BATCH_MAX} registrants, got {len(people)}")
+
+    token = _get_access_token()
+    resp = httpx.post(
+        f"{_ZOOM_API_BASE}/webinars/{zoom_webinar_id}/batch_registrants",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={
+            "auto_approve": True,
+            "registrants_confirmation_email": True,
+            "registrants": [
+                {
+                    "email": p["email"],
+                    "first_name": p.get("first_name") or "",
+                    "last_name": p.get("last_name") or "",
+                }
+                for p in people
+            ],
+        },
+        timeout=30.0,
+    )
+    if resp.is_error:
+        raise ZoomApiError(_zoom_refusal(resp), resp.status_code)
+
+    created = {
+        str(r["email"]): str(r["registrant_id"])
+        for r in resp.json().get("registrants", [])
+        if r.get("email") and r.get("registrant_id")
+    }
+    logger.info(
+        "Zoom batch registration — webinar=%s sent=%d created=%d",
+        zoom_webinar_id,
+        len(people),
+        len(created),
+    )
+    return created
 
 
 def get_webinar_participants(zoom_webinar_id: str) -> list[dict] | None:
