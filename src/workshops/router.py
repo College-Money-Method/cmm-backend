@@ -25,6 +25,7 @@ from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
 from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopEmailTemplate, WorkshopNotificationSubscriber, WorkshopRegistration
 from src.workshops import attendance_sync_service
+from src.workshops.upcoming_window import is_upcoming, is_upcoming_sql
 from src.workshops.schemas import (
     AirtableSyncLogOut,
     AirtableSyncResult,
@@ -344,7 +345,6 @@ def list_all_webinars(
     zoom_webinar_id: str | None = None,
 ):
     """Admin: global webinar list filterable by cycle, cohort, school, workshop, status, search, and zoom webinar id."""
-    now = datetime.now(tz=timezone.utc)
     stmt = select(Webinar).options(
         selectinload(Webinar.workshop),
         selectinload(Webinar.cohort),
@@ -377,9 +377,9 @@ def list_all_webinars(
         stmt = stmt.where(Webinar.zoom_webinar_id.ilike(f"%{zoom_webinar_id}%"))
 
     if status == "upcoming":
-        stmt = stmt.where((Webinar.start_datetime >= now) | (Webinar.start_datetime.is_(None)))
+        stmt = stmt.where(is_upcoming_sql(Webinar.start_datetime))
     elif status == "past":
-        stmt = stmt.where(Webinar.start_datetime < now)
+        stmt = stmt.where(~is_upcoming_sql(Webinar.start_datetime))
 
     stmt = stmt.order_by(
         Webinar.start_datetime.asc().nulls_last()
@@ -924,7 +924,7 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
 
     for mapping in mappings:
         webinar = mapping.webinar
-        is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
+        webinar_is_upcoming = is_upcoming(webinar.start_datetime, now=now)
         # Only show webinars from the current cycle (upcoming and past alike).
         # Webinars with no cycle assigned are excluded so stray/test webinars
         # don't leak into a school's portal list.
@@ -932,7 +932,7 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
         if cycle is None or not cycle.is_current:
             continue
 
-        if is_upcoming:
+        if webinar_is_upcoming:
             prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, school_id, db)
             item = _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
             upcoming.append(item)
@@ -978,8 +978,8 @@ def get_school_webinar_by_prefix(school_id: uuid.UUID, prefix: str, db: DbDep) -
 
     webinar = mapping.webinar
     now = datetime.now(tz=timezone.utc)
-    is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
-    if is_upcoming:
+    webinar_is_upcoming = is_upcoming(webinar.start_datetime, now=now)
+    if webinar_is_upcoming:
         prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, school_id, db)
         return _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
     return _to_item(mapping)
@@ -1013,8 +1013,8 @@ def get_school_webinar(school_id: uuid.UUID, webinar_id: uuid.UUID, db: DbDep) -
 
     webinar = mapping.webinar
     now = datetime.now(tz=timezone.utc)
-    is_upcoming = webinar.start_datetime is None or webinar.start_datetime >= now
-    if is_upcoming:
+    webinar_is_upcoming = is_upcoming(webinar.start_datetime, now=now)
+    if webinar_is_upcoming:
         prev_embed, prev_name = _get_prev_cycle_recording(webinar.workshop_id, school_id, db)
         return _to_item(mapping, prev_cycle_video_embed_code=prev_embed, prev_cycle_name=prev_name)
     return _to_item(mapping)
@@ -1091,8 +1091,6 @@ def register_public(webinar_id: uuid.UUID, body: RegistrationCreate, db: DbDep) 
 @router.get("/", response_model=list[WorkshopSummary])
 def list_workshops(_admin: AdminDep, db: DbDep):
     """Admin: list all workshops with webinar counts and next upcoming date."""
-    now = datetime.now(tz=timezone.utc)
-
     webinar_count_sq = (
         select(func.count(Webinar.id))
         .where(Webinar.workshop_id == Workshop.id)
@@ -1101,7 +1099,7 @@ def list_workshops(_admin: AdminDep, db: DbDep):
     )
     next_webinar_sq = (
         select(func.min(Webinar.start_datetime))
-        .where(Webinar.workshop_id == Workshop.id, Webinar.start_datetime >= now)
+        .where(Webinar.workshop_id == Workshop.id, is_upcoming_sql(Webinar.start_datetime))
         .correlate(Workshop)
         .scalar_subquery()
     )
@@ -1266,7 +1264,6 @@ def list_workshop_webinars(
     if not workshop:
         raise HTTPException(status_code=404, detail="Workshop not found")
 
-    now = datetime.now(tz=timezone.utc)
     stmt = select(Webinar).where(Webinar.workshop_id == workshop_id).options(selectinload(Webinar.registrations))
 
     # Filter by search term
@@ -1275,9 +1272,9 @@ def list_workshop_webinars(
 
     # Filter by status (upcoming/past)
     if status == "upcoming":
-        stmt = stmt.where((Webinar.start_datetime >= now) | (Webinar.start_datetime.is_(None)))
+        stmt = stmt.where(is_upcoming_sql(Webinar.start_datetime))
     elif status == "past":
-        stmt = stmt.where(Webinar.start_datetime < now)
+        stmt = stmt.where(~is_upcoming_sql(Webinar.start_datetime))
 
     # Sort by date
     if sort == "date_asc":
