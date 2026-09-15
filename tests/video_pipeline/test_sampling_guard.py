@@ -122,7 +122,6 @@ class TestNothingIsSpentPastTheCeiling:
             process_recording, "_publish_to_vimeo", lambda *a, **k: "123:abc"
         )
         monkeypatch.setattr(process_recording, "wait_for_transcode", lambda ref: None)
-        monkeypatch.setattr(process_recording, "_delete_zoom_copy", lambda db, job: None)
         monkeypatch.setattr(
             process_recording.ffmpeg_ops, "probe_duration", lambda path: 1200.0
         )

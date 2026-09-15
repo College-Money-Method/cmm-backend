@@ -6,9 +6,10 @@ Ordering here carries most of the design:
   survive a failure;
 * Vimeo ids are persisted **before** the transcode wait, so a task killed
   mid-poll does not upload the video a second time on retry;
-* the Zoom recording is deleted **after** the transcode confirms, and a failed
-  delete only logs — the video is already published by then, and Zoom's 7-day
-  auto-delete is the backstop.
+* the Zoom recording is **not** touched here at all. Freeing the cloud pool is
+  the last thing the pipeline does, after the replay is on the school's page,
+  so a run that dies between the two never destroys a source it had not yet
+  published — see ``publish_service``.
 
 Every step raises on failure; ``run_task`` turns that into ``failed`` with the
 message on the job row.
@@ -22,7 +23,6 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from src.config import settings
-from src.integrations import zoom
 from src.integrations.vimeo import VimeoError
 from src.integrations.vimeo_upload import audit_folder_uri, create_video, wait_for_transcode
 from src.video_pipeline import (
@@ -159,25 +159,6 @@ def _publish_to_vimeo(db: Session, job: WebinarVideoJob, trimmed: Path, title: s
     return result["video_ref"]
 
 
-def _delete_zoom_copy(db: Session, job: WebinarVideoJob) -> None:
-    """Free the Zoom cloud pool. Never fatal — the replay is already published.
-
-    Skipped for an audit run and for a URL source. An audit run must leave the
-    account exactly as it found it: the recording it just read may still be
-    waiting for its real production run, and deleting it would destroy the
-    source to prove the pipeline works on it.
-    """
-    if job.audit_only or job.source_url:
-        logger.info("Audit run %s — leaving the source recording in place", job.id)
-        return
-    stage_progress.record(db, job, stage_progress.DELETING_ZOOM_COPY)
-    if not zoom.delete_recording(job.zoom_recording_uuid):
-        logger.warning(
-            "Zoom recording %s was not deleted — leaving it to the 7-day auto-delete",
-            job.zoom_recording_uuid,
-        )
-
-
 def _guard_candidate_count(job: WebinarVideoJob, count: int) -> None:
     """Stop the job when sampling produced more candidates than we will pay for.
 
@@ -243,7 +224,6 @@ def process(db: Session, job: WebinarVideoJob, work_dir: Path) -> None:
 
     stage_progress.record(db, job, stage_progress.AWAITING_TRANSCODE)
     wait_for_transcode(video_ref)
-    _delete_zoom_copy(db, job)
 
     job_service.advance(
         db,
