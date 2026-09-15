@@ -215,7 +215,11 @@ def register_webinar(
             timeout=10.0,
         )
         resp.raise_for_status()
-        registrant_id: str | None = resp.json().get("id")
+        # Zoom answers with the WEBINAR id under "id" and the person's id under
+        # "registrant_id". Reading "id" here stamped the webinar id onto every
+        # registration, so attendance matching by registrant id never hit and
+        # silently fell back to email.
+        registrant_id: str | None = resp.json().get("registrant_id")
         logger.info(
             "Zoom registration created — webinar=%s registrant=%s",
             zoom_webinar_id,
