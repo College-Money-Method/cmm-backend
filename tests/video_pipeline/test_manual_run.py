@@ -14,6 +14,7 @@ import uuid
 import pytest
 
 from src.config import settings
+from src.integrations import zoom
 from src.video_pipeline import job_service, manual_run, task_dispatch
 from src.video_pipeline.manual_source import SourceError
 from src.video_pipeline.states import JobState
@@ -98,12 +99,40 @@ def test_a_webinar_can_be_attached_to_name_the_video(
 
 
 def test_a_recording_zoom_cannot_find_is_reported_not_queued(db, audit_folder, monkeypatch):
-    monkeypatch.setattr(manual_run.zoom, "get_recording", lambda ref: None)
+    def refuse(ref):
+        raise zoom.ZoomApiError("HTTP 404 (code 3301): No recording found", 404)
 
-    with pytest.raises(manual_run.RunError, match="no recording"):
+    monkeypatch.setattr(manual_run.zoom, "get_recording", refuse)
+
+    with pytest.raises(manual_run.RunError, match="No recording found"):
         manual_run.start(db, source="88812345678")
 
     assert job_service.get_by_recording_uuid(db, RECORDING_UUID) is None
+
+
+def test_zooms_refusal_is_quoted_rather_than_guessed_at(db, audit_folder, monkeypatch):
+    """A missing API scope and a deleted recording used to read identically, and
+    they need different people to fix them. Zoom names which one it is."""
+
+    def refuse(ref):
+        raise zoom.ZoomApiError(
+            "HTTP 400 (code 4711): Invalid access token, does not contain scopes:"
+            "[cloud_recording:read:list_recording_files:admin].",
+            400,
+        )
+
+    monkeypatch.setattr(manual_run.zoom, "get_recording", refuse)
+
+    with pytest.raises(manual_run.RunError, match="does not contain scopes"):
+        manual_run.start(db, source="88812345678")
+
+
+def test_no_zoom_credentials_says_so(db, audit_folder, monkeypatch):
+    """The one thing ``None`` is now allowed to mean."""
+    monkeypatch.setattr(manual_run.zoom, "get_recording", lambda ref: None)
+
+    with pytest.raises(manual_run.RunError, match="credentials are not configured"):
+        manual_run.start(db, source="88812345678")
 
 
 def test_a_recording_that_already_has_a_job_names_it(

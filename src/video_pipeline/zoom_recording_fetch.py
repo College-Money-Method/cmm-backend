@@ -108,11 +108,16 @@ def _download(url: str, token: str, dest: Path) -> Path:
 
 def fetch_recording(recording_uuid: str, work_dir: Path) -> FetchedRecording:
     """Download the MP4 and (when present) the VTT for ``recording_uuid``."""
-    payload = zoom.get_recording(recording_uuid)
+    try:
+        payload = zoom.get_recording(recording_uuid)
+    except zoom.ZoomApiError as exc:
+        # Zoom said why. Repeating it verbatim is the whole value: "no recording"
+        # sent an operator looking for a deleted file when the real answer was a
+        # scope the Server-to-Server app had never been granted.
+        raise RecordingFetchError(f"Zoom refused the recording {recording_uuid} — {exc}") from exc
     if payload is None:
         raise RecordingFetchError(
-            f"Zoom returned no recording for {recording_uuid} — it may have been "
-            "deleted, or Zoom credentials are missing"
+            f"Cannot fetch recording {recording_uuid} — Zoom credentials are not configured"
         )
 
     video = select_video_file(payload)
