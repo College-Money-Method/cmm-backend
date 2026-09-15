@@ -47,6 +47,13 @@ def _zoom_refusal(resp: httpx.Response) -> str:
     return f"HTTP {resp.status_code}" + (f" (code {code})" if code else "") + f": {detail}"
 
 
+# Zoom rejects a custom-question answer longer than this with
+# {"code":300,"message":"Invalid parameter: custom_questions."}, which used to
+# strand the registration entirely — the parent's row committed, but Zoom never
+# issued a join link. Their longest accepted answer in production was 124 chars
+# and the shortest rejected one 142, so the ceiling sits at 128.
+_ZOOM_ANSWER_MAX_CHARS = 128
+
 _ZOOM_TOKEN_URL = "https://zoom.us/oauth/token"
 _ZOOM_API_BASE = "https://api.zoom.us/v2"
 
@@ -95,10 +102,14 @@ def _match_answer(value: str, answers: list[str]) -> str | None:
     """Match value against Zoom's predefined answer list.
 
     Returns the exact Zoom answer string, or None if no match found.
-    For free-text questions (empty answers list), returns the value as-is.
+
+    For free-text questions (empty answers list), returns the value capped at
+    Zoom's answer length limit. Only the copy Zoom keeps is shortened — our own
+    ``workshop_registrations.questions`` still holds what the parent wrote, and
+    that is the copy the workshop host reads.
     """
     if not answers:
-        return value
+        return value[:_ZOOM_ANSWER_MAX_CHARS]
     # Exact match first
     for a in answers:
         if a.lower() == value.lower():
