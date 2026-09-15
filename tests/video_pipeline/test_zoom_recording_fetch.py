@@ -20,19 +20,121 @@ def _payload(*files: dict) -> dict:
     return {"recording_files": list(files)}
 
 
-def test_largest_completed_mp4_wins():
-    """Zoom returns several MP4 renditions; the composite is always the biggest."""
-    speaker = {"id": "a", "file_type": "MP4", "file_size": 120_000_000, "status": "completed"}
-    shared_screen = {"id": "b", "file_type": "MP4", "file_size": 980_000_000, "status": "completed"}
-    gallery = {"id": "c", "file_type": "MP4", "file_size": 310_000_000, "status": "completed"}
+def test_shared_screen_with_speaker_wins_over_a_larger_speaker_only_file():
+    """The rule is the view, not the size.
+
+    A webinar of static slides composites smaller than the speaker camera beside
+    it, so picking by size published the speaker-only rendition — slides gone.
+    """
+    speaker = {
+        "id": "a",
+        "file_type": "MP4",
+        "file_size": 980_000_000,
+        "status": "completed",
+        "recording_type": "speaker_view",
+    }
+    shared_screen = {
+        "id": "b",
+        "file_type": "MP4",
+        "file_size": 120_000_000,
+        "status": "completed",
+        "recording_type": "shared_screen_with_speaker_view",
+    }
+    gallery = {
+        "id": "c",
+        "file_type": "MP4",
+        "file_size": 310_000_000,
+        "status": "completed",
+        "recording_type": "gallery_view",
+    }
 
     assert select_video_file(_payload(speaker, shared_screen, gallery))["id"] == "b"
 
 
-def test_incomplete_mp4_is_ignored_even_when_larger():
+def test_shared_screen_with_gallery_beats_camera_only_views():
+    """Any rendition carrying the screen outranks any that does not."""
+    gallery = {
+        "id": "a",
+        "file_type": "MP4",
+        "file_size": 900_000_000,
+        "status": "completed",
+        "recording_type": "gallery_view",
+    }
+    screen_gallery = {
+        "id": "b",
+        "file_type": "MP4",
+        "file_size": 100_000_000,
+        "status": "completed",
+        "recording_type": "shared_screen_with_gallery_view",
+    }
+
+    assert select_video_file(_payload(gallery, screen_gallery))["id"] == "b"
+
+
+def test_recording_type_matching_ignores_case_and_padding():
+    """The field is remote JSON — it has arrived title-cased and space-padded."""
+    speaker = {
+        "id": "a",
+        "file_type": "MP4",
+        "file_size": 900_000_000,
+        "status": "completed",
+        "recording_type": "speaker_view",
+    }
+    shared_screen = {
+        "id": "b",
+        "file_type": "MP4",
+        "file_size": 10,
+        "status": "completed",
+        "recording_type": " Shared_Screen_With_Speaker_View ",
+    }
+
+    assert select_video_file(_payload(speaker, shared_screen))["id"] == "b"
+
+
+def test_unlabelled_renditions_fall_back_to_the_largest():
+    """No `recording_type` at all: size is the only signal left, so use it."""
+    small = {"id": "a", "file_type": "MP4", "file_size": 120_000_000, "status": "completed"}
+    large = {"id": "b", "file_type": "MP4", "file_size": 980_000_000, "status": "completed"}
+
+    assert select_video_file(_payload(small, large))["id"] == "b"
+
+
+def test_largest_wins_within_one_view():
+    """Size still breaks a tie between two entries of the same type."""
+    small = {
+        "id": "a",
+        "file_type": "MP4",
+        "file_size": 120_000_000,
+        "status": "completed",
+        "recording_type": "shared_screen_with_speaker_view",
+    }
+    large = {
+        "id": "b",
+        "file_type": "MP4",
+        "file_size": 980_000_000,
+        "status": "completed",
+        "recording_type": "shared_screen_with_speaker_view",
+    }
+
+    assert select_video_file(_payload(small, large))["id"] == "b"
+
+
+def test_incomplete_mp4_is_ignored_even_when_better_ranked():
     """A still-processing file has a size but no usable bytes behind it."""
-    processing = {"id": "a", "file_type": "MP4", "file_size": 990_000_000, "status": "processing"}
-    ready = {"id": "b", "file_type": "MP4", "file_size": 400_000_000, "status": "completed"}
+    processing = {
+        "id": "a",
+        "file_type": "MP4",
+        "file_size": 990_000_000,
+        "status": "processing",
+        "recording_type": "shared_screen_with_speaker_view",
+    }
+    ready = {
+        "id": "b",
+        "file_type": "MP4",
+        "file_size": 400_000_000,
+        "status": "completed",
+        "recording_type": "speaker_view",
+    }
 
     assert select_video_file(_payload(processing, ready))["id"] == "b"
 
