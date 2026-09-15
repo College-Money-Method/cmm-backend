@@ -2,8 +2,8 @@
 
 A recording is a *set* of files — several MP4 renditions, an M4A, chat, and
 (when the account has it enabled) a VTT transcript. The pipeline wants exactly
-two of them: the largest MP4, which is the full-resolution shared-screen
-rendition, and the TRANSCRIPT.
+two of them: the MP4 that shows the shared screen alongside the speaker, and
+the TRANSCRIPT.
 
 Download URLs are re-fetched here on every run rather than read from something
 saved at webhook time. Zoom's ``download_url`` is only usable with a credential,
@@ -45,13 +45,38 @@ def _files(payload: dict) -> list[dict]:
     return [f for f in (payload.get("recording_files") or []) if isinstance(f, dict)]
 
 
+# Zoom's ``recording_type`` values, best rendition first. The replay has to show
+# the slides, so anything carrying the shared screen outranks any camera-only
+# view. Size cannot stand in for this: a webinar of static slides composites to a
+# *smaller* file than the speaker camera beside it, so "largest MP4" quietly
+# published the speaker-only rendition on a real recording.
+_VIEW_PREFERENCE = (
+    "shared_screen_with_speaker_view",
+    "shared_screen_with_speaker_view(cc)",
+    "shared_screen_with_gallery_view",
+    "shared_screen",
+    "speaker_view",
+    "active_speaker",
+    "gallery_view",
+)
+
+
+def _view_rank(recording_type: str) -> int:
+    """Where a rendition sits in ``_VIEW_PREFERENCE``; unknown types sort last."""
+    try:
+        return _VIEW_PREFERENCE.index(recording_type)
+    except ValueError:
+        return len(_VIEW_PREFERENCE)
+
+
 def select_video_file(payload: dict) -> dict:
-    """Pick the MP4 to publish: the largest completed one.
+    """Pick the MP4 to publish: the best available view, largest within that view.
 
     Zoom returns several MP4 entries for the same instance (shared screen with
-    speaker view, speaker view alone, gallery view). Size is the reliable
-    discriminator — ``recording_type`` names vary by account settings, and the
-    biggest file is always the full composite the replay should use.
+    speaker view, speaker view alone, gallery view). ``recording_type`` names the
+    view directly, so it decides; file size only breaks a tie between entries of
+    the same type, and carries renditions Zoom labels with something we have not
+    seen before.
     """
     videos = [
         f
@@ -61,7 +86,20 @@ def select_video_file(payload: dict) -> dict:
     ]
     if not videos:
         raise RecordingFetchError("Zoom recording has no completed MP4 file")
-    return max(videos, key=lambda f: int(f.get("file_size") or 0))
+    chosen = min(
+        videos,
+        key=lambda f: (
+            _view_rank((f.get("recording_type") or "").strip().lower()),
+            -int(f.get("file_size") or 0),
+        ),
+    )
+    logger.info(
+        "Selected Zoom rendition %s — type=%s size=%s",
+        chosen.get("id"),
+        chosen.get("recording_type") or "unlabelled",
+        chosen.get("file_size"),
+    )
+    return chosen
 
 
 def select_transcript_file(payload: dict) -> dict | None:
