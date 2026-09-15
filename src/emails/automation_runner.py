@@ -75,6 +75,7 @@ from src.emails.school_links import email_origin
 from src.emails.sender import format_from_header, sender_omits_unsubscribe
 from src.emails.ses_client import _sandbox_enabled, send_email
 from src.emails.unsubscribe import build_unsubscribe_url
+from src.utils import single_writer
 from src.emails.workshop_merge_tags import build_workshop_merge_replacements
 from src.workshops.registration_counts import school_registration_counts
 from src.schools.models import Contact, School
@@ -92,6 +93,9 @@ _SOURCE_BY_TYPE = {
 }
 
 
+_AUTOMATIONS_LOCK = "email-automations-check"
+
+
 def run_automations_check(db: Session | None = None) -> int:
     """Entry point for the scheduler job (and for direct test invocation).
 
@@ -102,6 +106,14 @@ def run_automations_check(db: Session | None = None) -> int:
     """
     if db is not None:
         return _run_automations_check(db)
+
+    # Only the scheduler path is guarded. Prod runs two uvicorn workers, each
+    # with its own scheduler, so this fires twice a few milliseconds apart — and
+    # both copies read the "already sent" ledger before either of them writes to
+    # it, which is how one family gets the same reminder twice. A caller that
+    # passed its own session asked for this run explicitly and keeps it.
+    if not single_writer.is_leader(_AUTOMATIONS_LOCK):
+        return 0
 
     session_factory = get_session_factory()
     session = session_factory()

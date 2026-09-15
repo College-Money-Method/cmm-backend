@@ -31,6 +31,7 @@ from sqlalchemy import select
 
 from src.config import settings
 from src.db.base import get_session_factory
+from src.utils import single_writer
 from src.video_pipeline import caption_task, job_service, publish_service, task_dispatch
 from src.video_pipeline.models import WebinarVideoJob
 from src.video_pipeline.states import JobState
@@ -130,8 +131,17 @@ def caption_published_jobs(db) -> int:
     return captioned
 
 
+# Name of the lock that picks the one worker allowed to sweep. Every step below
+# assumes it is the only thing moving these rows: two copies racing publish each
+# other's Vimeo writes, and dispatch would launch two ECS tasks for one job.
+_SWEEP_LOCK = "video-pipeline-sweep"
+
+
 def run_video_pipeline_sweep() -> None:
     """Scheduler entry point. Never raises — nothing upstream would catch it."""
+    if not single_writer.is_leader(_SWEEP_LOCK):
+        return
+
     SessionLocal = get_session_factory()
     db = SessionLocal()
     try:
