@@ -54,6 +54,9 @@ def _zoom_refusal(resp: httpx.Response) -> str:
 # and the shortest rejected one 142, so the ceiling sits at 128.
 _ZOOM_ANSWER_MAX_CHARS = 128
 
+# Zoom's batch registration endpoint takes at most this many people per call.
+_ZOOM_BATCH_MAX = 30
+
 _ZOOM_TOKEN_URL = "https://zoom.us/oauth/token"
 _ZOOM_API_BASE = "https://api.zoom.us/v2"
 
@@ -153,6 +156,71 @@ def _get_access_token() -> str:
     return str(_token_cache["access_token"])
 
 
+def _writable_question(question: dict) -> dict:
+    """A custom question as Zoom will accept it back.
+
+    Reads and writes are not symmetric: Zoom returns ``answers: []`` on a
+    free-text question but refuses that field on write with
+    ``custom_questions[N].answers: Invalid field``, so the empty list has to go
+    before the question can be echoed back.
+    """
+    return {k: v for k, v in question.items() if k != "answers" or v}
+
+
+def _relax_custom_questions(zoom_webinar_id: str, token: str) -> bool:
+    """Clear ``required`` on a webinar's custom questions. True if anything changed.
+
+    Parents never see Zoom's registration form — they register on the CMM site
+    and we push the result through the API — so ``required`` protects no one. It
+    only decides whether Zoom refuses a push that omits an answer, and we omit
+    constantly: the school dropdown's ``answers`` list is a fixed snapshot while
+    schools keep being added, so a parent from a school missing off it produces
+    no match, the question is dropped, and a required question takes the whole
+    registration down with it.
+
+    Clearing the flag makes the mismatch harmless. Zoom's copy loses the answer;
+    our own tables keep it, and that is the copy the workshop host reads.
+    """
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    url = f"{_ZOOM_API_BASE}/webinars/{zoom_webinar_id}/registrants/questions"
+
+    resp = httpx.get(url, headers=headers, timeout=10.0)
+    if resp.is_error:
+        logger.warning(
+            "Could not read Zoom questions to relax them — webinar=%s %s",
+            zoom_webinar_id,
+            _zoom_refusal(resp),
+        )
+        return False
+
+    config = resp.json()
+    custom = config.get("custom_questions") or []
+    if not any(q.get("required") for q in custom):
+        return False
+
+    patch = httpx.patch(
+        url,
+        headers=headers,
+        json={
+            "questions": config.get("questions") or [],
+            "custom_questions": [
+                _writable_question({**q, "required": False}) for q in custom
+            ],
+        },
+        timeout=10.0,
+    )
+    if patch.is_error:
+        logger.warning(
+            "Could not relax Zoom questions — webinar=%s %s",
+            zoom_webinar_id,
+            _zoom_refusal(patch),
+        )
+        return False
+
+    logger.info("Relaxed required Zoom questions — webinar=%s", zoom_webinar_id)
+    return True
+
+
 def register_webinar(
     zoom_webinar_id: str,
     email: str,
@@ -202,17 +270,35 @@ def register_webinar(
         if custom_questions:
             payload["custom_questions"] = custom_questions
 
-        resp = httpx.post(
-            f"{_ZOOM_API_BASE}/webinars/{zoom_webinar_id}/registrants",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=10.0,
-        )
+        def _post() -> httpx.Response:
+            return httpx.post(
+                f"{_ZOOM_API_BASE}/webinars/{zoom_webinar_id}/registrants",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=10.0,
+            )
+
+        resp = _post()
+
+        # A refusal naming custom_questions means Zoom wanted an answer we had
+        # no match for — a school missing off a stale dropdown, most often. The
+        # registration is sound; only the form standing in front of it is wrong.
+        # Relax the form and send the same payload again, once. The payload does
+        # not carry `required`, so nothing about it needs rebuilding, and a
+        # webinar only has to be relaxed the first time it refuses.
+        if resp.status_code == 400 and "custom_questions" in resp.text:
+            if _relax_custom_questions(zoom_webinar_id, token):
+                resp = _post()
+
         resp.raise_for_status()
-        registrant_id: str | None = resp.json().get("id")
+        # Zoom answers with the WEBINAR id under "id" and the person's id under
+        # "registrant_id". Reading "id" here stamped the webinar id onto every
+        # registration, so attendance matching by registrant id never hit and
+        # silently fell back to email.
+        registrant_id: str | None = resp.json().get("registrant_id")
         logger.info(
             "Zoom registration created — webinar=%s registrant=%s",
             zoom_webinar_id,
@@ -235,6 +321,66 @@ def register_webinar(
             exc,
         )
         return None
+
+
+def batch_register_webinar(
+    zoom_webinar_id: str,
+    people: list[dict[str, str | None]],
+) -> dict[str, str]:
+    """Register a group of attendees in one call, returning email -> registrant_id.
+
+    Zoom's batch endpoint accepts only name and email — it has no
+    ``custom_questions`` field, so it cannot be rejected over a stale dropdown
+    answer list or an over-long free-text answer, the two faults that stranded
+    registrations in the first place. Everything the host actually reads (grade,
+    school, the parent's question) already lives in our own tables, so nothing
+    is lost by leaving it out of Zoom's copy.
+
+    Confirmation emails are on: the join link Zoom mails back is the entire
+    point of re-sending these.
+
+    Raises ``ZoomApiError`` when Zoom refuses, rather than returning an empty
+    result — a backfill that quietly registers nobody is the failure this is
+    meant to repair.
+    """
+    if not people:
+        return {}
+    if len(people) > _ZOOM_BATCH_MAX:
+        raise ValueError(f"batch takes at most {_ZOOM_BATCH_MAX} registrants, got {len(people)}")
+
+    token = _get_access_token()
+    resp = httpx.post(
+        f"{_ZOOM_API_BASE}/webinars/{zoom_webinar_id}/batch_registrants",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={
+            "auto_approve": True,
+            "registrants_confirmation_email": True,
+            "registrants": [
+                {
+                    "email": p["email"],
+                    "first_name": p.get("first_name") or "",
+                    "last_name": p.get("last_name") or "",
+                }
+                for p in people
+            ],
+        },
+        timeout=30.0,
+    )
+    if resp.is_error:
+        raise ZoomApiError(_zoom_refusal(resp), resp.status_code)
+
+    created = {
+        str(r["email"]): str(r["registrant_id"])
+        for r in resp.json().get("registrants", [])
+        if r.get("email") and r.get("registrant_id")
+    }
+    logger.info(
+        "Zoom batch registration — webinar=%s sent=%d created=%d",
+        zoom_webinar_id,
+        len(people),
+        len(created),
+    )
+    return created
 
 
 def get_webinar_participants(zoom_webinar_id: str) -> list[dict] | None:
