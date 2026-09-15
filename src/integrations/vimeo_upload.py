@@ -59,6 +59,20 @@ def allow_embed_domain(video_ref: str, domain: str) -> None:
     logger.info("Vimeo embed domain registered — video=%s domain=%s", video_ref, domain)
 
 
+def _normalised_uri(raw: str) -> str:
+    """A configured Vimeo URI reduced to the path Vimeo will accept.
+
+    Strips surrounding quotes as well as whitespace and a trailing slash. The
+    quotes are not hypothetical: these values are carried in dotenv files where
+    they are written quoted, and a loader that does not unquote them hands over
+    a value whose first character is ``"``. That character then lands in the
+    middle of a URL, which moves the *hostname* — the request goes to
+    ``api.vimeo.com"`` and fails to resolve — so a quoting slip in configuration
+    surfaces as a DNS error with nothing in it naming the real cause.
+    """
+    return raw.strip().strip('"').strip("'").strip().rstrip("/")
+
+
 def upload_owner_path() -> str:
     """Collection a new video is created in.
 
@@ -67,7 +81,7 @@ def upload_owner_path() -> str:
     which is what keeps replays in the team library rather than in whichever
     personal account issued the token.
     """
-    owner = settings.vimeo_upload_user_uri.strip().rstrip("/")
+    owner = _normalised_uri(settings.vimeo_upload_user_uri)
     return f"{owner}/videos" if owner else "/me/videos"
 
 
@@ -81,7 +95,7 @@ def audit_folder_uri() -> str:
     """
     override = operator_settings.vimeo_audit_folder_uri()
     configured = (override or "").strip() or settings.vimeo_audit_folder_uri
-    return configured.strip().rstrip("/")
+    return _normalised_uri(configured)
 
 
 def _create_upload_record(
@@ -106,8 +120,13 @@ def _create_upload_record(
             params={"fields": "uri,link,player_embed_url,upload"},
         ).json()
     except VimeoError as exc:
-        if path == "/me/videos":
+        if path == "/me/videos" or exc.status is None:
             raise
+        # Only for a refusal Vimeo actually sent — ``status is None`` means the
+        # request never arrived, and advice about token ownership on a timeout
+        # or a DNS failure sends whoever reads it to rotate a credential that
+        # was never the problem.
+        #
         # Vimeo scopes upload permission to the API app, not the token: a token
         # held by a team member still cannot create a video in the team's
         # library unless the app itself belongs to that account. The raw
