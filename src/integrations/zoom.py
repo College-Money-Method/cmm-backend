@@ -156,6 +156,71 @@ def _get_access_token() -> str:
     return str(_token_cache["access_token"])
 
 
+def _writable_question(question: dict) -> dict:
+    """A custom question as Zoom will accept it back.
+
+    Reads and writes are not symmetric: Zoom returns ``answers: []`` on a
+    free-text question but refuses that field on write with
+    ``custom_questions[N].answers: Invalid field``, so the empty list has to go
+    before the question can be echoed back.
+    """
+    return {k: v for k, v in question.items() if k != "answers" or v}
+
+
+def _relax_custom_questions(zoom_webinar_id: str, token: str) -> bool:
+    """Clear ``required`` on a webinar's custom questions. True if anything changed.
+
+    Parents never see Zoom's registration form — they register on the CMM site
+    and we push the result through the API — so ``required`` protects no one. It
+    only decides whether Zoom refuses a push that omits an answer, and we omit
+    constantly: the school dropdown's ``answers`` list is a fixed snapshot while
+    schools keep being added, so a parent from a school missing off it produces
+    no match, the question is dropped, and a required question takes the whole
+    registration down with it.
+
+    Clearing the flag makes the mismatch harmless. Zoom's copy loses the answer;
+    our own tables keep it, and that is the copy the workshop host reads.
+    """
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    url = f"{_ZOOM_API_BASE}/webinars/{zoom_webinar_id}/registrants/questions"
+
+    resp = httpx.get(url, headers=headers, timeout=10.0)
+    if resp.is_error:
+        logger.warning(
+            "Could not read Zoom questions to relax them — webinar=%s %s",
+            zoom_webinar_id,
+            _zoom_refusal(resp),
+        )
+        return False
+
+    config = resp.json()
+    custom = config.get("custom_questions") or []
+    if not any(q.get("required") for q in custom):
+        return False
+
+    patch = httpx.patch(
+        url,
+        headers=headers,
+        json={
+            "questions": config.get("questions") or [],
+            "custom_questions": [
+                _writable_question({**q, "required": False}) for q in custom
+            ],
+        },
+        timeout=10.0,
+    )
+    if patch.is_error:
+        logger.warning(
+            "Could not relax Zoom questions — webinar=%s %s",
+            zoom_webinar_id,
+            _zoom_refusal(patch),
+        )
+        return False
+
+    logger.info("Relaxed required Zoom questions — webinar=%s", zoom_webinar_id)
+    return True
+
+
 def register_webinar(
     zoom_webinar_id: str,
     email: str,
@@ -205,15 +270,29 @@ def register_webinar(
         if custom_questions:
             payload["custom_questions"] = custom_questions
 
-        resp = httpx.post(
-            f"{_ZOOM_API_BASE}/webinars/{zoom_webinar_id}/registrants",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=10.0,
-        )
+        def _post() -> httpx.Response:
+            return httpx.post(
+                f"{_ZOOM_API_BASE}/webinars/{zoom_webinar_id}/registrants",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=10.0,
+            )
+
+        resp = _post()
+
+        # A refusal naming custom_questions means Zoom wanted an answer we had
+        # no match for — a school missing off a stale dropdown, most often. The
+        # registration is sound; only the form standing in front of it is wrong.
+        # Relax the form and send the same payload again, once. The payload does
+        # not carry `required`, so nothing about it needs rebuilding, and a
+        # webinar only has to be relaxed the first time it refuses.
+        if resp.status_code == 400 and "custom_questions" in resp.text:
+            if _relax_custom_questions(zoom_webinar_id, token):
+                resp = _post()
+
         resp.raise_for_status()
         # Zoom answers with the WEBINAR id under "id" and the person's id under
         # "registrant_id". Reading "id" here stamped the webinar id onto every
