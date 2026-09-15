@@ -318,12 +318,57 @@ def test_a_refused_cross_account_create_says_what_the_token_needs(tmp_path, monk
     monkeypatch.setattr(vimeo_upload.settings, "vimeo_upload_user_uri", "/users/151255816")
 
     def fake_request(method, path, **kwargs):
-        raise VimeoError("This app can only upload to the app owner's account")
+        raise VimeoError("This app can only upload to the app owner's account", 403)
 
     monkeypatch.setattr(vimeo_upload, "_request", fake_request)
 
     with pytest.raises(VimeoError, match="OAuth-authorised"):
         vimeo_upload.create_video(source, "Audit")
+
+
+def test_a_create_that_never_reached_vimeo_is_not_blamed_on_the_token(tmp_path, monkeypatch):
+    """A transport failure carries no status, and dressing it up as a
+    permissions problem is expensive: it sends whoever reads it to rotate a
+    credential while the request is failing before it leaves the machine."""
+    source = tmp_path / "trimmed.mp4"
+    source.write_bytes(b"x" * 10)
+    monkeypatch.setattr(vimeo_upload.settings, "vimeo_upload_user_uri", "/users/151255816")
+
+    def fake_request(method, path, **kwargs):
+        raise VimeoError("Could not reach Vimeo: [Errno -2] Name or service not known")
+
+    monkeypatch.setattr(vimeo_upload, "_request", fake_request)
+
+    with pytest.raises(VimeoError) as caught:
+        vimeo_upload.create_video(source, "Audit")
+
+    assert "Name or service not known" in str(caught.value)
+    assert "VIMEO_ACCESS_TOKEN" not in str(caught.value)
+
+
+# ── configured URIs ──────────────────────────────────────────────────────────
+
+
+def test_a_quoted_owner_uri_is_unquoted_rather_than_put_into_the_url(monkeypatch):
+    """These values live in dotenv files, where they are written quoted. A
+    loader that hands the quotes through puts one inside the request URL, which
+    moves the hostname to `api.vimeo.com"` — so the symptom is a DNS failure
+    that names nothing about the configuration that caused it.
+    """
+    monkeypatch.setattr(vimeo_upload.settings, "vimeo_upload_user_uri", '"/users/151255816"')
+
+    assert vimeo_upload.upload_owner_path() == "/users/151255816/videos"
+
+
+def test_a_quoted_audit_folder_uri_is_unquoted_too(monkeypatch):
+    monkeypatch.setattr(vimeo_upload.operator_settings, "vimeo_audit_folder_uri", lambda: "")
+    monkeypatch.setattr(
+        vimeo_upload.settings,
+        "vimeo_audit_folder_uri",
+        '"/users/151255816/projects/30467578"',
+    )
+
+    assert vimeo_upload.audit_folder_uri() == "/users/151255816/projects/30467578"
 
 
 # ── thumbnails ───────────────────────────────────────────────────────────────
