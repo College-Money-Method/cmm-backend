@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Body, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -25,6 +25,7 @@ from src.video_pipeline.schemas import (
     VideoJobDetail,
     VideoJobFrames,
     VideoJobList,
+    VideoRetryRequest,
     VideoRunCreate,
     VideoRunStarted,
 )
@@ -157,17 +158,31 @@ def create_run(payload: VideoRunCreate, _admin: AdminDep, db: DbDep) -> VideoRun
 
 
 @router.post("/jobs/{job_id}/retry", response_model=VideoJobDetail)
-def retry_job(job_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> VideoJobDetail:
-    """Re-arm a failed job and dispatch it if there is capacity.
+def retry_job(
+    job_id: uuid.UUID,
+    _admin: AdminDep,
+    db: DbDep,
+    payload: VideoRetryRequest = Body(default_factory=VideoRetryRequest),
+) -> VideoJobDetail:
+    """Re-arm a job and dispatch it if there is capacity.
 
-    Only `failed` jobs are retryable. An active job is already someone's
-    responsibility, and re-dispatching one would put two tasks on the same
-    recording; a published one has nothing to redo. A job whose archived source
-    has expired is refused for a different reason: there is nothing left to
-    process, so re-arming it would only produce a second identical failure.
+    Only `failed` jobs are retryable by default. An active job is already
+    someone's responsibility, and re-dispatching one would put two tasks on the
+    same recording. A job whose archived source has expired is refused for a
+    different reason: there is nothing left to process, so re-arming it would
+    only produce a second identical failure.
+
+    ``force`` extends this to a `published` job, which has no failure to recover
+    from — it is the operator saying the run succeeded at producing the wrong
+    thing. The re-run keeps the Vimeo video it already uploaded, so the school's
+    page never loses its player; what it redoes is everything that decides the
+    chapters. The archive rule still applies, and an active job is still
+    refused, so force is a narrower door rather than an open one.
     """
     job = _load(db, job_id)
     retryable, blocked_reason = job_views.retry_status(job)
+    if not retryable and payload.force:
+        retryable, blocked_reason = job_views.force_retry_status(job)
     if not retryable:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=blocked_reason)
 

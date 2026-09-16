@@ -263,6 +263,75 @@ def test_a_published_job_says_why_it_cannot_be_retried(client, published_job):
     assert "failed" in body["retry_blocked_reason"]
 
 
+# ── force retry: re-running work that succeeded ──────────────────────────────
+
+
+def test_a_published_job_offers_a_force_retry(client, published_job):
+    """Nothing in the pipeline can tell that chapters landed in the wrong
+    places, so the ordinary retry stays off and this is what an operator who
+    watched the replay has instead."""
+    body = client.get(f"{BASE}/jobs/{published_job.id}").json()
+
+    assert body["retryable"] is False
+    assert body["force_retryable"] is True
+    assert body["force_retry_blocked_reason"] is None
+
+
+def test_force_retry_re_arms_a_published_job(client, published_job, db, monkeypatch):
+    monkeypatch.setattr(task_dispatch, "is_configured", lambda: False)
+
+    response = client.post(f"{BASE}/jobs/{published_job.id}/retry", json={"force": True})
+
+    assert response.status_code == 200
+    db.refresh(published_job)
+    assert published_job.job_state is JobState.PENDING
+    assert published_job.attempt == 1
+    # The video stays: the re-run reuses it, so the school's page keeps its
+    # player and no duplicate lands in the Vimeo library.
+    assert published_job.vimeo_video_id == published_job.vimeo_video_id
+
+
+def test_a_published_job_is_not_re_armed_without_the_force_flag(client, published_job, db):
+    """The plain retry is recovery from a failure. Silently widening it to mean
+    "discard finished work" would make the ordinary button dangerous."""
+    assert client.post(f"{BASE}/jobs/{published_job.id}/retry").status_code == 409
+
+    db.refresh(published_job)
+    assert published_job.job_state is JobState.PUBLISHED
+
+
+def test_force_retry_is_refused_once_the_archived_source_has_expired(client, published_job, db):
+    """Publishing deleted the Zoom copy, so the archive is the only source left."""
+    published_job.archive_expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+    db.commit()
+
+    detail = client.get(f"{BASE}/jobs/{published_job.id}").json()
+    assert detail["force_retryable"] is False
+    assert "expired" in detail["force_retry_blocked_reason"]
+
+    assert (
+        client.post(f"{BASE}/jobs/{published_job.id}/retry", json={"force": True}).status_code
+        == 409
+    )
+    db.refresh(published_job)
+    assert published_job.job_state is JobState.PUBLISHED
+
+
+def test_force_retry_does_not_reach_a_job_that_is_still_running(client, db, webinar):
+    """An ECS task may still be alive on this recording; a second one would
+    process it twice."""
+    job, _ = job_service.create_from_recording(
+        db, webinar_id=webinar.id, zoom_recording_uuid="rec-running-force"
+    )
+    job_service.advance(db, job, JobState.PROCESSING)
+
+    assert client.post(f"{BASE}/jobs/{job.id}/retry", json={"force": True}).status_code == 409
+
+    detail = client.get(f"{BASE}/jobs/{job.id}").json()
+    assert detail["force_retryable"] is False
+    assert "published" in detail["force_retry_blocked_reason"]
+
+
 # ── starting a run by hand ───────────────────────────────────────────────────
 
 

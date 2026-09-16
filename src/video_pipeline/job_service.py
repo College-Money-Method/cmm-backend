@@ -160,7 +160,11 @@ def requeue(db: Session, job: WebinarVideoJob, reason: str) -> WebinarVideoJob:
 
 
 def retry(db: Session, job: WebinarVideoJob) -> WebinarVideoJob:
-    """Re-arm a failed job: back to `pending`, attempt incremented, slate cleared.
+    """Re-arm a job: back to `pending`, attempt incremented, slate cleared.
+
+    Used for a failed job and, when an operator forces it, for a published one
+    whose output was wrong. Which of those is allowed is decided by the caller
+    (``router.retry_job``); the re-arming itself is the same either way.
 
     ``failed_notified_at`` is cleared deliberately — if this attempt fails too,
     that is a new failure and ops should hear about it again. The stage timeline

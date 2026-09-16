@@ -7,8 +7,8 @@ the only place it is called.
 
 Ownership across the state machine:
 
-    pending ──► processing ──► chaptering ──► published
-       ▲    │        │  │           │
+    pending ──► processing ──► chaptering ──► published ──┐
+       ▲    │        │  │           │                      │ (force retry)
        │    └────────┴──┴───────────┴───────► failed ──► pending  (retry)
        └─────────────┘  (requeue: the source was not ready yet)
 
@@ -21,6 +21,13 @@ not booted yet. ``chaptering`` and ``published`` are owned by the API.
 ``failed`` is reachable from every active state and leaves
 ``webinars.video_embed_code`` untouched, so a failed run degrades to "no replay
 yet" rather than to a broken one.
+
+``published -> pending`` exists for the admin screen's force retry and nothing
+else. A published job is finished as far as the pipeline is concerned, so no
+automatic path leads back out of it; an operator who can see the published
+chapters are wrong is the only thing that makes re-running worthwhile, and the
+re-run reuses the Vimeo video it already has rather than publishing a second
+one. ``router.retry_job`` is what gates it.
 
 ``processing -> pending`` is the one way back. A task that finds the source not
 yet available has done no work and holds a slot it cannot use, so it gives the
@@ -50,14 +57,17 @@ ACTIVE_STATES: frozenset[JobState] = frozenset(
     {JobState.PENDING, JobState.PROCESSING, JobState.CHAPTERING}
 )
 
-# The one state a job never leaves. `failed` is not terminal: retry re-arms it.
+# Where a job comes to rest on its own. `failed` is not terminal either — retry
+# re-arms it — and `published` is only terminal until an operator forces a
+# re-run, which no part of the pipeline does by itself.
 TERMINAL_STATES: frozenset[JobState] = frozenset({JobState.PUBLISHED})
 
 LEGAL_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
     JobState.PENDING: frozenset({JobState.PROCESSING, JobState.FAILED}),
     JobState.PROCESSING: frozenset({JobState.CHAPTERING, JobState.FAILED, JobState.PENDING}),
     JobState.CHAPTERING: frozenset({JobState.PUBLISHED, JobState.FAILED}),
-    JobState.PUBLISHED: frozenset(),
+    # Only a force retry, driven by an operator, takes this edge.
+    JobState.PUBLISHED: frozenset({JobState.PENDING}),
     # Retry is the only way out of `failed`, and it goes back to the start.
     JobState.FAILED: frozenset({JobState.PENDING}),
 }

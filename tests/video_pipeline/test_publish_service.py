@@ -281,18 +281,16 @@ def _downloads(monkeypatch) -> list[str]:
     return asked
 
 
-def test_only_the_frames_near_a_section_boundary_are_read(
-    db, job, artefacts, sections, vimeo_ok, monkeypatch
-):
-    """The narrowing is the whole point: a frame far from any boundary describes
-    a slide inside a section, and promoting it is what produced too many
-    chapters."""
+def test_every_sampled_frame_is_read(db, job, artefacts, sections, vimeo_ok, monkeypatch):
+    """A card can only name a section that was downloaded. Narrowing the
+    download to the transcript's boundaries is what hid one on a real
+    recording — the deck is the authority now, so the deck gets read."""
     asked = _downloads(monkeypatch)
     sections.append(topic_segment.Section(start=300.0, kind=topic_segment.CONTENT, label="Aid"))
 
     publish(db, job)
 
-    assert asked == ["frame_0002.jpg"]
+    assert asked == ["frame_0001.jpg", "frame_0002.jpg"]
 
 
 def test_the_transcript_decides_the_boundaries_and_the_deck_names_them(
@@ -314,20 +312,36 @@ def test_the_transcript_decides_the_boundaries_and_the_deck_names_them(
     ]
 
 
-def test_windows_that_catch_no_frame_fall_back_to_the_whole_recording(
+def test_a_card_far_from_every_boundary_still_names_its_chapter(
     db, job, artefacts, sections, vimeo_ok, monkeypatch
 ):
-    """Sections the sampler kept nothing near leave the chapters untitled. Reading
-    every frame is the slower answer, not a wrong one."""
-    asked = _downloads(monkeypatch)
-    sections.append(topic_segment.Section(start=2000.0, kind=topic_segment.CONTENT, label="Aid"))
+    """The failure this replaced: the presenter opened the topic minutes before
+    advancing the slide, so no window reached the card, so it was never
+    downloaded — and the chapter went out carrying the model's paraphrase."""
+    sections += [
+        topic_segment.Section(start=0.0, kind=topic_segment.INTRODUCTION, label="Welcome"),
+        topic_segment.Section(start=300.0, kind=topic_segment.CONTENT, label="merit aid"),
+    ]
+    monkeypatch.setattr(
+        publish_service,
+        "classify_frames",
+        lambda candidates: [
+            Classified(index=1, timestamp=0.0, file="frame_0001.jpg", type=SPEAKER, heading=""),
+            Classified(
+                index=2,
+                timestamp=900.0,
+                file="frame_0002.jpg",
+                type=TITLE_CARD,
+                heading="Applying for college merit aid",
+            ),
+        ],
+    )
 
     publish(db, job)
 
-    assert asked == ["frame_0001.jpg", "frame_0002.jpg"]
-    assert [(c["timecode"], c["title"]) for c in job.chapters] == [
-        (0, "Introduction"),
-        (300, "The Aid Formula"),
+    assert [(c["timecode"], c["title"], c["source"]) for c in job.chapters] == [
+        (0, "Introduction", "intro"),
+        (900, "Applying for college merit aid", "title_card"),
     ]
 
 
