@@ -60,16 +60,16 @@ def _video_ref(job: WebinarVideoJob) -> str:
     return f"{job.vimeo_video_id}:{job.vimeo_hash}" if job.vimeo_hash else job.vimeo_video_id
 
 
-def _fetch_frames(
-    prefix: str, work_dir: Path, spans: list[tuple[float, float]] | None = None
-) -> list[Candidate]:
+def _fetch_frames(prefix: str, work_dir: Path) -> list[Candidate]:
     """Download the classifiable frames named in ``candidates.json``.
 
-    ``spans`` narrows the download to the windows around transcript boundaries,
-    which is where the frames are actually read. Filtering before the download
-    rather than before the vision call is deliberate: the sampler emits a frame
-    per visual change across the whole recording, and most of them describe a
-    presenter's head, not a section.
+    Every one of them. The download used to be narrowed to windows around the
+    transcript's section boundaries, which was cheaper but made the transcript
+    the only thing that could find a section: a title card outside every window
+    was never fetched, so it could not be classified and could not name
+    anything. The deck decides the chapters now, and a card can only decide what
+    was read. The sampler's own ceiling (`video_max_sample_frames`) is what
+    bounds the cost.
 
     The manifest's opening ``0.0`` entry has no file — it is an anchor for the
     chapter builder, not a frame — so it is skipped here.
@@ -83,17 +83,14 @@ def _fetch_frames(
         filename = entry.get("file")
         if not filename:
             continue
-        timestamp = float(entry["timestamp"])
-        if spans is not None and not section_chapters.in_any_window(timestamp, spans):
-            continue
         candidates.append(
             Candidate(
                 index=int(entry["index"]),
-                timestamp=timestamp,
+                timestamp=float(entry["timestamp"]),
                 path=artifact_store.download_frame(prefix, filename, work_dir / filename),
             )
         )
-    if not candidates and spans is None:
+    if not candidates:
         raise PublishError(f"No frames to classify under {prefix}")
     return candidates
 
@@ -133,10 +130,10 @@ def _assemble(
 ) -> tuple[list[Chapter], bool]:
     """Build the chapter list, cross-check it, and apply the cap.
 
-    With sections, the transcript decides the boundaries and the frames only
-    title them. Without, the frames segment the recording as they always did,
-    under a minimum-length floor — the crude stand-in for the judgement the
-    transcript would have made.
+    With sections, the deck's title cards are the boundaries and the transcript
+    fills in the segments it never titled. Without, the frames segment the
+    recording as they always did, under a minimum-length floor — the crude
+    stand-in for the judgement the transcript would have made.
 
     Built uncapped so the cap can report whether it actually dropped anything.
     """
@@ -217,23 +214,13 @@ def publish(db: Session, job: WebinarVideoJob) -> WebinarVideoJob:
         stage_progress.record(db, job, stage_progress.LOADING_ARTIFACTS)
         cues = _load_cues(job.frames_prefix)
 
-        # The transcript is read before the frames because it decides which
-        # frames are worth reading at all.
+        # The transcript supplies the segments the deck never titles, and the
+        # opening boundary that decides which cards are dividers rather than the
+        # session's own title slide.
         stage_progress.record(db, job, stage_progress.SEGMENTING_TRANSCRIPT)
         sections = topic_segment.detect_sections(cues)
-        spans = section_chapters.windows(sections) if sections else None
 
-        candidates = _fetch_frames(job.frames_prefix, Path(tmp), spans)
-        if spans is not None and not candidates:
-            # The windows landed where the sampler kept nothing. Reading every
-            # frame is the slower answer, not a wrong one.
-            logger.warning(
-                "no sampled frame falls inside any section window for job %s — "
-                "classifying the whole recording instead",
-                job.id,
-            )
-            sections = []
-            candidates = _fetch_frames(job.frames_prefix, Path(tmp))
+        candidates = _fetch_frames(job.frames_prefix, Path(tmp))
 
         stage_progress.record(db, job, stage_progress.CLASSIFYING_FRAMES)
         frames = _classify(candidates)

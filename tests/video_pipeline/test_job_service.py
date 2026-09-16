@@ -133,6 +133,23 @@ def test_retry_rearms_a_failed_job(db, webinar, monkeypatch):
     assert job.failed_notified_at is None
 
 
+def test_requeue_hands_a_slot_back_without_failing_the_job(db, webinar):
+    """A task that found no source yet has done nothing worth keeping, so it
+    goes back to `pending` for the sweeper rather than to `failed` for an admin."""
+    job, _ = job_service.create_from_recording(
+        db, webinar_id=webinar.id, zoom_recording_uuid=RECORDING_UUID
+    )
+    job_service.advance(db, job, JobState.PROCESSING, ecs_task_arn="arn:task/1")
+
+    job_service.requeue(db, job, "Waiting for Zoom to finish processing the recording")
+
+    assert job.state == JobState.PENDING.value
+    assert job.attempt == 1
+    assert job.ecs_task_arn is None
+    # Kept, not cleared: half an hour of this should be visible on the screen.
+    assert "Waiting for Zoom" in job.error
+
+
 def test_in_flight_count_covers_only_processing(db, webinar):
     """`chaptering` runs inside the API and occupies no ECS task slot."""
     states = [

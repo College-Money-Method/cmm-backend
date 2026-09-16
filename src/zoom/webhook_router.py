@@ -1,5 +1,5 @@
 """Zoom webhook handler — URL validation, webinar.ended attendance sync,
-recording.completed video pipeline trigger."""
+recording video pipeline triggers."""
 
 from __future__ import annotations
 
@@ -22,6 +22,19 @@ router = APIRouter(prefix="/api/v1/zoom", tags=["zoom-webhooks"])
 
 # Delays (seconds) between retry attempts when Zoom report isn't ready yet
 _RETRY_DELAYS = [0, 900, 1800]  # 0 min, 15 min, 30 min
+
+# Both events mean "there is a recording worth publishing", and both carry the
+# same object identifiers, so both go through the same idempotent intake.
+#
+# `transcript_completed` is here as a second chance rather than a better signal.
+# Zoom acknowledges `recording.completed` can misfire, and a delivery it drops
+# would otherwise wait for the hourly reconcile sweep. It also arrives strictly
+# after the video files are processed, so a job created by it never meets the
+# "still being processed" refusal that a job created by the earlier event can.
+#
+# It does not fire at all when the account has audio transcripts switched off,
+# which is why it can only ever be an addition to `recording.completed`.
+_RECORDING_EVENTS = ("recording.completed", "recording.transcript_completed")
 
 
 def _verify_signature(raw_body: bytes, timestamp: str, signature: str) -> bool:
@@ -69,7 +82,9 @@ async def _sync_with_retry(zoom_webinar_id: str) -> None:
     )
 
 
-def _schedule_recording_intake(payload: dict, background_tasks: BackgroundTasks) -> None:
+def _schedule_recording_intake(
+    payload: dict, background_tasks: BackgroundTasks, event: str
+) -> None:
     """Queue video pipeline intake for a finished cloud recording.
 
     ``object.uuid`` is the per-instance recording UUID and the pipeline's
@@ -82,17 +97,25 @@ def _schedule_recording_intake(payload: dict, background_tasks: BackgroundTasks)
     The webhook's ``download_token`` is deliberately ignored rather than
     persisted: the task re-fetches a fresh download URL over S2S OAuth, which
     leaves no Zoom credential at rest.
+
+    Intake is idempotent on the recording UUID, which is what lets both
+    recording events arrive here. The second one to land finds the job already
+    made and does nothing — deliberately including no re-dispatch of a job still
+    waiting in `pending`. The sweeper is the one process that dispatches those,
+    and a webhook that raced it would put two ECS tasks on one recording, which
+    is the failure this pipeline has already been bitten by once.
     """
     obj = payload.get("payload", {}).get("object", {})
     recording_uuid = str(obj.get("uuid") or "")
     zoom_webinar_id = str(obj.get("id") or "")
 
     if not recording_uuid or not zoom_webinar_id:
-        logger.warning("recording.completed payload missing object.uuid/object.id — payload=%s", payload)
+        logger.warning("%s payload missing object.uuid/object.id — payload=%s", event, payload)
         return
 
     logger.info(
-        "recording.completed received — scheduling video job intake webinar=%s recording=%s",
+        "%s received — scheduling video job intake webinar=%s recording=%s",
+        event,
         zoom_webinar_id,
         recording_uuid,
     )
@@ -107,7 +130,8 @@ async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
     Handles:
     - ``endpoint.url_validation``: Zoom challenge-response to activate the subscription.
     - ``webinar.ended``: kicks off an async attendance sync (with retries for report delay).
-    - ``recording.completed``: creates and dispatches a webinar video pipeline job.
+    - ``recording.completed`` and ``recording.transcript_completed``: create and
+      dispatch a webinar video pipeline job, idempotently on the recording UUID.
     """
     raw_body = await request.body()
     payload = json.loads(raw_body)
@@ -139,15 +163,15 @@ async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
         else:
             logger.warning("webinar.ended payload missing object.id — payload=%s", payload)
 
-    elif event == "recording.completed":
+    elif event in _RECORDING_EVENTS:
         # Never let a handler error reach the response. Zoom disables an
         # endpoint that returns non-2xx repeatedly, and losing the webhook
         # entirely is far worse than losing one recording to the hourly
         # reconcile sweep, which would pick this up anyway.
         try:
-            _schedule_recording_intake(payload, background_tasks)
+            _schedule_recording_intake(payload, background_tasks, event)
         except Exception as exc:
-            logger.exception("recording.completed handling failed — error=%s", exc)
+            logger.exception("%s handling failed — error=%s", event, exc)
 
     # Always return 200 so Zoom doesn't retry unhandled event types
     return {"status": "ok"}

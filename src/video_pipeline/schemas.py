@@ -93,6 +93,12 @@ class VideoJobDetail(VideoJobSummary):
     # a reason beside it.
     retryable: bool = False
     retry_blocked_reason: str | None = None
+    # The same pair for the force retry, which re-runs a *published* job whose
+    # output an operator judged wrong. Separate fields rather than a widened
+    # `retryable` so the screen can keep the two apart: one is recovery from a
+    # failure, the other is discarding work that succeeded.
+    force_retryable: bool = False
+    force_retry_blocked_reason: str | None = None
     # The whole timeline, in order. Each stage lasted until the next one began,
     # so the screen derives per-step durations from this alone.
     stage_events: list[VideoJobStageEvent] = Field(default_factory=list)
@@ -100,6 +106,17 @@ class VideoJobDetail(VideoJobSummary):
     # the job, not of the screen: an audit run never deletes the Zoom recording
     # or writes an embed code, and rendering those as pending would be a lie.
     stage_plan: list[str] = Field(default_factory=list)
+
+
+class VideoRetryRequest(BaseModel):
+    """Body of a retry. Empty means the ordinary retry of a failed job.
+
+    ``force`` is what lets a *published* job be re-run: the state check it skips
+    is the one protecting finished work, so it is an explicit flag rather than a
+    separate endpoint that could be called by accident.
+    """
+
+    force: bool = False
 
 
 class VideoRunCreate(BaseModel):

@@ -85,8 +85,31 @@ def retry_status(job: WebinarVideoJob) -> tuple[bool, str | None]:
     return True, None
 
 
+def force_retry_status(job: WebinarVideoJob) -> tuple[bool, str | None]:
+    """Whether a published job can be re-run by hand, and why not when it cannot.
+
+    The ordinary retry is for a job that broke. This is for one that finished
+    and finished wrongly — chapters cut in the wrong places, a trim that ate the
+    opening — which nothing in the pipeline can detect and only an operator
+    watching the replay ever will.
+
+    Offered for `published` alone. An active job is already someone's
+    responsibility and re-arming it would put a second task on the same
+    recording; a failed one has the ordinary retry. The archive rule is the same
+    as retry's and for the same reason: with the original gone there is nothing
+    left to re-process, and the Zoom copy was deleted the moment this job
+    published.
+    """
+    if job.job_state is not JobState.PUBLISHED:
+        return False, f"Only published jobs can be force-retried (job is '{job.state}')"
+    if archive_expired(job):
+        return False, "The archived source has expired — retry can no longer fetch it"
+    return True, None
+
+
 def to_detail(job: WebinarVideoJob) -> VideoJobDetail:
     retryable, blocked_reason = retry_status(job)
+    force_retryable, force_blocked_reason = force_retry_status(job)
     return VideoJobDetail(
         **to_summary(job).model_dump(),
         ecs_task_arn=job.ecs_task_arn,
@@ -100,6 +123,8 @@ def to_detail(job: WebinarVideoJob) -> VideoJobDetail:
         frames_prefix=job.frames_prefix,
         retryable=retryable,
         retry_blocked_reason=blocked_reason,
+        force_retryable=force_retryable,
+        force_retry_blocked_reason=force_blocked_reason,
         stage_events=stage_progress.events_of(job),
         stage_plan=stage_progress.expected_stages(job),
     )

@@ -134,8 +134,37 @@ def fail(db: Session, job: WebinarVideoJob, error: str) -> WebinarVideoJob:
     return job
 
 
+def requeue(db: Session, job: WebinarVideoJob, reason: str) -> WebinarVideoJob:
+    """Hand a `processing` job back to the queue without counting it as failed.
+
+    For a task that could not start: the source was not there yet. It has done
+    no work, so the slot it holds is worth more to another job than to itself,
+    and the sweeper will dispatch it again on its next pass.
+
+    ``attempt`` is incremented because that is what bounds the waiting — nothing
+    else distinguishes the fifth wait from the first. ``error`` carries the
+    reason rather than being cleared: a job that has been going round this loop
+    for half an hour should say so on the monitoring screen, and `pending` does
+    not alert anyone.
+    """
+    logger.info("Video job requeued — job=%s attempt=%d reason=%s", job.id, job.attempt, reason)
+    return advance(
+        db,
+        job,
+        JobState.PENDING,
+        attempt=job.attempt + 1,
+        error=reason[:4000],
+        ecs_task_arn=None,
+        stage_events=stage_progress.initial(),
+    )
+
+
 def retry(db: Session, job: WebinarVideoJob) -> WebinarVideoJob:
-    """Re-arm a failed job: back to `pending`, attempt incremented, slate cleared.
+    """Re-arm a job: back to `pending`, attempt incremented, slate cleared.
+
+    Used for a failed job and, when an operator forces it, for a published one
+    whose output was wrong. Which of those is allowed is decided by the caller
+    (``router.retry_job``); the re-arming itself is the same either way.
 
     ``failed_notified_at`` is cleared deliberately — if this attempt fails too,
     that is a new failure and ops should hear about it again. The stage timeline
