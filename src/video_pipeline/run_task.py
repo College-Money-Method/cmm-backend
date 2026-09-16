@@ -15,6 +15,11 @@ The fail-safe wrapper is the point. A task that exits on an unhandled exception
 leaves a job stuck in `processing` until the sweeper times it out 90 minutes
 later, with no reason recorded anywhere an admin can see. Catching here means
 every ending is written down.
+
+One ending is not a failure. Zoom fires ``recording.completed`` when it has
+finished recording, which can be minutes ahead of the files being fetchable, so
+a job dispatched straight off the webhook regularly arrives before its source
+does. That run is put back in the queue instead of failed — see ``_wait_again``.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from src.db.base import get_session_factory
 from src.video_pipeline import job_service, process_recording
 from src.video_pipeline.models import WebinarVideoJob
 from src.video_pipeline.states import JobState
+from src.video_pipeline.zoom_recording_fetch import RecordingNotReadyError
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +67,30 @@ def _claim(db, job: WebinarVideoJob) -> bool:
     return False
 
 
+# How many times a job may be put back for a source that is not ready yet. The
+# sweeper dispatches `pending` every five minutes, so this is roughly an hour of
+# waiting — well past Zoom's own "a few minutes", and short of the point where
+# something other than transcoding is wrong and ops should hear about it.
+_MAX_SOURCE_WAITS = 12
+
+
+def _wait_again(db, job: WebinarVideoJob, exc: RecordingNotReadyError) -> bool:
+    """Put ``job`` back in the queue, unless it has waited long enough already.
+
+    Returns True when the job was requeued, False when the caller should treat
+    this as a failure like any other.
+    """
+    if job.attempt >= _MAX_SOURCE_WAITS:
+        logger.warning(
+            "Job %s has waited %d times for Zoom to finish processing — failing",
+            job.id,
+            job.attempt,
+        )
+        return False
+    job_service.requeue(db, job, f"Waiting for Zoom to finish processing the recording — {exc}")
+    return True
+
+
 def run(job_id: str) -> int:
     """Process one job. Returns a process exit code."""
     SessionLocal = get_session_factory()
@@ -77,6 +107,20 @@ def run(job_id: str) -> int:
             process_recording.process(db, job, Path(tmp))
         logger.info("Job %s finished processing", job.id)
         return 0
+
+    except RecordingNotReadyError as exc:
+        # Not a failure and not worth a traceback: the run was simply early.
+        logger.info("Job %s cannot start yet — %s", job_id, exc)
+        try:
+            job = db.get(WebinarVideoJob, uuid.UUID(job_id))
+            if job is not None and job.job_state in (JobState.PROCESSING, JobState.PENDING):
+                db.rollback()
+                if _wait_again(db, job, exc):
+                    return 0
+                job_service.fail(db, job, str(exc))
+        except Exception:
+            logger.exception("Could not requeue job %s", job_id)
+        return 1
 
     except Exception as exc:
         logger.exception("Job %s failed: %s", job_id, exc)

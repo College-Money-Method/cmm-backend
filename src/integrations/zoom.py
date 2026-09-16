@@ -22,9 +22,15 @@ class ZoomApiError(RuntimeError):
     result, and the operator-facing message picked one of them at random.
     """
 
-    def __init__(self, message: str, status_code: int | None = None) -> None:
+    def __init__(
+        self, message: str, status_code: int | None = None, code: int | None = None
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        # Zoom's own error code, which is finer-grained than the HTTP status: a
+        # recording that is still transcoding and one that never existed are
+        # both 404, and only this tells them apart.
+        self.code = code
 
 
 def _zoom_refusal(resp: httpx.Response) -> str:
@@ -45,6 +51,15 @@ def _zoom_refusal(resp: httpx.Response) -> str:
     if not detail:
         detail = resp.text[:300].strip() or "no detail"
     return f"HTTP {resp.status_code}" + (f" (code {code})" if code else "") + f": {detail}"
+
+
+def _zoom_error_code(resp: httpx.Response) -> int | None:
+    """Zoom's numeric error code, when the body carries one a caller can act on."""
+    try:
+        code = resp.json().get("code")
+    except Exception:
+        return None
+    return int(code) if isinstance(code, int) else None
 
 
 # Zoom rejects a custom-question answer longer than this with
@@ -603,7 +618,9 @@ def get_recording(recording_uuid: str) -> dict | None:
     except httpx.HTTPStatusError as exc:
         refusal = _zoom_refusal(exc.response)
         logger.warning("Zoom get_recording failed — recording=%s %s", recording_uuid, refusal)
-        raise ZoomApiError(refusal, exc.response.status_code) from exc
+        raise ZoomApiError(
+            refusal, exc.response.status_code, _zoom_error_code(exc.response)
+        ) from exc
     except Exception as exc:
         logger.warning("Zoom get_recording failed — recording=%s error=%s", recording_uuid, exc)
         raise ZoomApiError(f"{type(exc).__name__}: {exc}") from exc

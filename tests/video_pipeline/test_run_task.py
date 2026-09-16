@@ -17,6 +17,7 @@ import pytest
 
 from src.video_pipeline import job_service, run_task
 from src.video_pipeline.states import JobState
+from src.video_pipeline.zoom_recording_fetch import RecordingNotReadyError
 
 RECORDING_UUID = "zZ9/yY8+xX7=="
 
@@ -96,6 +97,45 @@ def test_an_exception_is_recorded_on_the_job_rather_than_just_raised(wired, db, 
     assert "ffmpeg exited 1" in refreshed.error
     # The traceback goes with it — "ffmpeg exited 1" alone does not say where.
     assert "Traceback" in refreshed.error
+
+
+def _not_ready(*a, **kw):
+    raise RecordingNotReadyError("Zoom is still processing the recording rec-1")
+
+
+def test_a_source_that_is_not_ready_yet_goes_back_in_the_queue(wired, db, job, monkeypatch):
+    """Zoom fires `recording.completed` before the files are fetchable, so the
+    first task off the webhook regularly arrives early. That is not a failure —
+    failing it would mean a replay that never publishes without a human."""
+    monkeypatch.setattr(run_task.process_recording, "process", _not_ready)
+    monkeypatch.setattr(
+        "src.video_pipeline.notify.notify_failure",
+        lambda *a, **kw: pytest.fail("ops must not be paged for a recording that is merely early"),
+    )
+
+    # Exit 0: ECS must not count this as a task failure.
+    assert run_task.run(str(job.id)) == 0
+
+    db.expire_all()
+    refreshed = db.get(type(job), job.id)
+    assert refreshed.job_state is JobState.PENDING
+    assert refreshed.attempt == 1
+    assert "still processing" in refreshed.error
+
+
+def test_waiting_for_the_source_does_not_go_on_forever(wired, db, job, monkeypatch):
+    """A recording that is still not there an hour later is not slow, it is
+    wrong, and the run has to end somewhere an admin can see it."""
+    job.attempt = run_task._MAX_SOURCE_WAITS
+    db.commit()
+    monkeypatch.setattr(run_task.process_recording, "process", _not_ready)
+
+    assert run_task.run(str(job.id)) == 1
+
+    db.expire_all()
+    refreshed = db.get(type(job), job.id)
+    assert refreshed.job_state is JobState.FAILED
+    assert "still processing" in refreshed.error
 
 
 def test_recorded_error_is_bounded(wired, db, job, monkeypatch):

@@ -27,8 +27,26 @@ _DOWNLOAD_TIMEOUT = httpx.Timeout(60.0, read=300.0)
 _STREAM_CHUNK = 8 * 1024 * 1024
 
 
+# Zoom's code for "the recording exists, the cloud has not finished making it
+# available yet". It arrives as a 404, the same status as a recording that was
+# deleted or never existed, so the code is the only thing separating "come back
+# later" from "give up".
+_STILL_PROCESSING = 3301
+
+
 class RecordingFetchError(RuntimeError):
     """The recording could not be resolved or downloaded."""
+
+
+class RecordingNotReadyError(RecordingFetchError):
+    """Zoom has the recording but is still processing it.
+
+    Its own subclass because the caller's response is different in kind: this
+    is not a run that failed, it is a run that started too early. Zoom fires
+    ``recording.completed`` when it finishes *recording*, which can be minutes
+    ahead of the files being fetchable, so a job dispatched straight off the
+    webhook routinely arrives before the source does.
+    """
 
 
 @dataclass(frozen=True)
@@ -152,6 +170,10 @@ def fetch_recording(recording_uuid: str, work_dir: Path) -> FetchedRecording:
         # Zoom said why. Repeating it verbatim is the whole value: "no recording"
         # sent an operator looking for a deleted file when the real answer was a
         # scope the Server-to-Server app had never been granted.
+        if exc.code == _STILL_PROCESSING:
+            raise RecordingNotReadyError(
+                f"Zoom is still processing the recording {recording_uuid} — {exc}"
+            ) from exc
         raise RecordingFetchError(f"Zoom refused the recording {recording_uuid} — {exc}") from exc
     if payload is None:
         raise RecordingFetchError(

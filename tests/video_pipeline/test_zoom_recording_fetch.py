@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import pytest
 
+from src.integrations import zoom
+from src.video_pipeline import zoom_recording_fetch
 from src.video_pipeline.zoom_recording_fetch import (
     RecordingFetchError,
+    RecordingNotReadyError,
+    fetch_recording,
     select_transcript_file,
     select_video_file,
 )
@@ -170,3 +174,31 @@ def test_transcript_selected_by_type():
 def test_missing_transcript_returns_none_rather_than_raising():
     """Audio transcript is an account setting — absent is a state, not a failure."""
     assert select_transcript_file(_payload({"id": "a", "file_type": "MP4"})) is None
+
+
+def _refusing(exc: zoom.ZoomApiError, monkeypatch):
+    monkeypatch.setattr(
+        zoom_recording_fetch.zoom, "get_recording", lambda uuid_: (_ for _ in ()).throw(exc)
+    )
+
+
+def test_a_recording_zoom_is_still_processing_is_not_a_failure(monkeypatch, tmp_path):
+    """Zoom answers 404 both for "still transcoding" and for "gone", so only its
+    own error code can tell the caller to come back later rather than give up."""
+    _refusing(
+        zoom.ZoomApiError("HTTP 404 (code 3301): This recording is still being processed", 404, 3301),
+        monkeypatch,
+    )
+
+    with pytest.raises(RecordingNotReadyError):
+        fetch_recording("rec-1", tmp_path)
+
+
+def test_any_other_refusal_stays_a_plain_failure(monkeypatch, tmp_path):
+    """A recording that was deleted, or a scope that was never granted, arrives
+    as the same 404 and must still end the run instead of looping on it."""
+    _refusing(zoom.ZoomApiError("HTTP 404 (code 3001): meeting not found", 404, 3001), monkeypatch)
+
+    with pytest.raises(RecordingFetchError) as caught:
+        fetch_recording("rec-1", tmp_path)
+    assert not isinstance(caught.value, RecordingNotReadyError)

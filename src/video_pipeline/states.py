@@ -8,8 +8,9 @@ the only place it is called.
 Ownership across the state machine:
 
     pending ──► processing ──► chaptering ──► published
-       │            │              │
-       └────────────┴──────────────┴────────► failed ──► pending  (retry)
+       ▲    │        │  │           │
+       │    └────────┴──┴───────────┴───────► failed ──► pending  (retry)
+       └─────────────┘  (requeue: the source was not ready yet)
 
 ``pending`` is written by intake (webhook or reconcile). ``processing`` is
 written at ECS dispatch and owned by the task for its duration — the transition
@@ -20,6 +21,12 @@ not booted yet. ``chaptering`` and ``published`` are owned by the API.
 ``failed`` is reachable from every active state and leaves
 ``webinars.video_embed_code`` untouched, so a failed run degrades to "no replay
 yet" rather than to a broken one.
+
+``processing -> pending`` is the one way back. A task that finds the source not
+yet available has done no work and holds a slot it cannot use, so it gives the
+slot back and lets the sweeper try again later. It is deliberately not a
+general-purpose escape hatch: a task that has started processing must go on to
+`chaptering` or `failed`, because by then there is output to account for.
 """
 
 from __future__ import annotations
@@ -48,7 +55,7 @@ TERMINAL_STATES: frozenset[JobState] = frozenset({JobState.PUBLISHED})
 
 LEGAL_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
     JobState.PENDING: frozenset({JobState.PROCESSING, JobState.FAILED}),
-    JobState.PROCESSING: frozenset({JobState.CHAPTERING, JobState.FAILED}),
+    JobState.PROCESSING: frozenset({JobState.CHAPTERING, JobState.FAILED, JobState.PENDING}),
     JobState.CHAPTERING: frozenset({JobState.PUBLISHED, JobState.FAILED}),
     JobState.PUBLISHED: frozenset(),
     # Retry is the only way out of `failed`, and it goes back to the start.
