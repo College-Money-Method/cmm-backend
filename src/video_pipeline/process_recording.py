@@ -18,6 +18,7 @@ message on the job row.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -48,11 +49,14 @@ class SamplingError(RuntimeError):
     """The sampling pass produced a candidate set the pipeline refuses to use."""
 
 
-def _download_source(job: WebinarVideoJob, work_dir: Path) -> tuple[Path, Path | None, int]:
+def _download_source(
+    job: WebinarVideoJob, work_dir: Path
+) -> tuple[Path, Path | None, int, datetime | None]:
     """Fetch the source from wherever this job's descriptor points.
 
-    A URL source reports no duration — it is probed from the file after
-    trimming — and carries no transcript of its own, so it has one only if the
+    A URL source reports no duration and no recording start — the duration is
+    probed from the file after trimming, and nobody knows when a pasted file was
+    recorded — and carries no transcript of its own, so it has one only if the
     operator supplied a URL for it. An operator-supplied transcript wins over
     Zoom's, which is how a recording whose account had transcription switched
     off gets chaptered from speech rather than from frames alone.
@@ -67,13 +71,14 @@ def _download_source(job: WebinarVideoJob, work_dir: Path) -> tuple[Path, Path |
 
     if job.source_url:
         video = url_recording_fetch.fetch_from_url(job.source_url, work_dir / "source.mp4")
-        return video, operator_transcript, 0
+        return video, operator_transcript, 0, None
 
     fetched = fetch_recording(job.zoom_recording_uuid, work_dir)
     return (
         fetched.video_path,
         operator_transcript or fetched.transcript_path,
         fetched.duration_seconds,
+        fetched.recording_start,
     )
 
 
@@ -90,13 +95,20 @@ def _acquire_source(db: Session, job: WebinarVideoJob, work_dir: Path) -> tuple[
         logger.info("Re-running job %s from the S3 archive", job.id)
         return archive_original.restore_original(job.archive_key, work_dir)
 
-    video_path, transcript_path, duration_seconds = _download_source(job, work_dir)
+    video_path, transcript_path, duration_seconds, recording_start = _download_source(
+        job, work_dir
+    )
     stage_progress.record(db, job, stage_progress.ARCHIVING_SOURCE)
     prefix = archive_original.archive_original(str(job.id), video_path, transcript_path)
     job.archive_key = prefix
     job.archive_expires_at = archive_original.expires_at()
     if duration_seconds:
         job.source_duration_seconds = duration_seconds
+    # Only Zoom supplies this, and only on the download path. A re-run served
+    # from the S3 archive never comes back through here, so the value written on
+    # the first run is the one that lasts.
+    if recording_start:
+        job.recording_start = recording_start
     db.commit()
     return video_path, transcript_path
 

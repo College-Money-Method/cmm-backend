@@ -463,6 +463,90 @@ def get_webinar_participants(zoom_webinar_id: str) -> list[dict] | None:
         return None
 
 
+def get_webinar_qa(zoom_webinar_id: str) -> dict | None:
+    """
+    Fetch the post-webinar Q&A report from the Zoom Reports API.
+
+    Returns the report payload verbatim — ``{"id", "uuid", "start_time",
+    "questions": [...]}`` — or ``None`` when credentials are not configured or
+    the report is not yet available. Zoom delays Q&A report availability by the
+    same 5-30 min as the participant report, and answers the not-yet-generated
+    case with a 404, so ``None`` means "retry later", not "no questions".
+
+    This is the ``/report/`` endpoint, not ``/past_webinars/{id}/qa``. The two
+    return different shapes and only this one carries ``question_id`` (the
+    idempotency key) and ``create_time`` (when the question was asked); the
+    past_webinars variant has neither, so it cannot support re-syncing.
+
+    Questions are nested two levels deep: ``questions[]`` groups by asker and
+    ``question_details[]`` holds the individual questions. An asker who asked
+    anonymously collapses into a single group whose ``name``, ``email`` and
+    ``user_id`` are all the literal string ``"anonymous"`` — the questions
+    inside it are still distinct, so never treat a group as one question.
+
+    Requires the ``report:read:admin`` scope on the S2S OAuth app — the same
+    scope the participant report already uses.
+    """
+    if not (settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret):
+        logger.debug("Zoom credentials not configured — skipping Q&A fetch")
+        return None
+
+    try:
+        token = _get_access_token()
+        report: dict | None = None
+        questions: list[dict] = []
+        next_page_token = ""
+
+        while True:
+            params: dict[str, str] = {"page_size": "300"}
+            if next_page_token:
+                params["next_page_token"] = next_page_token
+
+            resp = httpx.get(
+                f"{_ZOOM_API_BASE}/report/webinars/{zoom_webinar_id}/qa",
+                headers={"Authorization": f"Bearer {token}"},
+                params=params,
+                timeout=15.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if report is None:
+                report = data
+            questions.extend(data.get("questions") or [])
+
+            next_page_token = data.get("next_page_token", "")
+            if not next_page_token:
+                break
+
+        if report is None:
+            return None
+        report["questions"] = questions
+
+        logger.info(
+            "Zoom Q&A report fetched — webinar=%s askers=%d questions=%d",
+            zoom_webinar_id,
+            len(questions),
+            sum(len(g.get("question_details") or []) for g in questions),
+        )
+        return report
+
+    except httpx.HTTPStatusError as exc:
+        # 404 means the report is not generated yet; the caller retries later.
+        logger.warning(
+            "Zoom Q&A report unavailable — webinar=%s status=%s",
+            zoom_webinar_id,
+            exc.response.status_code,
+        )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "Zoom Q&A report fetch failed — webinar=%s error=%s",
+            zoom_webinar_id,
+            exc,
+        )
+        return None
+
+
 def get_webinar(zoom_webinar_id: str) -> dict | None:
     """
     Fetch webinar details from the Zoom API.

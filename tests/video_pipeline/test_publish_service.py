@@ -535,3 +535,33 @@ def test_a_vimeo_failure_leaves_the_timeline_on_the_step_that_broke(db, job, art
         publish(db, job)
 
     assert stage_progress.current(job) == stage_progress.SETTING_CHAPTERS
+
+
+def test_publishing_recovers_the_answers_only_given_out_loud(db, job, artefacts, vimeo_ok, monkeypatch):
+    """The transcript exists and is addressable exactly once: at publish.
+
+    Zoom stores no answer text for a question a panelist answered aloud, so this
+    is the moment those answers become recoverable at all.
+    """
+    ran: list[uuid.UUID] = []
+    monkeypatch.setattr(
+        publish_service, "extract_answers", lambda db_, webinar_id: ran.append(webinar_id) or 0
+    )
+
+    publish(db, job)
+
+    assert ran == [job.webinar_id]
+
+
+def test_a_broken_extraction_does_not_unpublish_a_live_replay(db, job, artefacts, vimeo_ok, monkeypatch):
+    """The player is already on the page and the alert already sent by then, so
+    a Bedrock outage must not be able to turn a published replay into a failed
+    job."""
+    def _boom(db_, webinar_id):
+        raise RuntimeError("bedrock unavailable")
+
+    monkeypatch.setattr(publish_service, "extract_answers", _boom)
+
+    publish(db, job)
+
+    assert job.job_state is JobState.PUBLISHED
