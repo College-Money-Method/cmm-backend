@@ -73,3 +73,83 @@ def webinar_sessionmaker():
 
     test_metadata.create_all(engine)
     return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+# ── webinar Q&A ──────────────────────────────────────────────────────────────
+
+# Seeds for the Q&A fixtures. Everything these reach by foreign key is pulled in
+# by `_qa_table_closure` — `webinar_qa_questions` alone reaches webinars,
+# workshops, registrations and the video jobs an extraction points at, and hand
+# listing that graph goes stale the moment a column is added upstream.
+QA_SEED_TABLES = (
+    "webinar_qa_syncs",
+    "webinar_qa_questions",
+    "webinar_qa_answer_extractions",
+    "webinar_video_jobs",
+)
+
+
+def _qa_table_closure(seed: tuple[str, ...]) -> set[str]:
+    """Seed tables plus every table reachable from them through foreign keys.
+
+    SQLite resolves each REFERENCES clause at CREATE TABLE time, so a partial
+    subset fails with NoReferencedTableError rather than quietly dropping the
+    constraint.
+    """
+    needed: set[str] = set()
+    queue = list(seed)
+    while queue:
+        name = queue.pop()
+        if name in needed:
+            continue
+        table = Base.metadata.tables.get(name)
+        if table is None:
+            continue
+        needed.add(name)
+        queue.extend(fk.column.table.name for fk in table.foreign_keys)
+    return needed
+
+
+@pytest.fixture
+def qa_sessionmaker():
+    """Fresh in-memory SQLite engine holding the Q&A tables and what they reference."""
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+
+    test_metadata = MetaData()
+    for name, table in Base.metadata.tables.items():
+        if name in _qa_table_closure(QA_SEED_TABLES):
+            table.to_metadata(test_metadata)
+    test_metadata.tables["webinars"].c.duration_minutes.computed = None
+
+    test_metadata.create_all(engine)
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+@pytest.fixture
+def qa_db(qa_sessionmaker):
+    session = qa_sessionmaker()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def qa_webinar(qa_db):
+    """One persisted webinar with the Zoom id the sync resolves against."""
+    import uuid
+
+    from src.workshops.models import Webinar, Workshop
+
+    workshop = Workshop(id=uuid.uuid4(), name="Paying for College")
+    webinar = Webinar(
+        id=uuid.uuid4(),
+        workshop_id=workshop.id,
+        webinar_name="Paying for College — Sept",
+        zoom_webinar_id="83822890565",
+    )
+    qa_db.add_all([workshop, webinar])
+    qa_db.commit()
+    return webinar

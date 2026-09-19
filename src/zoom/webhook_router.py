@@ -1,5 +1,5 @@
-"""Zoom webhook handler — URL validation, webinar.ended attendance sync,
-recording video pipeline triggers."""
+"""Zoom webhook handler — URL validation, webinar.ended attendance and Q&A
+syncs, recording video pipeline triggers."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from src.config import settings
 from src.db.base import get_session_factory
 from src.video_pipeline.intake import intake_recording
 from src.workshops.attendance_sync_service import sync_webinar_attendance
+from src.workshops.qa_sync_service import sync_webinar_qa
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,13 @@ router = APIRouter(prefix="/api/v1/zoom", tags=["zoom-webhooks"])
 
 # Delays (seconds) between retry attempts when Zoom report isn't ready yet
 _RETRY_DELAYS = [0, 900, 1800]  # 0 min, 15 min, 30 min
+
+# Everything `webinar.ended` pulls from the Zoom Reports API, by display name.
+# Each takes `(zoom_webinar_id, db)` and returns True once it has the report.
+_POST_WEBINAR_SYNCS = {
+    "attendance": sync_webinar_attendance,
+    "Q&A": sync_webinar_qa,
+}
 
 # Both events mean "there is a recording worth publishing", and both carry the
 # same object identifiers, so both go through the same idempotent intake.
@@ -53,32 +61,55 @@ def _verify_signature(raw_body: bytes, timestamp: str, signature: str) -> bool:
 
 
 async def _sync_with_retry(zoom_webinar_id: str) -> None:
-    """Attempt attendance sync with retries to handle Zoom report delay."""
+    """Run every post-webinar Zoom report sync, retrying past the report delay.
+
+    The two reports come from the same Reports API and share the same 5-30 min
+    availability lag, so they share one ladder rather than each sleeping through
+    their own. They are otherwise independent: each attempt gets its own session
+    and its own ``except``, a sync that succeeds drops out of the remaining
+    attempts, and one that keeps failing cannot hold back or roll back the other.
+    """
     SessionLocal = get_session_factory()
+    pending = dict(_POST_WEBINAR_SYNCS)
+
     for i, delay in enumerate(_RETRY_DELAYS):
         if delay:
             await asyncio.sleep(delay)
 
-        db = SessionLocal()
-        try:
-            synced = await asyncio.to_thread(sync_webinar_attendance, zoom_webinar_id, db)
-            if synced:
-                logger.info("Attendance sync succeeded on attempt %d — webinar=%s", i + 1, zoom_webinar_id)
-                return
-            logger.info(
-                "Zoom report not ready (attempt %d/%d) — webinar=%s",
-                i + 1,
-                len(_RETRY_DELAYS),
-                zoom_webinar_id,
-            )
-        except Exception as exc:
-            logger.error("Attendance sync error (attempt %d) — webinar=%s error=%s", i + 1, zoom_webinar_id, exc)
-        finally:
-            db.close()
+        for name, sync in list(pending.items()):
+            db = SessionLocal()
+            try:
+                if await asyncio.to_thread(sync, zoom_webinar_id, db):
+                    del pending[name]
+                    logger.info(
+                        "%s sync succeeded on attempt %d — webinar=%s", name, i + 1, zoom_webinar_id
+                    )
+                else:
+                    logger.info(
+                        "Zoom %s report not ready (attempt %d/%d) — webinar=%s",
+                        name,
+                        i + 1,
+                        len(_RETRY_DELAYS),
+                        zoom_webinar_id,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "%s sync error (attempt %d) — webinar=%s error=%s",
+                    name,
+                    i + 1,
+                    zoom_webinar_id,
+                    exc,
+                )
+            finally:
+                db.close()
+
+        if not pending:
+            return
 
     logger.warning(
-        "Attendance sync exhausted retries — webinar=%s will need manual sync",
+        "Post-webinar sync exhausted retries — webinar=%s unfinished=%s, will need manual sync",
         zoom_webinar_id,
+        ", ".join(pending),
     )
 
 
@@ -129,7 +160,8 @@ async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
 
     Handles:
     - ``endpoint.url_validation``: Zoom challenge-response to activate the subscription.
-    - ``webinar.ended``: kicks off an async attendance sync (with retries for report delay).
+    - ``webinar.ended``: kicks off the async attendance and Q&A syncs (with
+      retries for report delay).
     - ``recording.completed`` and ``recording.transcript_completed``: create and
       dispatch a webinar video pipeline job, idempotently on the recording UUID.
     """
@@ -158,7 +190,10 @@ async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
     if event == "webinar.ended":
         zoom_webinar_id = str(payload.get("payload", {}).get("object", {}).get("id", ""))
         if zoom_webinar_id:
-            logger.info("webinar.ended received — scheduling attendance sync for webinar=%s", zoom_webinar_id)
+            logger.info(
+                "webinar.ended received — scheduling attendance and Q&A sync for webinar=%s",
+                zoom_webinar_id,
+            )
             background_tasks.add_task(_sync_with_retry, zoom_webinar_id)
         else:
             logger.warning("webinar.ended payload missing object.id — payload=%s", payload)

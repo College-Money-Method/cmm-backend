@@ -35,6 +35,11 @@ from src.settings.models import Setting
 from src.storage.models import StorageFile
 from src.video_pipeline.models import WebinarVideoJob
 from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopAsset, WorkshopRegistration
+from src.workshops.qa_models import (
+    WebinarQaAnswerExtraction,
+    WebinarQaQuestion,
+    WebinarQaSync,
+)
 
 __all__ = [
     # Enums
@@ -74,6 +79,9 @@ __all__ = [
     "Topic",
     "VideoCaptionRecord",
     "Webinar",
+    "WebinarQaAnswerExtraction",
+    "WebinarQaQuestion",
+    "WebinarQaSync",
     "WebinarVideoJob",
     "Workshop",
     "WorkshopAsset",

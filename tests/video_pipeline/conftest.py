@@ -52,6 +52,12 @@ PIPELINE_SEED_TABLES = (
     "email_send_log",
     "email_suppression",
     "app_config",
+    # Publishing runs Q&A answer extraction off the back of the notification.
+    # Without these the extraction hits a missing table, and the swallow that
+    # keeps a Bedrock outage from failing a published job would hide it.
+    "webinar_qa_questions",
+    "webinar_qa_answer_extractions",
+    "webinar_qa_syncs",
 )
 
 

@@ -10,6 +10,7 @@ that folder.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
@@ -139,7 +140,9 @@ def test_a_url_source_is_downloaded_from_its_url(db, monkeypatch, tmp_path):
     )
     job = _job(db, audit_only=True, source_url="https://cmm-media.s3.amazonaws.com/a.mp4")
 
-    video, transcript, duration = process_recording._download_source(job, tmp_path)
+    video, transcript, duration, recording_start = process_recording._download_source(
+        job, tmp_path
+    )
 
     assert fetched == ["https://cmm-media.s3.amazonaws.com/a.mp4"]
     assert video.read_bytes() == b"mp4"
@@ -148,6 +151,9 @@ def test_a_url_source_is_downloaded_from_its_url(db, monkeypatch, tmp_path):
     # with audio transcript switched off.
     assert transcript is None
     assert duration == 0
+    # Nobody knows when a pasted file was recorded, so the Q&A causality check
+    # simply does not run for one.
+    assert recording_start is None
 
 
 def test_a_zoom_source_still_goes_through_zoom(db, monkeypatch, tmp_path):
@@ -161,7 +167,11 @@ def test_a_zoom_source_still_goes_through_zoom(db, monkeypatch, tmp_path):
         process_recording,
         "fetch_recording",
         lambda uuid_, work_dir: FetchedRecording(
-            video_path=video, transcript_path=vtt, duration_seconds=3600, topic="Session"
+            video_path=video,
+            transcript_path=vtt,
+            duration_seconds=3600,
+            topic="Session",
+            recording_start=datetime(2026, 9, 15, 23, 30, tzinfo=timezone.utc),
         ),
     )
 
@@ -169,6 +179,7 @@ def test_a_zoom_source_still_goes_through_zoom(db, monkeypatch, tmp_path):
         video,
         vtt,
         3600,
+        datetime(2026, 9, 15, 23, 30, tzinfo=timezone.utc),
     )
 
 

@@ -61,6 +61,16 @@ class WebinarVideoJob(Base):
     # Fractional seconds — the trim point comes from a caption cue timestamp.
     trim_offset_seconds: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)
     source_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Wall-clock instant the Zoom recording started, straight from Zoom's
+    # `start_time`. It is the origin the transcript's own clock hangs off:
+    # `recording_start + trim_offset_seconds + cue_start` is when a line was
+    # actually spoken. Nothing else supplies it — the webinar's scheduled start
+    # is not it (the host opens the room early) and Zoom's "actual start time"
+    # in the UI report disagrees with both. Nullable: rows created before this
+    # column existed have no way to learn it.
+    recording_start: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     vimeo_video_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     vimeo_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Read back from Vimeo rather than string-built: whether an embed-only video

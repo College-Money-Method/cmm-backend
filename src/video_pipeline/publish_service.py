@@ -46,6 +46,7 @@ from src.video_pipeline.models import WebinarVideoJob
 from src.video_pipeline.states import JobState
 from src.video_pipeline.video_title import video_title
 from src.video_pipeline.transcript import Cue
+from src.workshops.qa_extraction_service import extract_answers
 
 logger = logging.getLogger(__name__)
 
@@ -259,4 +260,25 @@ def publish(db: Session, job: WebinarVideoJob) -> WebinarVideoJob:
     # fails to commit. It cannot raise, so a mail problem never unpublishes
     # anything.
     notify.notify_published(db, job, video_title(job))
+    _extract_qa_answers(db, job)
     return published
+
+
+def _extract_qa_answers(db: Session, job: WebinarVideoJob) -> None:
+    """Recover the answers this webinar's panel only ever gave out loud.
+
+    Runs here because this is the first moment the trimmed transcript is
+    guaranteed to be in S3, and runs last because nothing it does is worth
+    delaying the replay for. Swallowed whole, deliberately: the player is already
+    on the page and the alert already sent, so a Bedrock outage must not be able
+    to turn a published replay into a failed job.
+
+    An audit run is skipped — it has no webinar, and so no Q&A.
+    """
+    if job.audit_only or not job.webinar_id:
+        return
+    try:
+        extract_answers(db, job.webinar_id)
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Q&A answer extraction skipped for job %s — %s", job.id, exc)

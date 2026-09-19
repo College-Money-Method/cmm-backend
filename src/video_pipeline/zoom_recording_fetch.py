@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -57,6 +58,27 @@ class FetchedRecording:
     transcript_path: Path | None
     duration_seconds: int
     topic: str
+    # Wall-clock instant Zoom began recording, as Zoom reports it. Distinct from
+    # both the webinar's scheduled start and the "actual start time" the UI
+    # report shows (the host opens the room first, often minutes early), and the
+    # only one of the three the transcript's clock is measured from. None when
+    # Zoom omits it.
+    recording_start: datetime | None
+
+
+def _parse_start(raw: object) -> datetime | None:
+    """Zoom's ISO-8601 ``start_time``, or None if it is missing or malformed.
+
+    Never raises: the recording is still perfectly publishable without it, and
+    only the Q&A causality check reads it.
+    """
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("Zoom recording start_time is unparseable: %r", raw)
+        return None
 
 
 def _files(payload: dict) -> list[dict]:
@@ -211,4 +233,5 @@ def fetch_recording(recording_uuid: str, work_dir: Path) -> FetchedRecording:
         transcript_path=transcript_path,
         duration_seconds=int(payload.get("duration") or 0) * 60,
         topic=str(payload.get("topic") or ""),
+        recording_start=_parse_start(payload.get("start_time")),
     )
