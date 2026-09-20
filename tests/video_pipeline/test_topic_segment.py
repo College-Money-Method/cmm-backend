@@ -39,7 +39,7 @@ def reply(monkeypatch):
     """Stand in for the Bedrock call; tests set what the model answered."""
     answer: dict = {"sections": []}
 
-    def call_json(*, system, content, max_tokens):
+    def call_json(*, system, content, max_tokens, invoke_type):
         return answer, 100, 20
 
     monkeypatch.setattr(topic_segment, "call_json", call_json)
@@ -168,7 +168,7 @@ def test_no_transcript_means_no_sections():
 
 
 def test_a_failed_call_falls_back_rather_than_failing_the_job(monkeypatch):
-    def boom(*, system, content, max_tokens):
+    def boom(*, system, content, max_tokens, invoke_type):
         raise BedrockCallError("throttled")
 
     monkeypatch.setattr(topic_segment, "call_json", boom)

@@ -24,6 +24,7 @@ import logging
 from dataclasses import dataclass, replace
 
 from src.config import settings
+from src.video_pipeline import bedrock_usage
 from src.video_pipeline.bedrock_client import BedrockCallError, call_json
 from src.video_pipeline.transcript import Cue, format_timestamp
 
@@ -232,7 +233,10 @@ def detect_sections(
 
     try:
         parsed, in_tok, out_tok = call_json(
-            system=_SYSTEM, content=build_prompt(blocks), max_tokens=2000
+            system=_SYSTEM,
+            content=build_prompt(blocks),
+            max_tokens=2000,
+            invoke_type=bedrock_usage.TOPIC_SEGMENT,
         )
     except BedrockCallError as exc:
         logger.warning("topic segmentation failed, chaptering from frames alone: %s", exc)

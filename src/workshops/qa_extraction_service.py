@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.video_pipeline import artifact_store
+from src.video_pipeline import bedrock_usage
 from src.video_pipeline.bedrock_client import BedrockCallError, call_json
 from src.video_pipeline.models import WebinarVideoJob
 from src.video_pipeline.states import JobState
@@ -182,6 +183,7 @@ def extract_answers_from_cues(
                 f"\n\nQUESTIONS:\n{qlist}"
             ),
             max_tokens=8192,
+            invoke_type=bedrock_usage.QA_EXTRACTION,
         )
     except BedrockCallError as exc:
         return _record_failure(

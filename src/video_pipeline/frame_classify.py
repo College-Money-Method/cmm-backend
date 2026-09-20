@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.video_pipeline import bedrock_usage
 from src.video_pipeline.bedrock_client import BedrockCallError, call_json
 from src.video_pipeline.ffmpeg_ops import Candidate
 
@@ -118,7 +119,12 @@ def classify_frame(candidate: Candidate, *, attempts: int = 2) -> Classified:
     last_error = ""
     for attempt in range(1, attempts + 1):
         try:
-            parsed, _, _ = call_json(system=_SYSTEM, content=content, max_tokens=200)
+            parsed, _, _ = call_json(
+                system=_SYSTEM,
+                content=content,
+                max_tokens=200,
+                invoke_type=bedrock_usage.FRAME_CLASSIFY,
+            )
         except BedrockCallError as exc:
             last_error = str(exc)
             logger.warning(

@@ -28,6 +28,7 @@ from src.analytics.postgres_queries_admin_overview import (
     get_geographic_data,
 )
 from src.analytics.schemas import (
+    BedrockAnalytics,
     BigPictureData,
     EnrollmentBandStat,
     EnrollmentMix,
@@ -42,6 +43,7 @@ from src.analytics.schemas import (
     UpcomingWebinar,
     WhatsWorkingData,
 )
+from src.analytics.bedrock_usage_queries import get_bedrock_analytics
 from src.analytics.translation_usage_queries import get_translation_analytics
 from src.auth.deps import AdminDep
 from src.config import settings
@@ -73,6 +75,25 @@ def get_translation_analytics_endpoint(
     cost nothing and aren't recorded, so these figures are true translation spend.
     """
     return TranslationAnalytics(**get_translation_analytics(db, days))
+
+
+@router.get("/bedrock", response_model=BedrockAnalytics)
+def get_bedrock_analytics_endpoint(
+    current_user: AdminDep,
+    db: DbDep,
+    days: int = Query(30, ge=1, le=365, description="Window in days"),
+) -> BedrockAnalytics:
+    """All Bedrock spend, grouped by which call site spent it.
+
+    Unions the two ledgers: `bedrock_usage`, written by every caller that goes
+    through the shared client, and the older `translation_usage`, whose rows
+    appear as `translation:<context>`. The clients are separate code paths, so
+    an invocation cannot be counted twice.
+
+    Only invocations made since the ledger shipped are included; earlier spend
+    was never recorded in a form that can be added up.
+    """
+    return BedrockAnalytics(**get_bedrock_analytics(db, days))
 
 
 @router.get("/pulse", response_model=PulseData)

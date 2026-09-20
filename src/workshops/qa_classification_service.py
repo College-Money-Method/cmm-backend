@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from src.config import settings
+from src.video_pipeline import bedrock_usage
 from src.video_pipeline.bedrock_client import BedrockCallError, call_json
 from src.workshops.qa_models import CLASSIFICATIONS, WebinarQaQuestion
 
@@ -82,6 +83,7 @@ def _label_chunk(chunk: list[WebinarQaQuestion], now: datetime) -> int:
             system=NOISE_SYS,
             content=listing,
             max_tokens=MAX_TOKENS,
+            invoke_type=bedrock_usage.QA_CLASSIFICATION,
         )
     except BedrockCallError as exc:
         logger.warning("Q&A classification chunk failed (%d rows left unlabelled): %s", len(chunk), exc)

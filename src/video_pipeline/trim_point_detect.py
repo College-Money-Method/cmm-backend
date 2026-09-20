@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from src.video_pipeline import bedrock_usage
 from src.video_pipeline.bedrock_client import BedrockCallError, call_json
 from src.video_pipeline.ffmpeg_ops import TRIM_LEAD_IN_SECONDS
 from src.video_pipeline.transcript import Cue, format_timestamp
@@ -94,7 +95,10 @@ def detect_trim_point(cues: list[Cue]) -> TrimPoint:
     head = [cue for cue in cues if cue.start <= HEAD_WINDOW_SECONDS] or cues[:1]
     try:
         parsed, in_tok, out_tok = call_json(
-            system=_SYSTEM, content=build_prompt(head), max_tokens=300
+            system=_SYSTEM,
+            content=build_prompt(head),
+            max_tokens=300,
+            invoke_type=bedrock_usage.TRIM_POINT,
         )
     except BedrockCallError as exc:
         logger.warning("trim-point detection failed, publishing untrimmed: %s", exc)
