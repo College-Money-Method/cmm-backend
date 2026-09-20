@@ -40,7 +40,7 @@ def make_question(qa_db, qa_webinar):
 def _model(monkeypatch, results):
     calls = []
 
-    def _call_json(*, system, content, max_tokens):
+    def _call_json(*, system, content, max_tokens, invoke_type):
         calls.append(content)
         return {"results": results}, 10, 20
 
@@ -158,7 +158,7 @@ def test_a_chunk_the_model_fails_on_does_not_cost_the_rest(qa_db, make_question,
     questions = [make_question(f"Question number {i}?") for i in range(CHUNK_SIZE + 10)]
     calls = []
 
-    def _call_json(*, system, content, max_tokens):
+    def _call_json(*, system, content, max_tokens, invoke_type):
         calls.append(content)
         if len(calls) == 1:
             raise BedrockCallError("Bedrock response was not valid JSON")

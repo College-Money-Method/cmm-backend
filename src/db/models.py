@@ -33,6 +33,7 @@ from src.sales.models import Invoice, Sale
 from src.schools.models import Contact, School, SchoolDateSelector
 from src.settings.models import Setting
 from src.storage.models import StorageFile
+from src.video_pipeline.bedrock_usage_models import BedrockUsage
 from src.video_pipeline.models import WebinarVideoJob
 from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopAsset, WorkshopRegistration
 from src.workshops.qa_models import (
@@ -49,6 +50,7 @@ __all__ = [
     "SalesStatus",
     # Models
     "AppConfig",
+    "BedrockUsage",
     "Profile",
     "UserRole",
     "Asset",

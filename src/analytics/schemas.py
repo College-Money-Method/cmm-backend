@@ -399,3 +399,34 @@ class TranslationAnalytics(BaseModel):
     by_locale: list[TranslationLocaleStat]
     by_context: list[TranslationContextStat]
     daily: list[TranslationDailyPoint]
+
+
+class BedrockTotals(BaseModel):
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    invocations: int
+    # All-time, so the windowed figures above are never mistaken for the lot.
+    all_time_cost_usd: float
+
+
+class BedrockInvokeTypeStat(BaseModel):
+    invoke_type: str
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    invocations: int
+    avg_cost_usd: float
+
+
+class BedrockDailyPoint(BaseModel):
+    day: str  # ISO date (YYYY-MM-DD)
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+
+
+class BedrockAnalytics(BaseModel):
+    totals: BedrockTotals
+    by_invoke_type: list[BedrockInvokeTypeStat]
+    daily: list[BedrockDailyPoint]

@@ -21,6 +21,7 @@ from anthropic import (
 )
 
 from src.config import settings
+from src.video_pipeline import bedrock_usage
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +70,17 @@ def call_json(
     *,
     system: str,
     content: Any,
+    invoke_type: str,
     max_tokens: int = 1024,
 ) -> tuple[dict[str, Any], int, int]:
     """Call Haiku and parse the reply as a JSON object.
 
     `content` is passed straight through as the user message content, so it takes
     either a plain string or a list of blocks (text + image) for vision calls.
+
+    `invoke_type` names the call site for the spend ledger and is required, so a
+    new caller cannot quietly add cost that the admin page has no name for. Use
+    a constant from `bedrock_usage`.
 
     Returns (parsed_object, input_tokens, output_tokens).
     Raises BedrockCallError on transport failure, empty output, or non-object JSON.
@@ -97,6 +103,16 @@ def call_json(
             f"Bedrock API error {exc.status_code}: {exc.message}"
         ) from exc
 
+    # Recorded before the reply is inspected: the tokens below were billed
+    # whether or not what came back turns out to be usable, and a ledger that
+    # dropped the failures would understate exactly the spend worth finding.
+    usage = message.usage
+    input_tokens = getattr(usage, "input_tokens", 0) or 0
+    output_tokens = getattr(usage, "output_tokens", 0) or 0
+    bedrock_usage.record(
+        invoke_type, settings.bedrock_haiku_model_id, input_tokens, output_tokens
+    )
+
     # Guard an empty content list or a non-text block; a missing .text would
     # otherwise raise an unhandled AttributeError.
     raw = ""
@@ -112,9 +128,4 @@ def call_json(
         logger.error("Bedrock returned non-JSON: %r", raw[:500])
         raise BedrockCallError(f"Bedrock response was not valid JSON: {exc}") from exc
 
-    usage = message.usage
-    return (
-        parsed,
-        getattr(usage, "input_tokens", 0) or 0,
-        getattr(usage, "output_tokens", 0) or 0,
-    )
+    return parsed, input_tokens, output_tokens
