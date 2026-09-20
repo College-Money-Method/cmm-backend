@@ -21,13 +21,15 @@ Three things here were learned the expensive way and are load-bearing:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 from src.video_pipeline.models import WebinarVideoJob
 from src.workshops.qa_models import WebinarQaAnswerExtraction, WebinarQaQuestion
+from src.workshops.qa_speaker_names import canonical_speaker
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 # Measured wording — 23/23 questions matched on the webinar this was built
 # against. Changing a word means re-measuring, so bump PROMPT_VERSION with it or
@@ -37,6 +39,10 @@ SYSTEM = (
     "The transcript is numbered lines '#<index> Speaker Name: text'.\n"
     "A moderator often reads a question aloud (paraphrased) before the expert answers it.\n"
     "For each question decide if it was genuinely answered aloud. Do not force a match.\n"
+    "SPEAKERS lists the people on this webinar, spelled the way they spell it.\n"
+    "When the speaker is one of them, copy answered_by from SPEAKERS character for\n"
+    "character. Never spell a listed name from how the transcript sounds it out.\n"
+    "If the speaker is plainly somebody not listed, give the name the transcript gives.\n"
     'Reply ONLY with JSON: {"results":[{"i":<index>,"found":true|false,'
     '"start_cue":<index of the first line of the answer>,'
     '"end_cue":<index of the last line of the answer>,"answered_by":"<speaker name>",'
@@ -45,16 +51,6 @@ SYSTEM = (
     "start_cue and end_cue must be line numbers copied exactly from the '#' markers.\n"
     "If found is false omit the other fields except i and confidence."
 )
-
-# Who a spoken answer is attributed to when the transcript does not say.
-# These sessions are hosted by one person, and a guest answering is the
-# exception rather than the rule. A caption track carries no speaker labels at
-# all, so the model is reading the name out of what is said — an introduction, a
-# moderator handing over — and on a stretch where nobody is named it comes back
-# empty. Empty is the wrong answer here: it renders as a spoken answer nobody
-# said. A name the model does find is kept as it stands, which is how the
-# genuine guest answers survive this.
-DEFAULT_SPEAKER = "Paul Martin"
 
 # How far before its question an answer may land and still count as an answer.
 # The recording start Zoom reports and the clock Zoom stamps questions with do
@@ -91,6 +87,7 @@ def build_extraction(
     cues: list[dict],
     job: WebinarVideoJob | None,
     trim_offset: float,
+    roster: Sequence[str] = (),
 ) -> WebinarQaAnswerExtraction:
     """Turn one model verdict into a row, validating the span it claims.
 
@@ -127,7 +124,7 @@ def build_extraction(
     end_seconds = float(cues[end].get("end") or 0)
     row.transcript_start_seconds = int(start_seconds)
     row.transcript_end_seconds = int(end_seconds)
-    row.answered_by = str(result.get("answered_by") or "").strip() or DEFAULT_SPEAKER
+    row.answered_by = canonical_speaker(result.get("answered_by"), roster)
     row.answer_text = str(result.get("answer") or "").strip() or None
     row.transcript_excerpt = (
         "\n".join(str(c.get("text") or "") for c in cues[start : end + 1]).strip() or None

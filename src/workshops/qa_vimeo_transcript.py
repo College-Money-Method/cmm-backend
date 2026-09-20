@@ -12,11 +12,11 @@ the source is worth naming: these captions are plain sentences with **no speaker
 labels**, where the pipeline's own transcript is diarised. The model still fills
 ``answered_by`` on these rows, but it is inferring the name from what is said
 (an introduction, a moderator addressing someone) rather than reading a label.
-That holds up because these sessions have one host, who gives all but a handful
-of the spoken answers — and where the transcript names nobody at all,
-``qa_extraction_match.DEFAULT_SPEAKER`` records him rather than leaving the
-speaker blank. The answer text is matched from the words themselves and is
-unaffected.
+It holds up because ``qa_speaker_names`` hands the model the correctly spelled
+roster Zoom recorded for the session, so a name it recognises is copied rather
+than sounded out, and a stretch that names nobody is attributed to the host who
+gives all but a handful of the spoken answers. The answer text is matched from
+the words themselves and is unaffected.
 """
 
 from __future__ import annotations

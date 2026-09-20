@@ -41,6 +41,7 @@ from src.workshops.qa_extraction_match import (
     cue_index,
 )
 from src.workshops.qa_models import WebinarQaAnswerExtraction, WebinarQaQuestion
+from src.workshops.qa_speaker_names import speaker_roster
 
 logger = logging.getLogger(__name__)
 
@@ -172,10 +173,14 @@ def extract_answers_from_cues(
 
     transcript = "\n".join(f"#{i} {c.get('text') or ''}" for i, c in enumerate(cues))
     qlist = "\n".join(f"{i}. {q.question_text}" for i, q in enumerate(questions))
+    roster = speaker_roster(db, webinar_id)
     try:
         parsed, input_tokens, output_tokens = call_json(
             system=SYSTEM,
-            content=f"TRANSCRIPT:\n{transcript}\n\nQUESTIONS:\n{qlist}",
+            content=(
+                f"SPEAKERS:\n" + "\n".join(roster) + f"\n\nTRANSCRIPT:\n{transcript}"
+                f"\n\nQUESTIONS:\n{qlist}"
+            ),
             max_tokens=8192,
         )
     except BedrockCallError as exc:
@@ -193,7 +198,7 @@ def extract_answers_from_cues(
     trim_offset = float((job.trim_offset_seconds if job else 0) or 0)
     counts: dict[str, int] = {}
     for i, question in enumerate(questions):
-        row = build_extraction(question, by_index.get(i), cues, job, trim_offset)
+        row = build_extraction(question, by_index.get(i), cues, job, trim_offset, roster)
         row.model_id = settings.bedrock_haiku_model_id
         row.prompt_version = PROMPT_VERSION
         row.input_tokens = input_tokens
