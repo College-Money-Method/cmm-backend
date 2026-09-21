@@ -54,6 +54,14 @@ def record(invoke_type: str, model_id: str, input_tokens: int, output_tokens: in
         # row would inflate the invocation count with calls that never happened.
         return
     try:
+        # The barrel, imported here rather than at module scope to keep the
+        # import graph acyclic. Writing a row configures the mappers, which
+        # fails unless every model is registered — and a caller that reached
+        # this module directly, as a one-off script does, has not registered
+        # them. Without this the spend is lost to a warning nobody reads, which
+        # is the exact failure this ledger exists to end.
+        import src.db.models  # noqa: F401, PLC0415
+
         session_factory = get_session_factory()
         with session_factory() as db:
             db.add(

@@ -180,9 +180,10 @@ def sync_webinar_qa(zoom_webinar_id: str, db: Session) -> bool:
             db.add(WebinarQaQuestion(zoom_question_id=zoom_question_id, **fields))
             created += 1
         else:
-            # Ingested fact only. `answer_text_override`, `classification_override`,
-            # `is_hidden` and the `edited_*` columns are deliberately absent from
-            # `fields` — a re-sync must never undo an admin's edit.
+            # Ingested fact only. `answer_text_override`,
+            # `classification_override` and the `edited_*` columns are
+            # deliberately absent from `fields` — a re-sync must never undo an
+            # admin's edit.
             for column, value in fields.items():
                 setattr(row, column, value)
             updated += 1

@@ -4,7 +4,8 @@ A webinar's Q&A box is not only questions. It collects "Thank you!", jokes,
 and warm multi-paragraph notes from counsellors at other schools. None of those
 need an answer, and none of them should be dropped either — the raw stream says
 something about the audience, and an admin may disagree with any given verdict.
-So everything is labelled and nothing is deleted; hiding is a query concern.
+So everything is labelled and nothing is deleted; the label only decides whether
+a row is in the default view, and every label stays one filter away.
 
 **Noise is long-form**, which is the one counter-intuitive thing here. On the
 webinar this was measured against, the two noise rows were a Marvin the Martian
@@ -38,17 +39,37 @@ _BARE_GREETING = re.compile(
     re.IGNORECASE,
 )
 
-NOISE_PROMPT_VERSION = "v1"
+NOISE_PROMPT_VERSION = "v2"
 
-# Measured wording — it produced 2/2 noise caught with 0 false positives across
-# 23 genuine questions. The sentence about length is load-bearing: without it the
-# colleague's long greeting reads as a question. Changing any of this means
-# re-measuring, so bump NOISE_PROMPT_VERSION alongside.
+# Measured wording. Changing any of it means re-measuring, so bump
+# NOISE_PROMPT_VERSION alongside.
+#
+# Two rules here were bought with real misclassifications:
+#
+# * **The opener does not decide the label.** "Sorry, just joined. Is the webinar
+#   recorded?" came back `greeting`, and "Hi. Thanks for the excellent
+#   presentation. What do you recommend for international students?" came back
+#   `thanks`. Attendees are polite, so the pleasantry is usually the first thing
+#   in the box and the question follows it.
+# * **A logistics question is still a question.** "Will there be a recording
+#   available?" and "Are all parents automatically on mute?" came back `comment`
+#   — the model read "not about the subject matter" as "needs no answer". They
+#   need an answer more urgently than most, because the asker is stuck.
+#
+# The sentence about length is load-bearing in the other direction: without it
+# a colleague's long, warm greeting reads as a question.
 NOISE_SYS = (
     "Classify each webinar Q&A submission. Labels: 'question' (a genuine request for "
     "information the panel should answer), 'greeting', 'thanks', 'comment' (a remark, "
     "joke, or statement needing no answer), 'spam'. Long text is not automatically a "
     "question — a friendly note from a colleague or a joke is still noise.\n"
+    "Judge the whole submission, not how it opens. Attendees are polite: a greeting, "
+    "an apology for joining late, or thanks usually comes first and the question "
+    "follows it. If the submission asks for anything at all, label it 'question'. "
+    "Use 'greeting' or 'thanks' only when the submission asks for nothing.\n"
+    "Questions about the session itself — the recording, audio, slides, captions, "
+    "language, how to ask a question — are questions, not comments. The asker is "
+    "stuck and needs an answer.\n"
     'Reply ONLY with JSON: {"results":[{"i":<index>,"label":"<label>"}]}'
 )
 

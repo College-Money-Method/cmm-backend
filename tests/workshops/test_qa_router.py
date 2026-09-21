@@ -37,7 +37,6 @@ JOB_ID = uuid.UUID("44444444-4444-4444-4444-444444444444")
 TYPED_ID = uuid.UUID("aaaa0001-0000-0000-0000-000000000000")
 LIVE_ID = uuid.UUID("aaaa0002-0000-0000-0000-000000000000")
 OVERRIDDEN_ID = uuid.UUID("aaaa0003-0000-0000-0000-000000000000")
-HIDDEN_ID = uuid.UUID("aaaa0004-0000-0000-0000-000000000000")
 OTHER_ID = uuid.UUID("aaaa0005-0000-0000-0000-000000000000")
 NOISE_ID = uuid.UUID("aaaa0006-0000-0000-0000-000000000000")
 UNLABELLED_ID = uuid.UUID("aaaa0007-0000-0000-0000-000000000000")
@@ -114,14 +113,6 @@ def seeded(qa_sessionmaker):
                 answer_source="typed",
                 typed_answer_text="Zoom's version",
                 answer_text_override="The admin's corrected version",
-            ),
-            _question(
-                HIDDEN_ID,
-                WEBINAR_ID,
-                "Thanks everyone!",
-                4,
-                classification="thanks",
-                is_hidden=True,
             ),
             _question(OTHER_ID, OTHER_WEBINAR_ID, "A question from October", 5),
             # Noise the model labelled but no admin has touched — the case the
@@ -218,7 +209,7 @@ def test_a_non_admin_cannot_reach_any_of_it(viewer_client):
     assert viewer_client.get(f"{BASE}/questions/{TYPED_ID}").status_code == 403
     assert (
         viewer_client.patch(
-            f"{BASE}/questions/{TYPED_ID}", json={"is_hidden": True}
+            f"{BASE}/questions/{TYPED_ID}", json={"classification_override": "comment"}
         ).status_code
         == 403
     )
@@ -229,15 +220,6 @@ def test_a_non_admin_cannot_reach_any_of_it(viewer_client):
 
 
 # ── listing ──────────────────────────────────────────────────────────────────
-
-
-def test_hidden_questions_are_out_of_the_list_by_default(client):
-    listed = _ids(client.get(f"{BASE}/questions"))
-    assert str(HIDDEN_ID) not in listed
-
-    with_hidden = _ids(client.get(f"{BASE}/questions", params={"include_hidden": True}))
-    # Hidden, never deleted — the raw stream is itself a signal.
-    assert str(HIDDEN_ID) in with_hidden
 
 
 def test_classified_noise_is_out_of_the_list_by_default(client):
@@ -255,16 +237,6 @@ def test_an_unclassified_question_is_not_treated_as_noise(client):
     # Labelling reaches Bedrock and can fail. Reading a missing label as noise
     # would drop real questions on exactly the runs that went wrong.
     assert str(UNLABELLED_ID) in _ids(client.get(f"{BASE}/questions"))
-
-
-def test_a_hidden_row_is_not_filtered_a_second_time_by_its_label(client):
-    # HIDDEN_ID is classified 'thanks'. An admin hides a row mostly because it
-    # is noise, so letting the label filter it again would make this checkbox
-    # look broken for the very rows it exists for.
-    with_hidden = _ids(client.get(f"{BASE}/questions", params={"include_hidden": True}))
-    assert str(HIDDEN_ID) in with_hidden
-    # Still only the hidden one — this must not become `include_noise`.
-    assert str(NOISE_ID) not in with_hidden
 
 
 def test_the_answered_filter_covers_every_layer_an_answer_can_come_from(client):
@@ -434,11 +406,6 @@ def test_an_empty_override_takes_the_correction_back_off(client):
     assert body["resolved_answer_source"] == "typed"
 
 
-def test_hiding_a_question_takes_it_out_of_the_default_list(client):
-    client.patch(f"{BASE}/questions/{TYPED_ID}", json={"is_hidden": True})
-    assert str(TYPED_ID) not in _ids(client.get(f"{BASE}/questions"))
-
-
 def test_an_unknown_label_cannot_be_written(client):
     resp = client.patch(
         f"{BASE}/questions/{TYPED_ID}", json={"classification_override": "kwestion"}
@@ -463,7 +430,7 @@ def test_a_resync_reports_a_report_zoom_has_not_produced_as_a_wait(client, monke
     body = client.post(f"{BASE}/webinars/{WEBINAR_ID}/resync").json()
     # A wait, not a failure: the same call works later.
     assert body["ok"] is False
-    assert body["question_count"] == 4
+    assert body["question_count"] == 3
 
 
 def test_a_resync_of_a_webinar_with_no_zoom_id_is_refused(client, seeded, monkeypatch):

@@ -60,7 +60,6 @@ class QaQuestionSummary(BaseModel):
     responder_name: str | None = None
     classification: str | None = None
     classified_by: str | None = None
-    is_hidden: bool = False
     has_override: bool = False
     # The answer to show, and the layer it came from. Decided server-side.
     resolved_answer: str | None = None
@@ -109,7 +108,6 @@ class QaQuestionUpdate(BaseModel):
 
     answer_text_override: str | None = None
     classification_override: str | None = None
-    is_hidden: bool | None = None
 
 
 class QaSyncResult(BaseModel):

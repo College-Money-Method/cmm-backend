@@ -14,7 +14,7 @@ import pytest
 
 from src.video_pipeline.bedrock_client import BedrockCallError
 from src.workshops import qa_classification_service
-from src.workshops.qa_classification_service import CHUNK_SIZE, classify_questions
+from src.workshops.qa_classification_service import CHUNK_SIZE, NOISE_SYS, classify_questions
 from src.workshops.qa_models import WebinarQaQuestion
 
 
@@ -171,3 +171,28 @@ def test_a_chunk_the_model_fails_on_does_not_cost_the_rest(qa_db, make_question,
     # The lost chunk stays null, which the API shows rather than hides.
     assert all(q.classification is None for q in questions[:CHUNK_SIZE])
     assert all(q.classification == "question" for q in questions[CHUNK_SIZE:])
+
+
+def test_the_prompt_still_carries_the_rules_bought_with_real_misclassifications():
+    """Pins wording, because every other test here mocks the model away.
+
+    Both rules come from rows that were labelled wrongly on live data:
+
+    * "Sorry, just joined. Is the webinar recorded? If yes, can we have the
+      recording?" was stored as `greeting`, and "Hi. Thanks for the excellent
+      presentation. What do you recommend for international students?" as
+      `thanks`. Attendees are polite, so the pleasantry is usually first and
+      the question follows it.
+    * "Will there be a recording available?" and "Are all parents
+      automatically on mute?" were stored as `comment` — not about the subject
+      matter, so read as needing no answer. They need one more than most.
+
+    Trimming either sentence puts those rows back in the noise pile, where the
+    admin's default view never shows them.
+    """
+    assert "Judge the whole submission, not how it opens." in NOISE_SYS
+    assert "asks for anything at all" in NOISE_SYS
+    assert "are questions, not comments" in NOISE_SYS
+    # The guard in the other direction: without it a colleague's long, warm
+    # greeting reads as a question.
+    assert "Long text is not automatically a question" in NOISE_SYS

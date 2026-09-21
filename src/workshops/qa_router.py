@@ -93,7 +93,6 @@ def list_questions(
     include_noise: bool = Query(
         False, description="Include greetings, thanks, comments and spam"
     ),
-    include_hidden: bool = Query(False, description="Include questions an admin has hidden"),
     search: str | None = Query(None, description="Substring of the question text"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -101,10 +100,10 @@ def list_questions(
     """Questions oldest-first — the order they were asked in, which is how the
     session read.
 
-    Hidden rows are out by default and one query parameter away, and so is the
-    noise the classifier labelled: a Q&A panel collects far more "Thank you!"
-    and "This is excellent" than questions, and listing them all buries what the
-    admin opened the page to read.
+    The noise the classifier labelled is out by default: a Q&A panel collects
+    far more "Thank you!" and "This is excellent" than questions, and listing
+    them all buries what the admin opened the page to read. Asking for a label
+    by name brings that label back.
 
     An unclassified question is NOT noise and stays in the list. Labelling
     reaches Bedrock and can fail, so treating a missing label as noise would
@@ -126,15 +125,7 @@ def list_questions(
         filters.append(_LABEL == classification)
     elif not include_noise:
         # Explicit `classification` wins: asking for thanks must return thanks.
-        not_noise = or_(_LABEL.is_(None), _LABEL.notin_(_NOISE_LABELS))
-        if include_hidden:
-            # Hiding is a deliberate admin act, and an admin hides a row mostly
-            # *because* it is noise. Filtering those out again by label would
-            # make "show hidden" look broken for the very rows it exists for, so
-            # a hidden row is exempt — and only a hidden one, which keeps this
-            # from quietly becoming `include_noise`.
-            not_noise = or_(not_noise, WebinarQaQuestion.is_hidden.is_(True))
-        filters.append(not_noise)
+        filters.append(or_(_LABEL.is_(None), _LABEL.notin_(_NOISE_LABELS)))
     if answer_source:
         filters.append(WebinarQaQuestion.answer_source == answer_source)
     if answered is not None:
@@ -145,8 +136,6 @@ def list_questions(
         # admin is hunting for.
         expression = has_answer_expression()
         filters.append(expression if answered else ~expression)
-    if not include_hidden:
-        filters.append(WebinarQaQuestion.is_hidden.is_(False))
     if search:
         term = f"%{search.strip()}%"
         filters.append(
@@ -208,8 +197,6 @@ def update_question(
                 detail=f"Unknown classification '{label}'",
             )
         question.classification_override = label
-    if "is_hidden" in changed:
-        question.is_hidden = bool(changed["is_hidden"])
 
     if changed:
         question.edited_by_user_id = admin.user_id
