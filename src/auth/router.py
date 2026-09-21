@@ -15,7 +15,7 @@ from src.auth.deps import AdminDep, CurrentUserDep, get_current_user
 from src.auth.hub_password import default_hub_password
 from src.auth.models import Profile, UserRole
 from src.auth.profile_sync import delete_profile, upsert_profile
-from src.auth.rate_limit import allow
+from src.auth.rate_limit import allow, client_ip
 from src.auth.schemas import (
     AuthEmailSyncOut,
     ChangePasswordRequest,
@@ -120,9 +120,7 @@ def check_email(body: CheckEmailRequest, request: Request, db: DbDep) -> CheckEm
     scraping. Existence is read from `profiles`, the indexed mirror of
     `auth.users`.
     """
-    fwd = request.headers.get("x-forwarded-for", "")
-    client_ip = fwd.split(",")[0].strip() or (request.client.host if request.client else "unknown")
-    if not allow(f"check-email:{client_ip}", limit=5, window_seconds=60.0):
+    if not allow(f"check-email:{client_ip(request)}", limit=5, window_seconds=60.0):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many attempts. Please wait a minute and try again.",
