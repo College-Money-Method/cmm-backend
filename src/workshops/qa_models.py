@@ -151,6 +151,10 @@ class WebinarQaQuestion(Base):
     # --- admin override: wins over everything above, survives every re-run ---
     answer_text_override: Mapped[str | None] = mapped_column(Text, nullable=True)
     classification_override: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Still a column, no longer a feature: admins never reached for it, and
+    # the screen that set it is gone. Kept mapped so the database and the model
+    # agree, and so re-adding the button is a router change rather than a
+    # migration.
     is_hidden: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )

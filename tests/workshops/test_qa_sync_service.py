@@ -166,7 +166,6 @@ def test_a_resync_leaves_an_admin_edit_alone(qa_db, qa_webinar, monkeypatch):
     ).one()
     edited.answer_text_override = "Only schools that ask for it."
     edited.classification_override = "comment"
-    edited.is_hidden = True
     qa_db.commit()
 
     sync_webinar_qa(qa_webinar.zoom_webinar_id, qa_db)
@@ -177,7 +176,6 @@ def test_a_resync_leaves_an_admin_edit_alone(qa_db, qa_webinar, monkeypatch):
     ).one()
     assert again.answer_text_override == "Only schools that ask for it."
     assert again.classification_override == "comment"
-    assert again.is_hidden is True
     # The ingested side still tracks Zoom.
     assert again.typed_answer_text == "It depends on the school."
 
