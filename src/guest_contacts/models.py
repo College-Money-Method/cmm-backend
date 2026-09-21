@@ -5,10 +5,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Index, Text, Uuid
+from sqlalchemy import Boolean, Index, Text, Uuid
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, text
 
 from src.db.base import Base
 
@@ -26,7 +26,19 @@ class GuestContact(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
+    # Bot submissions are quarantined rather than rejected — see
+    # ``spam_detection``. ``spam_reason`` names the rule that matched.
+    # text() rather than the string "false": as a plain string SQLAlchemy renders a
+    # quoted literal, which SQLite stores as the text 'false' and reads back truthy.
+    is_spam: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    spam_reason: Mapped[str | None] = mapped_column(Text)
+
     __table_args__ = (
         Index("idx_guest_contacts_email", "email"),
         Index("idx_guest_contacts_created_at", "created_at"),
+        Index(
+            "idx_guest_contacts_inbox",
+            "created_at",
+            postgresql_where=text("is_spam = false"),
+        ),
     )
