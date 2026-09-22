@@ -495,13 +495,13 @@ def test_create_broadcast_stores_allowed_custom_sender(make_client):
             "subject": "x",
             "body_json": SIMPLE_DOC,
             "school_ids": [],
-            "sender_name": "CMM Newsflash",
+            "sender_name": "College Money Method Newsflash",
             "sender_email": "newsflash@collegemoneymethod.com",
         },
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["sender_name"] == "CMM Newsflash"
+    assert body["sender_name"] == "College Money Method Newsflash"
     assert body["sender_email"] == "newsflash@collegemoneymethod.com"
 
 

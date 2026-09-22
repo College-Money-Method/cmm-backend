@@ -4,31 +4,12 @@ Quarantine, not rejection, is the contract worth pinning down here: a flagged
 submission is still stored and the submitter is still told it went through, so a
 misfiring heuristic never silently swallows a real enquiry.
 
-Follows the in-memory SQLite + TestClient + dependency_overrides pattern from
-tests/auth/test_me_timezone_preference.py.
+The ``client`` fixture lives in conftest.py.
 """
 
 from __future__ import annotations
 
-import uuid
-
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-import src.auth.models  # noqa: F401 — register UserRole for FK metadata
-from src.auth.deps import get_current_user
-from src.auth.rate_limit import _hits
-from src.auth.schemas import CurrentUser
-from src.db.base import Base
-from src.db.client import get_supabase
-from src.db.deps import get_db
 from src.guest_contacts.models import GuestContact
-from src.main import app
-
-ADMIN_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 
 GOOD = {
     "first_name": "Patricia",
@@ -44,39 +25,6 @@ BOT = {
     "school_name": "CUDKcLwIRfACLYGlbxLABui",
     "message": "7452959171",
 }
-
-
-@pytest.fixture
-def client():
-    """A TestClient over an empty guest_contacts table, acting as super_admin."""
-    engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
-    tables = [t for n, t in Base.metadata.tables.items() if n == "guest_contacts"]
-    Base.metadata.create_all(engine, tables=tables)
-    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
-
-    def override_get_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    app.dependency_overrides[get_db] = override_get_db
-    app.dependency_overrides[get_supabase] = lambda: None
-    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=ADMIN_ID, role="super_admin", school_id=None
-    )
-    # The limiter is process-global, so each test starts from a clean window.
-    _hits.clear()
-
-    c = TestClient(app)
-    c._session_local = SessionLocal  # stashed for assertions
-    yield c
-
-    app.dependency_overrides.clear()
-    _hits.clear()
 
 
 def _stored(client):
@@ -175,7 +123,11 @@ def test_listing_defaults_to_the_inbox_and_spam_is_opt_in(client):
 def test_counts_cover_both_tabs(client):
     _post(client, GOOD)
     _post(client, BOT)
-    assert client.get("/api/v1/guest-contacts/counts").json() == {"inbox": 1, "spam": 1}
+    assert client.get("/api/v1/guest-contacts/counts").json() == {
+        "inbox": 1,
+        "spam": 1,
+        "unresolved": 1,
+    }
 
 
 def test_admin_can_rescue_a_false_positive(client):
