@@ -35,14 +35,19 @@ PARENT = dict(
 
 @pytest.fixture
 def session_factory(monkeypatch):
-    """Point the script at an in-memory guest_contacts table."""
+    """Run the script against an in-memory guest_contacts table.
+
+    The script loads its dotenv and imports the session factory inside main(), so
+    both are stubbed at their source rather than on the script's namespace.
+    """
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     tables = [t for n, t in Base.metadata.tables.items() if n == "guest_contacts"]
     Base.metadata.create_all(engine, tables=tables)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
-    monkeypatch.setattr(backfill, "get_session_factory", lambda: factory)
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    monkeypatch.setattr("src.db.base.get_session_factory", lambda: factory)
     monkeypatch.setattr(backfill.sys, "argv", ["backfill", "--apply"])
     return factory
 

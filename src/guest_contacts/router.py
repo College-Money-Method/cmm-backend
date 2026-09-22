@@ -1,6 +1,7 @@
 """FastAPI router for guest contact submissions."""
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
@@ -92,10 +93,16 @@ def list_guest_contacts(
 
 @router.get("/counts")
 def guest_contact_counts(db: DbDep, _admin: AdminDep) -> dict[str, int]:
-    """Inbox and spam totals, so the admin tabs can show how much is in each."""
+    """Totals behind the admin header: how much sits in each tab, and how much
+    of the inbox is still waiting on a reply."""
     spam_total = db.query(GuestContact).filter(GuestContact.is_spam.is_(True)).count()
     total = db.query(GuestContact).count()
-    return {"inbox": total - spam_total, "spam": spam_total}
+    unresolved = (
+        db.query(GuestContact)
+        .filter(GuestContact.is_spam.is_(False), GuestContact.resolved_at.is_(None))
+        .count()
+    )
+    return {"inbox": total - spam_total, "spam": spam_total, "unresolved": unresolved}
 
 
 @router.get("/{gc_id}", response_model=GuestContactDetail)
@@ -126,6 +133,28 @@ def set_guest_contact_spam(
         raise HTTPException(status_code=404, detail="Guest contact not found")
     gc.is_spam = is_spam
     gc.spam_reason = ADMIN_MARKED if is_spam else ADMIN_RESTORED
+    db.commit()
+    db.refresh(gc)
+    return GuestContactDetail.model_validate(gc)
+
+
+@router.patch("/{gc_id}/resolved", response_model=GuestContactDetail)
+def set_guest_contact_resolved(
+    gc_id: uuid.UUID,
+    db: DbDep,
+    _admin: AdminDep,
+    resolved: bool = Query(description="True once the enquiry has been answered."),
+):
+    """Mark a submission answered, or put it back on the pile (admin only).
+
+    Replies go out from a mail client, not from here, so nothing can detect this
+    automatically — the admin says so. Stamping the moment rather than a flag
+    keeps "replied on the 3rd" available to the screen for free.
+    """
+    gc = db.query(GuestContact).filter(GuestContact.id == gc_id).first()
+    if not gc:
+        raise HTTPException(status_code=404, detail="Guest contact not found")
+    gc.resolved_at = datetime.now(timezone.utc) if resolved else None
     db.commit()
     db.refresh(gc)
     return GuestContactDetail.model_validate(gc)

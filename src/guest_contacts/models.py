@@ -33,6 +33,11 @@ class GuestContact(Base):
     is_spam: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     spam_reason: Mapped[str | None] = mapped_column(Text)
 
+    # When an admin replied. Null means the enquiry is still waiting on us, which
+    # is the only state the inbox really needs to distinguish; keeping the moment
+    # rather than a bare flag also answers "how long did that one sit there".
+    resolved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
     __table_args__ = (
         Index("idx_guest_contacts_email", "email"),
         Index("idx_guest_contacts_created_at", "created_at"),

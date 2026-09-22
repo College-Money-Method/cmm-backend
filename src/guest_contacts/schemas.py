@@ -49,3 +49,5 @@ class GuestContactDetail(BaseModel):
     created_at: datetime | None = None
     is_spam: bool = False
     spam_reason: str | None = None
+    # Null until an admin marks the enquiry answered.
+    resolved_at: datetime | None = None
