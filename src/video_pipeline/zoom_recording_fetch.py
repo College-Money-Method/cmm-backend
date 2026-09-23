@@ -34,6 +34,11 @@ _STREAM_CHUNK = 8 * 1024 * 1024
 # later" from "give up".
 _STILL_PROCESSING = 3301
 
+# Opening words of every ``RecordingNotReadyError``. A job that runs out of
+# waits is failed with this message, and intake reads it back to tell "Zoom was
+# slow" apart from a real failure when ``recording.completed`` finally lands.
+NOT_READY_MESSAGE = "Zoom is still processing the recording"
+
 
 class RecordingFetchError(RuntimeError):
     """The recording could not be resolved or downloaded."""
@@ -66,11 +71,12 @@ class FetchedRecording:
     recording_start: datetime | None
 
 
-def _parse_start(raw: object) -> datetime | None:
+def parse_start(raw: object) -> datetime | None:
     """Zoom's ISO-8601 ``start_time``, or None if it is missing or malformed.
 
-    Never raises: the recording is still perfectly publishable without it, and
-    only the Q&A causality check reads it.
+    Never raises: the recording is still perfectly publishable without it. The
+    Q&A causality check reads it, and so does the reconcile sweep, to tell a
+    recording that is still live from one whose webhook was missed.
     """
     if not raw:
         return None
@@ -194,7 +200,7 @@ def fetch_recording(recording_uuid: str, work_dir: Path) -> FetchedRecording:
         # scope the Server-to-Server app had never been granted.
         if exc.code == _STILL_PROCESSING:
             raise RecordingNotReadyError(
-                f"Zoom is still processing the recording {recording_uuid} — {exc}"
+                f"{NOT_READY_MESSAGE} {recording_uuid} — {exc}"
             ) from exc
         raise RecordingFetchError(f"Zoom refused the recording {recording_uuid} — {exc}") from exc
     if payload is None:
@@ -233,5 +239,5 @@ def fetch_recording(recording_uuid: str, work_dir: Path) -> FetchedRecording:
         transcript_path=transcript_path,
         duration_seconds=int(payload.get("duration") or 0) * 60,
         topic=str(payload.get("topic") or ""),
-        recording_start=_parse_start(payload.get("start_time")),
+        recording_start=parse_start(payload.get("start_time")),
     )

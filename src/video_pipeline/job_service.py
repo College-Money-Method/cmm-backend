@@ -141,18 +141,21 @@ def requeue(db: Session, job: WebinarVideoJob, reason: str) -> WebinarVideoJob:
     no work, so the slot it holds is worth more to another job than to itself,
     and the sweeper will dispatch it again on its next pass.
 
-    ``attempt`` is incremented because that is what bounds the waiting — nothing
-    else distinguishes the fifth wait from the first. ``error`` carries the
+    ``source_waits`` is incremented because that is what bounds the waiting —
+    nothing else distinguishes the fifth wait from the first. ``attempt`` is
+    left alone: nothing ran, so this is still the same attempt. ``error`` carries the
     reason rather than being cleared: a job that has been going round this loop
     for half an hour should say so on the monitoring screen, and `pending` does
     not alert anyone.
     """
-    logger.info("Video job requeued — job=%s attempt=%d reason=%s", job.id, job.attempt, reason)
+    logger.info(
+        "Video job requeued — job=%s source_waits=%d reason=%s", job.id, job.source_waits, reason
+    )
     return advance(
         db,
         job,
         JobState.PENDING,
-        attempt=job.attempt + 1,
+        source_waits=job.source_waits + 1,
         error=reason[:4000],
         ecs_task_arn=None,
         stage_events=stage_progress.initial(),
@@ -169,13 +172,16 @@ def retry(db: Session, job: WebinarVideoJob) -> WebinarVideoJob:
     ``failed_notified_at`` is cleared deliberately — if this attempt fails too,
     that is a new failure and ops should hear about it again. The stage timeline
     restarts for the same reason: interleaving a second run's steps with the
-    failed run's would describe a sequence that never happened.
+    failed run's would describe a sequence that never happened. ``source_waits``
+    resets too: a new run gets a full wait for Zoom, however long the last one
+    already waited.
     """
     return advance(
         db,
         job,
         JobState.PENDING,
         attempt=job.attempt + 1,
+        source_waits=0,
         error=None,
         failed_notified_at=None,
         ecs_task_arn=None,

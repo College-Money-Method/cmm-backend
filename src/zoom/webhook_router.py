@@ -132,7 +132,9 @@ def _schedule_recording_intake(
     Intake is idempotent on the recording UUID, which is what lets both
     recording events arrive here. The second one to land finds the job already
     made and does nothing — deliberately including no re-dispatch of a job still
-    waiting in `pending`. The sweeper is the one process that dispatches those,
+    waiting in `pending`. The one exception is a job that failed because Zoom
+    was still processing the files: intake puts that back in `pending`, and the
+    sweeper dispatches it as usual. The sweeper is the one process that dispatches those,
     and a webhook that raced it would put two ECS tasks on one recording, which
     is the failure this pipeline has already been bitten by once.
     """

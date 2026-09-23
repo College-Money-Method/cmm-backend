@@ -57,6 +57,13 @@ class WebinarVideoJob(Base):
         Text, nullable=False, default=JobState.PENDING.value, server_default=JobState.PENDING.value
     )
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Times the current run has been handed back because Zoom had not finished
+    # processing the source. Separate from `attempt` because it bounds one
+    # run's wait: a retry starts a fresh wait, and sharing the counter would
+    # fail a retried job on its first "not ready yet".
+    source_waits: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     ecs_task_arn: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Fractional seconds — the trim point comes from a caption cue timestamp.
     trim_offset_seconds: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)

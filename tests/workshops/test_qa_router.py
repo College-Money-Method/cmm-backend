@@ -283,6 +283,48 @@ def test_search_matches_the_question_text_and_the_asker(client):
     assert _ids(client.get(f"{BASE}/questions", params={"search": "dana"})) == [str(TYPED_ID)]
 
 
+def test_the_date_range_includes_the_whole_of_its_last_day(client):
+    """The fixture questions are asked at 23:22 UTC — the case a date compared
+    against the day's midnight silently drops, taking a whole session with it."""
+    resp = client.get(
+        f"{BASE}/questions",
+        params={"date_from": "2026-09-15", "date_to": "2026-09-15"},
+    )
+    assert str(TYPED_ID) in _ids(resp)
+    assert resp.json()["total"] == 5
+
+
+def test_the_date_range_excludes_questions_asked_outside_it(client):
+    assert _ids(client.get(f"{BASE}/questions", params={"date_from": "2026-09-16"})) == []
+    assert _ids(client.get(f"{BASE}/questions", params={"date_to": "2026-09-14"})) == []
+
+
+def test_a_question_zoom_never_timed_is_out_of_a_dated_range(client, seeded):
+    session = seeded()
+    session.add(
+        WebinarQaQuestion(
+            id=uuid.uuid4(),
+            webinar_id=WEBINAR_ID,
+            zoom_question_id="undated",
+            question_text="Asked at no time at all",
+            asked_at=None,
+            answer_source="unanswered",
+            classification="question",
+        )
+    )
+    session.commit()
+    session.close()
+
+    undated = "Asked at no time at all"
+    listed = client.get(f"{BASE}/questions").json()["items"]
+    assert any(row["question_text"] == undated for row in listed)
+
+    ranged = client.get(
+        f"{BASE}/questions", params={"date_from": "2026-09-01", "date_to": "2026-09-30"}
+    ).json()["items"]
+    assert all(row["question_text"] != undated for row in ranged)
+
+
 def test_an_unknown_classification_is_refused(client):
     resp = client.get(f"{BASE}/questions", params={"classification": "kwestion"})
     assert resp.status_code == 422

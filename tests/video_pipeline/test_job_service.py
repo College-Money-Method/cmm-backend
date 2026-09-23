@@ -144,7 +144,8 @@ def test_requeue_hands_a_slot_back_without_failing_the_job(db, webinar):
     job_service.requeue(db, job, "Waiting for Zoom to finish processing the recording")
 
     assert job.state == JobState.PENDING.value
-    assert job.attempt == 1
+    assert job.source_waits == 1
+    assert job.attempt == 0
     assert job.ecs_task_arn is None
     # Kept, not cleared: half an hour of this should be visible on the screen.
     assert "Waiting for Zoom" in job.error

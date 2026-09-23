@@ -7,6 +7,8 @@ webinars, which no later retry can undo.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from src.video_pipeline import intake, reconcile, task_dispatch
@@ -27,8 +29,13 @@ def _listing(monkeypatch, recordings):
     monkeypatch.setattr(reconcile, "list_account_recordings", lambda *a, **k: recordings)
 
 
-def _recording(uuid_: str) -> dict:
-    return {"uuid": uuid_, "id": ZOOM_WEBINAR_ID}
+def _recording(uuid_: str, started_hours_ago: float = 24) -> dict:
+    started = datetime.now(timezone.utc) - timedelta(hours=started_hours_ago)
+    return {
+        "uuid": uuid_,
+        "id": ZOOM_WEBINAR_ID,
+        "start_time": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
 
 
 def test_orphaned_recordings_get_jobs(wired, db, monkeypatch):
@@ -71,3 +78,20 @@ def test_reconcile_never_raises(wired, db, monkeypatch):
     monkeypatch.setattr(reconcile, "list_account_recordings", boom)
 
     assert reconcile.reconcile_recordings() == 0
+
+
+def test_a_recording_that_may_still_be_live_is_left_to_the_webhook(wired, db, monkeypatch):
+    """Zoom lists a recording from the moment it starts. Adopting it then starts
+    the wait for Zoom's files while the webinar is still going, and the job runs
+    out of waits before the files exist."""
+    _listing(monkeypatch, [_recording("rec-live", started_hours_ago=1)])
+
+    assert reconcile.reconcile_recordings() == 0
+    assert db.query(WebinarVideoJob).count() == 0
+
+
+def test_a_recording_with_no_start_time_is_still_adopted(wired, db, monkeypatch):
+    """Never adopting it would leave it filling the cloud pool."""
+    _listing(monkeypatch, [{"uuid": "rec-undated", "id": ZOOM_WEBINAR_ID}])
+
+    assert reconcile.reconcile_recordings() == 1

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
@@ -74,6 +74,16 @@ def _webinar(db: Session, webinar_id: uuid.UUID) -> Webinar:
 # never silently left visible here.
 _NOISE_LABELS = tuple(c for c in CLASSIFICATIONS if c != "question")
 
+def _day_start(day: date) -> datetime:
+    """Midnight UTC on ``day``, for comparing against a timestamptz column.
+
+    The date filter is a UTC day, not the admin's local one. Webinars run in US
+    business hours, so a UTC day boundary never splits a session in two — which
+    is the only way this choice could surprise anyone reading the list.
+    """
+    return datetime.combine(day, time.min, tzinfo=timezone.utc)
+
+
 # An admin's relabel outranks the model's everywhere a label is read.
 _LABEL = func.coalesce(
     WebinarQaQuestion.classification_override, WebinarQaQuestion.classification
@@ -94,6 +104,8 @@ def list_questions(
         False, description="Include greetings, thanks, comments and spam"
     ),
     search: str | None = Query(None, description="Substring of the question text"),
+    date_from: date | None = Query(None, description="Asked on or after this day (UTC)"),
+    date_to: date | None = Query(None, description="Asked on or before this day (UTC), inclusive"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> QaQuestionList:
@@ -112,6 +124,12 @@ def list_questions(
     Both filters honour an admin's override, so a question they relabelled is
     found under the label they gave it, not the model's. So does ``answered``,
     which counts an admin's typed correction as an answer like any other.
+
+    ``date_from``/``date_to`` bound when the question was asked, not when its
+    webinar was scheduled — a question typed into the panel after the session
+    overran belongs to the day it was actually asked. Both ends are inclusive.
+    A question Zoom gave no timestamp for is out of every dated range; there is
+    no day it could honestly be placed on.
     """
     filters = []
     if webinar_id:
@@ -144,6 +162,13 @@ def list_questions(
                 WebinarQaQuestion.asker_name.ilike(term),
             )
         )
+    if date_from:
+        filters.append(WebinarQaQuestion.asked_at >= _day_start(date_from))
+    if date_to:
+        # Exclusive bound one day on, so the whole of `date_to` is included —
+        # comparing against that day's midnight would drop everything asked
+        # during it, which is every question on a webinar held that day.
+        filters.append(WebinarQaQuestion.asked_at < _day_start(date_to + timedelta(days=1)))
 
     total = int(
         db.execute(

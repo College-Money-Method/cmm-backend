@@ -70,7 +70,9 @@ def _claim(db, job: WebinarVideoJob) -> bool:
 # How many times a job may be put back for a source that is not ready yet. The
 # sweeper dispatches `pending` every five minutes, so this is roughly an hour of
 # waiting — well past Zoom's own "a few minutes", and short of the point where
-# something other than transcoding is wrong and ops should hear about it.
+# something other than transcoding is wrong and ops should hear about it. A job
+# that runs out is not lost: the recording event that follows re-arms it (see
+# ``intake``).
 _MAX_SOURCE_WAITS = 12
 
 
@@ -80,11 +82,11 @@ def _wait_again(db, job: WebinarVideoJob, exc: RecordingNotReadyError) -> bool:
     Returns True when the job was requeued, False when the caller should treat
     this as a failure like any other.
     """
-    if job.attempt >= _MAX_SOURCE_WAITS:
+    if job.source_waits >= _MAX_SOURCE_WAITS:
         logger.warning(
             "Job %s has waited %d times for Zoom to finish processing — failing",
             job.id,
-            job.attempt,
+            job.source_waits,
         )
         return False
     job_service.requeue(db, job, f"Waiting for Zoom to finish processing the recording — {exc}")
