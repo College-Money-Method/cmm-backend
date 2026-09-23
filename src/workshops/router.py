@@ -65,6 +65,26 @@ router = APIRouter(prefix="/api/v1/workshops", tags=["workshops"])
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
+def _registration_counts(db, webinar_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+    """``{webinar_id: registration_count}`` for a batch of webinars.
+
+    One grouped query, for the same reason ``_delete_impact`` uses them. The
+    tempting alternative — eager-loading the relationship and taking ``len()`` —
+    drags every registration row in the account through the ORM to produce one
+    integer per webinar: tens of thousands of objects hydrated and thrown away.
+    """
+    if not webinar_ids:
+        return {}
+    counts = dict(
+        db.execute(
+            select(WorkshopRegistration.webinar_id, func.count())
+            .where(WorkshopRegistration.webinar_id.in_(webinar_ids))
+            .group_by(WorkshopRegistration.webinar_id)
+        ).all()
+    )
+    return {wid: counts.get(wid, 0) for wid in webinar_ids}
+
+
 def _delete_impact(db, webinar_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[int, int]]:
     """``{webinar_id: (school_count, email_send_count)}`` for a batch of webinars.
 
@@ -345,11 +365,13 @@ def list_all_webinars(
     zoom_webinar_id: str | None = None,
 ):
     """Admin: global webinar list filterable by cycle, cohort, school, workshop, status, search, and zoom webinar id."""
+    # Registrations are counted in one grouped query below, never loaded: this
+    # list covers every webinar in the account, and their registration rows
+    # number in the tens of thousands.
     stmt = select(Webinar).options(
         selectinload(Webinar.workshop),
         selectinload(Webinar.cohort),
         selectinload(Webinar.cycle),
-        selectinload(Webinar.registrations),
     )
 
     if cycle_id:
@@ -388,7 +410,9 @@ def list_all_webinars(
     )
 
     webinars = db.execute(stmt).scalars().all()
-    impact = _delete_impact(db, [w.id for w in webinars])
+    webinar_ids = [w.id for w in webinars]
+    impact = _delete_impact(db, webinar_ids)
+    registration_counts = _registration_counts(db, webinar_ids)
     return [
         WebinarListItem(
             school_count=impact[w.id][0],
@@ -401,7 +425,7 @@ def list_all_webinars(
             zoom_webinar_id=w.zoom_webinar_id,
             registration_url=w.registration_url,
             zoom_link=w.zoom_link,
-            registration_count=len(w.registrations),
+            registration_count=registration_counts[w.id],
             workshop_id=w.workshop_id,
             workshop_name=w.workshop.name,
             cohort_name=w.cohort.name if w.cohort else None,

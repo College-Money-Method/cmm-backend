@@ -119,14 +119,16 @@ def test_a_source_that_is_not_ready_yet_goes_back_in_the_queue(wired, db, job, m
     db.expire_all()
     refreshed = db.get(type(job), job.id)
     assert refreshed.job_state is JobState.PENDING
-    assert refreshed.attempt == 1
+    assert refreshed.source_waits == 1
+    # Nothing ran, so this is still the same attempt.
+    assert refreshed.attempt == 0
     assert "still processing" in refreshed.error
 
 
 def test_waiting_for_the_source_does_not_go_on_forever(wired, db, job, monkeypatch):
     """A recording that is still not there an hour later is not slow, it is
     wrong, and the run has to end somewhere an admin can see it."""
-    job.attempt = run_task._MAX_SOURCE_WAITS
+    job.source_waits = run_task._MAX_SOURCE_WAITS
     db.commit()
     monkeypatch.setattr(run_task.process_recording, "process", _not_ready)
 
@@ -136,6 +138,23 @@ def test_waiting_for_the_source_does_not_go_on_forever(wired, db, job, monkeypat
     refreshed = db.get(type(job), job.id)
     assert refreshed.job_state is JobState.FAILED
     assert "still processing" in refreshed.error
+
+
+def test_a_retried_job_gets_a_fresh_wait(wired, db, job, monkeypatch):
+    """Retry is how a job that ran out of waits gets another go. If the wait
+    budget carried over, the retried run would fail on its first "not ready"."""
+    job.source_waits = run_task._MAX_SOURCE_WAITS
+    job.state = JobState.FAILED.value
+    db.commit()
+    job_service.retry(db, job)
+    monkeypatch.setattr(run_task.process_recording, "process", _not_ready)
+
+    assert run_task.run(str(job.id)) == 0
+
+    db.expire_all()
+    refreshed = db.get(type(job), job.id)
+    assert refreshed.job_state is JobState.PENDING
+    assert refreshed.source_waits == 1
 
 
 def test_recorded_error_is_bounded(wired, db, job, monkeypatch):
