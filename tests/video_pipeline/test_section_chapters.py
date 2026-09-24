@@ -257,6 +257,26 @@ def test_a_transcript_boundary_crowding_a_card_is_dropped():
     ]
 
 
+def test_a_qna_straight_after_a_transcript_topic_keeps_its_chapter():
+    """With no card in the deck, every chapter comes from the transcript, and the
+    topic pass already spaced those — letting the Q&A follow the last topic
+    closely on purpose. Spacing them again here left a talk with no title cards
+    without its Q&A chapter."""
+    sections = [
+        section(0.0, INTRODUCTION),
+        section(1500.0, CONTENT, "Paying for college"),
+        section(1640.0, QNA, "questions"),
+    ]
+
+    chapters = build_from_sections(sections, [])
+
+    assert [(c.timecode, c.source) for c in chapters] == [
+        (0, "intro"),
+        (1500, "topic"),
+        (1640, "qna"),
+    ]
+
+
 def test_two_cards_close_together_both_survive():
     """The floor is for boundaries the deck never marked. A deck that changes
     slide twice in a minute has said so twice."""

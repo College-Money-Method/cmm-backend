@@ -18,11 +18,13 @@ from src.app_config import operator_settings
 from src.app_config.models import AppConfig
 from src.app_config.schemas import AppConfigUpdate
 from src.config import settings
-from src.integrations.vimeo_upload import audit_folder_uri
+from src.integrations.vimeo_upload import audit_folder_uri, reel_folder_uri, replay_folder_uri
 
 # Captured at import, before the suite-wide fixture in ``tests/conftest.py``
 # stubs the name out: the database tests below need the real reader back.
 _real_lookup = operator_settings.vimeo_audit_folder_uri
+_real_replay_lookup = operator_settings.vimeo_replay_folder_uri
+_real_reel_lookup = operator_settings.vimeo_reel_folder_uri
 
 SEED = "/users/151255816/projects/11111111"
 CHOSEN = "/users/151255816/projects/99999999"
@@ -123,9 +125,9 @@ def live_config(monkeypatch, sessionmaker_factory):
 
     monkeypatch.setattr(operator_settings, "vimeo_audit_folder_uri", _real_lookup)
     monkeypatch.setattr(db_base, "get_session_factory", lambda url=None: sessionmaker_factory)
-    operator_settings.reset_vimeo_audit_folder_cache()
+    operator_settings.reset_vimeo_folder_cache()
     yield sessionmaker_factory
-    operator_settings.reset_vimeo_audit_folder_cache()
+    operator_settings.reset_vimeo_folder_cache()
 
 
 def test_the_stored_folder_is_what_the_pipeline_reads(seeded, live_config):
@@ -145,7 +147,7 @@ def test_an_unreadable_config_row_reports_unset_instead_of_raising(monkeypatch):
     def _boom(url=None):
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr(operator_settings, "_audit_folder_cache", None)
+    monkeypatch.setattr(operator_settings, "_folder_cache", None)
     monkeypatch.setattr(db_base, "get_session_factory", _boom)
 
     assert operator_settings.vimeo_audit_folder_uri() is None
@@ -161,5 +163,21 @@ def test_an_edit_is_visible_before_the_cache_would_have_expired(seeded, live_con
         db.commit()
 
     assert audit_folder_uri() == SEED
-    operator_settings.reset_vimeo_audit_folder_cache()
+    operator_settings.reset_vimeo_folder_cache()
     assert audit_folder_uri() == CHOSEN
+
+
+def test_replays_and_reels_read_their_own_folders_off_the_same_row(monkeypatch, live_config):
+    """Replays and reels follow the audit folder's rules: the admin's value wins,
+    and a blank one falls back to the env seed."""
+    monkeypatch.setattr(operator_settings, "vimeo_replay_folder_uri", _real_replay_lookup)
+    monkeypatch.setattr(operator_settings, "vimeo_reel_folder_uri", _real_reel_lookup)
+    monkeypatch.setattr(settings, "vimeo_replay_folder_uri", SEED)
+    monkeypatch.setattr(settings, "vimeo_reel_folder_uri", "")
+    with live_config() as db:
+        db.query(AppConfig).update({"vimeo_replay_folder_uri": "  ",
+                                    "vimeo_reel_folder_uri": CHOSEN})
+        db.commit()
+
+    assert replay_folder_uri() == SEED
+    assert reel_folder_uri() == CHOSEN

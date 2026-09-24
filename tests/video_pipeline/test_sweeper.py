@@ -12,7 +12,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.config import settings
-from src.video_pipeline import caption_task, job_service, notify, sweeper, task_dispatch
+from src.video_pipeline import (
+    caption_task,
+    job_service,
+    notify,
+    sweeper,
+    task_dispatch,
+    vimeo_transcript,
+)
 from src.video_pipeline.models import WebinarVideoJob
 from src.video_pipeline.states import JobState
 
@@ -123,6 +130,21 @@ def test_one_failed_job_neither_stops_the_batch_nor_stays_silent(db, webinar, co
     assert first.job_state is JobState.FAILED
     assert "Bedrock refused every frame" in first.error
     assert second.job_state is JobState.PUBLISHED
+
+
+def test_a_job_waiting_for_its_transcript_stays_in_chaptering(db, webinar, configured, monkeypatch):
+    """Vimeo not having transcribed the replay yet is a reason to look again next
+    sweep, not a failure to alert on."""
+    job = _chaptering_job(db, webinar)
+
+    def publish(db_, j):
+        raise vimeo_transcript.TranscriptPending("not transcribed yet")
+
+    monkeypatch.setattr(sweeper.publish_service, "publish", publish)
+
+    assert sweeper.publish_chaptering_jobs(db) == 0
+    assert job.job_state is JobState.CHAPTERING
+    assert job.error is None
 
 
 def test_publishing_is_batched_so_one_sweep_cannot_run_for_an_hour(db, webinar, configured, monkeypatch):

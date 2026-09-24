@@ -78,11 +78,7 @@ def upload_artifacts(
         json.dumps(manifest, indent=2).encode("utf-8"),
         "application/json",
     )
-    _put_bytes(
-        f"{prefix}{TRANSCRIPT_FILENAME}",
-        json.dumps([cue.as_dict() for cue in cues], indent=2).encode("utf-8"),
-        "application/json",
-    )
+    save_transcript(prefix, cues)
     logger.info(
         "Uploaded %d frames + manifests → s3://%s/%s",
         len(candidates),
@@ -101,6 +97,15 @@ def build_candidate_manifest(candidates: list[Candidate]) -> list[dict[str, obje
     manifest: list[dict[str, object]] = [{"index": 0, "timestamp": 0.0, "file": None}]
     manifest.extend(candidate.as_dict() for candidate in candidates)
     return manifest
+
+
+def save_transcript(prefix: str, cues: list[Cue]) -> None:
+    """Write ``transcript.json`` — cues already on the trimmed video's clock."""
+    _put_bytes(
+        f"{prefix}{TRANSCRIPT_FILENAME}",
+        json.dumps([cue.as_dict() for cue in cues], indent=2).encode("utf-8"),
+        "application/json",
+    )
 
 
 def load_json_artifact(prefix: str, filename: str) -> object:

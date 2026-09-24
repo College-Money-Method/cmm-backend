@@ -37,6 +37,7 @@ from src.video_pipeline import (
     section_chapters,
     stage_progress,
     topic_segment,
+    vimeo_transcript,
 )
 from src.video_pipeline.chapter_build import NO_CAP, Chapter, apply_cap, build_chapters
 from src.video_pipeline.embed_code import build_embed_code
@@ -202,6 +203,8 @@ def publish(db: Session, job: WebinarVideoJob) -> WebinarVideoJob:
 
     Raises:
         PublishError: for anything this stage can diagnose itself.
+        TranscriptPending: Vimeo has not transcribed the video yet; the job
+            stays in chaptering for a later sweep.
         VimeoError, ArtifactError, BedrockCallError: from the services below.
         The caller records whichever it gets on the job row.
     """
@@ -214,6 +217,11 @@ def publish(db: Session, job: WebinarVideoJob) -> WebinarVideoJob:
     with tempfile.TemporaryDirectory(prefix=f"chapter-{job.id}-") as tmp:
         stage_progress.record(db, job, stage_progress.LOADING_ARTIFACTS)
         cues = _load_cues(job.frames_prefix)
+        if not cues:
+            # Zoom had not written its transcript when the task fetched the
+            # recording. Without one a deck that never titles its sections
+            # chapters as a single block, so borrow Vimeo's — or wait for it.
+            cues = vimeo_transcript.cues_for(job, video_ref)
 
         # The transcript supplies the segments the deck never titles, and the
         # opening boundary that decides which cards are dividers rather than the

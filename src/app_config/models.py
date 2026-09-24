@@ -43,6 +43,10 @@ class AppConfig(Base):
     # an audit lands in is an operator's call, not a deploy's.
     # See src/app_config/operator_settings.py.
     vimeo_audit_folder_uri: Mapped[str | None] = mapped_column(Text)
+    # Folders production replays and trailer reels are uploaded into. Same
+    # rules: null falls back to the env seed, and an admin edits them.
+    vimeo_replay_folder_uri: Mapped[str | None] = mapped_column(Text)
+    vimeo_reel_folder_uri: Mapped[str | None] = mapped_column(Text)
 
     # Feature flags
     survey_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)

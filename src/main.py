@@ -61,6 +61,7 @@ from src.zoom.webhook_router import router as zoom_webhook_router
 from src.content.translation_router import router as translation_router
 from src.content.video_cc_router import router as video_cc_router
 from src.video_pipeline.job_stream import router as video_pipeline_stream_router
+from src.video_pipeline.reel_router import router as video_pipeline_reel_router
 from src.video_pipeline.router import router as video_pipeline_router
 from src.video_pipeline.scheduler_jobs import register_video_pipeline_jobs
 from src.emails.webhook_router import router as emails_webhook_router
@@ -125,6 +126,7 @@ app.include_router(translation_router)
 app.include_router(video_cc_router)
 app.include_router(video_pipeline_router)
 app.include_router(video_pipeline_stream_router)
+app.include_router(video_pipeline_reel_router)
 app.include_router(emails_webhook_router)
 app.include_router(emails_preferences_router)
 app.include_router(emails_broadcast_router)

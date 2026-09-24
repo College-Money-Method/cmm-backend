@@ -33,7 +33,12 @@ class Cue:
 
 def load_cues(path: Path) -> list[Cue]:
     """Parse a Zoom transcript into cues. Raises VttError on unusable input."""
-    document = parse(path.read_text(encoding="utf-8-sig", errors="replace"))
+    return parse_cues(path.read_text(encoding="utf-8-sig", errors="replace"))
+
+
+def parse_cues(content: str) -> list[Cue]:
+    """Parse WebVTT/SRT text into cues, skipping blank ones. Raises VttError."""
+    document = parse(content)
     return [
         Cue(start=cue.start, end=cue.end, text=cue.text.strip())
         for cue in document.cues
@@ -71,4 +76,4 @@ def format_timestamp(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-__all__ = ["Cue", "VttError", "format_timestamp", "load_cues", "rebase"]
+__all__ = ["Cue", "VttError", "format_timestamp", "load_cues", "parse_cues", "rebase"]

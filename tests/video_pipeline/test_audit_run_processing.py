@@ -52,6 +52,12 @@ def test_a_production_run_is_not_diverted_into_it(db, webinar, audit_folder):
     assert process_recording._upload_folder(_job(db, webinar_id=webinar.id)) is None
 
 
+def test_a_production_run_goes_to_the_replay_folder(db, webinar, audit_folder, monkeypatch):
+    monkeypatch.setattr(settings, "vimeo_replay_folder_uri", "/users/151255816/projects/30654885")
+    job = _job(db, webinar_id=webinar.id)
+    assert process_recording._upload_folder(job) == "/users/151255816/projects/30654885"
+
+
 def test_an_audit_run_refuses_to_upload_with_no_folder_configured(db, monkeypatch):
     monkeypatch.setattr(settings, "vimeo_audit_folder_uri", "")
 
@@ -140,7 +146,7 @@ def test_a_url_source_is_downloaded_from_its_url(db, monkeypatch, tmp_path):
     )
     job = _job(db, audit_only=True, source_url="https://cmm-media.s3.amazonaws.com/a.mp4")
 
-    video, transcript, duration, recording_start = process_recording._download_source(
+    video, transcript, duration, recording_start, camera = process_recording._download_source(
         job, tmp_path
     )
 
@@ -154,6 +160,8 @@ def test_a_url_source_is_downloaded_from_its_url(db, monkeypatch, tmp_path):
     # Nobody knows when a pasted file was recorded, so the Q&A causality check
     # simply does not run for one.
     assert recording_start is None
+    # One file, so no separate camera rendition for a reel.
+    assert camera is None
 
 
 def test_a_zoom_source_still_goes_through_zoom(db, monkeypatch, tmp_path):
@@ -180,6 +188,7 @@ def test_a_zoom_source_still_goes_through_zoom(db, monkeypatch, tmp_path):
         vtt,
         3600,
         datetime(2026, 9, 15, 23, 30, tzinfo=timezone.utc),
+        None,
     )
 
 

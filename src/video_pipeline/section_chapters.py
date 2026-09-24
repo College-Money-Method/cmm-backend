@@ -134,17 +134,20 @@ def _qna_timecode(section: Section, cues: list[Cue]) -> float:
 
 
 def _thin_fallbacks(chapters: list[Chapter], min_seconds: float) -> list[Chapter]:
-    """Drop a transcript-derived chapter that opens too soon after another one.
+    """Drop a transcript-derived chapter that opens too soon after a card.
 
     Cards are never dropped here — the deck showing a new slide is the evidence
     this rule exists to defer to. Only the chapters the transcript supplied on
-    its own are held to the floor.
+    its own are held to the floor, and only against a card: two transcript
+    boundaries were already spaced by the topic pass, which deliberately lets a
+    tour run straight into the Q&A. Holding them apart again here dropped that
+    Q&A from a deck with no title cards at all.
     """
     if min_seconds <= 0:
         return chapters
     kept: list[Chapter] = []
     for chapter in chapters:
-        if kept and chapter.source != TITLE_CARD:
+        if kept and chapter.source != TITLE_CARD and kept[-1].source == TITLE_CARD:
             gap = chapter.timecode - kept[-1].timecode
             if gap < min_seconds:
                 logger.info(

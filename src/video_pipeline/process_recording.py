@@ -25,7 +25,12 @@ from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.integrations.vimeo import VimeoError
-from src.integrations.vimeo_upload import audit_folder_uri, create_video, wait_for_transcode
+from src.integrations.vimeo_upload import (
+    audit_folder_uri,
+    create_video,
+    replay_folder_uri,
+    wait_for_transcode,
+)
 from src.video_pipeline import (
     archive_original,
     artifact_store,
@@ -51,7 +56,7 @@ class SamplingError(RuntimeError):
 
 def _download_source(
     job: WebinarVideoJob, work_dir: Path
-) -> tuple[Path, Path | None, int, datetime | None]:
+) -> tuple[Path, Path | None, int, datetime | None, Path | None]:
     """Fetch the source from wherever this job's descriptor points.
 
     A URL source reports no duration and no recording start — the duration is
@@ -71,7 +76,7 @@ def _download_source(
 
     if job.source_url:
         video = url_recording_fetch.fetch_from_url(job.source_url, work_dir / "source.mp4")
-        return video, operator_transcript, 0, None
+        return video, operator_transcript, 0, None, None
 
     fetched = fetch_recording(job.zoom_recording_uuid, work_dir)
     return (
@@ -79,6 +84,7 @@ def _download_source(
         operator_transcript or fetched.transcript_path,
         fetched.duration_seconds,
         fetched.recording_start,
+        fetched.camera_path,
     )
 
 
@@ -95,11 +101,15 @@ def _acquire_source(db: Session, job: WebinarVideoJob, work_dir: Path) -> tuple[
         logger.info("Re-running job %s from the S3 archive", job.id)
         return archive_original.restore_original(job.archive_key, work_dir)
 
-    video_path, transcript_path, duration_seconds, recording_start = _download_source(
-        job, work_dir
+    video_path, transcript_path, duration_seconds, recording_start, camera_path = (
+        _download_source(job, work_dir)
     )
     stage_progress.record(db, job, stage_progress.ARCHIVING_SOURCE)
-    prefix = archive_original.archive_original(str(job.id), video_path, transcript_path)
+    prefix = archive_original.archive_original(
+        str(job.id), video_path, transcript_path, camera_path
+    )
+    if camera_path is not None:
+        camera_path.unlink(missing_ok=True)  # archived; the rest of the run never reads it
     job.archive_key = prefix
     job.archive_expires_at = archive_original.expires_at()
     if duration_seconds:
@@ -134,12 +144,13 @@ def _resolve_trim(video: Path, vtt: Path | None) -> tuple[float, list[transcript
 def _upload_folder(job: WebinarVideoJob) -> str | None:
     """Vimeo folder this job's video belongs in, if any.
 
-    An audit run with no folder configured refuses to upload. Failing closed is
-    the point: the alternative is unreviewed videos accumulating in the same
-    library the production replays live in, where nothing distinguishes them.
+    A production replay goes to the replay folder, or the library root when
+    none is set. An audit run with no folder configured refuses to upload.
+    Failing closed is the point: the alternative is unreviewed videos
+    accumulating beside the production replays, where nothing distinguishes them.
     """
     if not job.audit_only:
-        return None
+        return replay_folder_uri() or None
     folder = audit_folder_uri()
     if not folder:
         raise VimeoError(

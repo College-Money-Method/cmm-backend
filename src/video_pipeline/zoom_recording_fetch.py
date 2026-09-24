@@ -69,6 +69,9 @@ class FetchedRecording:
     # only one of the three the transcript's clock is measured from. None when
     # Zoom omits it.
     recording_start: datetime | None
+    # Zoom's camera-only rendition, when it made one and it downloaded. Only a
+    # trailer reel reads it (``reel_sources``), so it is never worth failing over.
+    camera_path: Path | None = None
 
 
 def parse_start(raw: object) -> datetime | None:
@@ -162,6 +165,36 @@ def select_transcript_file(payload: dict) -> dict | None:
     return None
 
 
+# Camera-only renditions, best first: the presenter's face with no slide, which
+# a trailer reel cuts to between shots of the shared screen.
+CAMERA_RECORDING_TYPES = ("active_speaker", "speaker_view")
+
+
+def select_camera_file(payload: dict) -> dict | None:
+    """The completed camera-only MP4, or None when Zoom made none."""
+    by_type = {
+        (f.get("recording_type") or "").strip().lower(): f
+        for f in _files(payload)
+        if (f.get("file_type") or "").upper() == "MP4"
+        and (f.get("status") or "completed").lower() == "completed"
+        and f.get("download_url")
+    }
+    return next((by_type[t] for t in CAMERA_RECORDING_TYPES if t in by_type), None)
+
+
+def download_camera(payload: dict, token: str, dest: Path) -> Path | None:
+    """Download the camera-only rendition to `dest`; None when there is none or it fails."""
+    camera = select_camera_file(payload)
+    if camera is None:
+        logger.info("Zoom made no camera-only rendition of this recording")
+        return None
+    try:
+        return _download(camera["download_url"], token, dest)
+    except RecordingFetchError as exc:
+        logger.warning("Camera rendition download failed — continuing without it: %s", exc)
+        return None
+
+
 def _download(url: str, token: str, dest: Path) -> Path:
     """Stream one recording file to disk.
 
@@ -237,6 +270,7 @@ def fetch_recording(recording_uuid: str, work_dir: Path) -> FetchedRecording:
     return FetchedRecording(
         video_path=video_path,
         transcript_path=transcript_path,
+        camera_path=download_camera(payload, token, work_dir / "camera.mp4"),
         duration_seconds=int(payload.get("duration") or 0) * 60,
         topic=str(payload.get("topic") or ""),
         recording_start=parse_start(payload.get("start_time")),

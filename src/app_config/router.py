@@ -12,7 +12,7 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from src.app_config.models import AppConfig
-from src.app_config.operator_settings import reset_vimeo_audit_folder_cache
+from src.app_config.operator_settings import reset_vimeo_folder_cache
 from src.app_config.schemas import AppConfigOut, AppConfigUpdate
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
@@ -54,5 +54,5 @@ def update_app_config(body: AppConfigUpdate, _admin: AdminDep, db: DbDep):
     # minutes. Only this process's cache is cleared; another one catches up
     # when its own window expires.
     reset_app_default_timezone_cache()
-    reset_vimeo_audit_folder_cache()
+    reset_vimeo_folder_cache()
     return cfg

@@ -61,5 +61,6 @@ def _no_operator_overrides(monkeypatch):
     """
     from src.app_config import operator_settings
 
-    operator_settings.reset_vimeo_audit_folder_cache()
-    monkeypatch.setattr(operator_settings, "vimeo_audit_folder_uri", lambda: None)
+    operator_settings.reset_vimeo_folder_cache()
+    for lookup in ("vimeo_audit_folder_uri", "vimeo_replay_folder_uri", "vimeo_reel_folder_uri"):
+        monkeypatch.setattr(operator_settings, lookup, lambda: None)
