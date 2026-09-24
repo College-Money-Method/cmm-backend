@@ -67,7 +67,9 @@ def upload_artifacts(
                 str(candidate.path),
                 settings.s3_bucket_name,
                 f"{prefix}{candidate.path.name}",
-                ExtraArgs={"ContentType": "image/jpeg"},
+                # A retry re-samples into the same keys, so the CDN must check
+                # S3 (a cheap 304) rather than serve the last attempt's frame.
+                ExtraArgs={"ContentType": "image/jpeg", "CacheControl": "no-cache"},
             )
         except (BotoCoreError, ClientError) as exc:
             raise ArtifactError(f"Uploading {candidate.path.name} failed: {exc}") from exc

@@ -166,5 +166,6 @@ class VideoJobFrame(BaseModel):
 class VideoJobFrames(BaseModel):
     items: list[VideoJobFrame]
     # Seconds the URLs above remain valid, so the screen can refetch rather
-    # than showing broken images after a long-open tab.
-    expires_in: int
+    # than showing broken images after a long-open tab. None: CDN URLs, which
+    # do not expire.
+    expires_in: int | None = None
