@@ -93,6 +93,20 @@ def test_urls_expire_within_the_quarter_hour(job, s3, monkeypatch):
     assert all("exp=900" in f.url for f in frames)
 
 
+def test_with_a_cdn_frames_load_from_it_and_nothing_is_signed(job, s3, monkeypatch):
+    monkeypatch.setattr(settings, "cdn_base_url", "https://cdn.example.com")
+    _manifest(monkeypatch, MANIFEST)
+
+    frames = frame_urls.for_job(job)
+
+    assert [f.url for f in frames] == [
+        f"https://cdn.example.com/{PREFIX}frame_0001.jpg",
+        f"https://cdn.example.com/{PREFIX}frame_0002.jpg",
+    ]
+    assert s3.signed == []
+    assert frame_urls.url_lifetime() is None
+
+
 def test_a_job_that_never_reached_the_frame_stage_has_none(db, webinar, s3, monkeypatch):
     row, _ = job_service.create_from_recording(
         db, webinar_id=webinar.id, zoom_recording_uuid="rec-pending"

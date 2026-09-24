@@ -189,6 +189,15 @@ def test_frames_come_back_presigned_with_their_expiry(client, published_job, mon
     ]
 
 
+def test_frames_behind_a_cdn_report_no_expiry(client, published_job, monkeypatch):
+    monkeypatch.setattr(settings, "cdn_base_url", "https://cdn.example.com")
+    monkeypatch.setattr(frame_urls, "for_job", lambda job, *a, **kw: [])
+
+    body = client.get(f"{BASE}/jobs/{published_job.id}/frames").json()
+
+    assert body["expires_in"] is None
+
+
 def test_frames_for_a_job_whose_images_have_expired_are_empty_not_an_error(
     client, published_job, monkeypatch
 ):

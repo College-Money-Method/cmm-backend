@@ -106,17 +106,17 @@ def get_job(job_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> VideoJobDetail:
 
 @router.get("/jobs/{job_id}/frames", response_model=VideoJobFrames)
 def get_job_frames(job_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> VideoJobFrames:
-    """Presigned URLs for the frames this job's chapters were built from.
+    """URLs for the frames this job's chapters were built from (CDN or presigned).
 
-    Short-lived and super_admin only: a frame is a still of a school's session,
-    the same sensitivity as the recording it came from. An empty list is the
-    normal answer for a job older than the 30-day frame lifecycle.
+    super_admin only: a frame is a still of a school's session, the same
+    sensitivity as the recording it came from. An empty list is the normal
+    answer for a job older than the 30-day frame lifecycle.
     """
     job = _load(db, job_id)
     frames = frame_urls.for_job(job)
     return VideoJobFrames(
         items=[frame.as_dict() for frame in frames],
-        expires_in=frame_urls.EXPIRES_IN,
+        expires_in=frame_urls.url_lifetime(),
     )
 
 

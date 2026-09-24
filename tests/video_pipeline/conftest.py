@@ -26,6 +26,7 @@ from sqlalchemy.pool import StaticPool
 
 import src.main  # noqa: F401 - imports every model module, registering them with Base.metadata
 from src.app_config.models import AppConfig
+from src.config import settings
 from src.db.base import Base
 from src.workshops.models import Webinar, Workshop
 
@@ -133,3 +134,9 @@ def webinar(db) -> Webinar:
     db.add_all([workshop, row])
     db.commit()
     return row
+
+
+@pytest.fixture(autouse=True)
+def _no_cdn(monkeypatch):
+    """Presigned S3 URLs unless a test sets a CDN, whatever the local .env says."""
+    monkeypatch.setattr(settings, "cdn_base_url", "")

@@ -126,8 +126,9 @@ def upload_to_vimeo(db: Session, reel: WebinarVideoReel, job: WebinarVideoJob) -
 
 
 def to_view(reel: WebinarVideoReel) -> VideoReel:
-    preview = frame_urls.presign(reel.s3_key, PREVIEW_EXPIRES_IN) \
+    preview = frame_urls.object_url(reel.s3_key, PREVIEW_EXPIRES_IN) \
         if reel.state == READY and reel.s3_key else None
+    expires_in = frame_urls.url_lifetime(PREVIEW_EXPIRES_IN) if preview else None
     vimeo_url = None
     if reel.vimeo_video_id:
         suffix = f"/{reel.vimeo_hash}" if reel.vimeo_hash else ""
@@ -137,7 +138,7 @@ def to_view(reel: WebinarVideoReel) -> VideoReel:
         state=reel.state, stage=reel.stage, hook_title=reel.hook_title,
         duration_seconds=float(reel.duration_seconds) if reel.duration_seconds is not None
         else None,
-        preview_url=preview, preview_expires_in=PREVIEW_EXPIRES_IN if preview else None,
+        preview_url=preview, preview_expires_in=expires_in,
         vimeo_video_id=reel.vimeo_video_id, vimeo_url=vimeo_url, error=reel.error,
         created_at=reel.created_at, updated_at=reel.updated_at,
     )

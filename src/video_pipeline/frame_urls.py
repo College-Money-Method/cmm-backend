@@ -1,13 +1,13 @@
-"""Short-lived URLs for one job's candidate frames, for the admin screen.
+"""URLs for one job's candidate frames, for the admin screen.
 
 The frames are what the vision model saw, so putting them next to the chapter
 titles turns "chapter 4 looks wrong" into something an admin can confirm in a
 glance rather than by opening the video and scrubbing.
 
-The bucket is not public and must not become public for this: a frame is a
-still of a school's session, the same sensitivity as the recording. So each
-image is handed out as a presigned GET that expires in fifteen minutes, and the
-URLs are never logged.
+Where a CDN is configured (``settings.cdn_base_url``) the browser loads frames
+and reel previews from it; the URL is stable and does not expire. Elsewhere
+each object is handed out as a presigned GET that expires, and the URLs are
+never logged.
 
 The S3 lifecycle rule removes frames after 30 days while the job row keeps its
 chapters forever. That is the normal end state for an old job, not an error, so
@@ -21,14 +21,15 @@ import logging
 from dataclasses import dataclass
 
 from src.config import settings
+from src.storage.asset_url import s3_object_url, to_cdn_url
 from src.storage.s3_client import get_s3_client
 from src.video_pipeline import artifact_store
 from src.video_pipeline.models import WebinarVideoJob
 
 logger = logging.getLogger(__name__)
 
-# Long enough to read a chapter list, short enough that a URL pasted into a
-# ticket is dead by the time anyone else opens it.
+# Presigned only: long enough to read a chapter list, short enough that a URL
+# pasted into a ticket is dead by the time anyone else opens it.
 EXPIRES_IN = 900
 
 
@@ -72,8 +73,20 @@ def presign(key: str, expires_in: int = EXPIRES_IN) -> str | None:
         return None
 
 
+def object_url(key: str, expires_in: int = EXPIRES_IN) -> str | None:
+    """The URL the browser loads ``key`` from: the CDN when set, else presigned S3."""
+    if settings.cdn_base_url:
+        return to_cdn_url(s3_object_url(key))
+    return presign(key, expires_in)
+
+
+def url_lifetime(expires_in: int = EXPIRES_IN) -> int | None:
+    """Seconds an ``object_url`` stays valid; None when it does not expire."""
+    return None if settings.cdn_base_url else expires_in
+
+
 def for_job(job: WebinarVideoJob, expires_in: int = EXPIRES_IN) -> list[FrameRef]:
-    """Every frame of ``job``, oldest first, each with a presigned URL.
+    """Every frame of ``job``, oldest first, each with a URL from ``object_url``.
 
     Reads ``candidates.json`` rather than listing the prefix so the timestamps
     come from the same manifest the chapters were built from — a frame shown
@@ -104,7 +117,7 @@ def for_job(job: WebinarVideoJob, expires_in: int = EXPIRES_IN) -> list[FrameRef
         filename = entry.get("file")
         if not filename:
             continue
-        url = presign(f"{prefix}{filename}", expires_in)
+        url = object_url(f"{prefix}{filename}", expires_in)
         if url is None:
             continue
         frames.append(

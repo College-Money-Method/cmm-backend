@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from src.auth.deps import get_current_user
 from src.auth.schemas import CurrentUser
+from src.config import settings
 from src.db.deps import get_db
 from src.integrations import vimeo, vimeo_upload, zoom
 from src.video_pipeline import (
@@ -273,6 +274,18 @@ def test_the_list_previews_ready_reels_and_fails_abandoned_ones(client, db, publ
     assert by_id[str(stuck.id)]["state"] == FAILED
     assert by_id[str(stuck.id)]["preview_url"] is None
     assert body["blocked_reason"] is None
+
+
+def test_a_ready_reel_previews_through_the_cdn_when_one_is_set(client, db, published_job,
+                                                              archive, monkeypatch):
+    archive.add(archive_original.CAMERA_FILENAME)
+    monkeypatch.setattr(settings, "cdn_base_url", "https://cdn.example.com")
+    _reel(db, published_job, s3_key="video-pipeline/reels/j/r.mp4")
+
+    item = client.get(f"{BASE}/jobs/{published_job.id}/reels").json()["items"][0]
+
+    assert item["preview_url"] == "https://cdn.example.com/video-pipeline/reels/j/r.mp4"
+    assert item["preview_expires_in"] is None
 
 
 def test_uploading_a_ready_reel_records_the_vimeo_video(client, db, published_job,
