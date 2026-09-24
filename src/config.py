@@ -70,6 +70,15 @@ class Settings(BaseSettings):
     # recorded translation invocation. Override if AWS pricing changes.
     bedrock_haiku_input_usd_per_mtok: float = 1.0
     bedrock_haiku_output_usd_per_mtok: float = 5.0
+    # Sonnet, used only where judgement over a long text is worth ~3x the price:
+    # picking trailer clips from a webinar transcript. Same inference-profile
+    # rule as Haiku. Override via env var BEDROCK_SONNET_MODEL_ID.
+    bedrock_sonnet_model_id: str = "us.anthropic.claude-sonnet-4-6"
+    bedrock_sonnet_input_usd_per_mtok: float = 3.0
+    bedrock_sonnet_output_usd_per_mtok: float = 15.0
+    # Trailer reels keep only this speaker's sentences, matched against the
+    # "Name, Company:" label Zoom puts on each transcript turn.
+    trailer_presenter_name: str = "Paul Martin"
 
     # WordPress (for media migration script)
     wordpress_application_password: str = ""

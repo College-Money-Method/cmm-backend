@@ -1,8 +1,8 @@
 """Shared Bedrock access for the video pipeline.
 
 Mirrors the client setup in `src/content/bedrock_translation.py` rather than
-importing its private helper. Both calls in this pipeline (trim-point text and
-frame-classification vision) run on `settings.bedrock_haiku_model_id`.
+importing its private helper. Calls run on `settings.bedrock_haiku_model_id`
+unless the caller passes `model_id` (trailer clip selection uses Sonnet).
 """
 
 from __future__ import annotations
@@ -72,8 +72,9 @@ def call_json(
     content: Any,
     invoke_type: str,
     max_tokens: int = 1024,
+    model_id: str | None = None,
 ) -> tuple[dict[str, Any], int, int]:
-    """Call Haiku and parse the reply as a JSON object.
+    """Call Haiku (or `model_id`, when given) and parse the reply as a JSON object.
 
     `content` is passed straight through as the user message content, so it takes
     either a plain string or a list of blocks (text + image) for vision calls.
@@ -85,10 +86,11 @@ def call_json(
     Returns (parsed_object, input_tokens, output_tokens).
     Raises BedrockCallError on transport failure, empty output, or non-object JSON.
     """
+    model = model_id or settings.bedrock_haiku_model_id
     client = get_client()
     try:
         with client.messages.stream(
-            model=settings.bedrock_haiku_model_id,
+            model=model,
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": content}],
@@ -109,9 +111,7 @@ def call_json(
     usage = message.usage
     input_tokens = getattr(usage, "input_tokens", 0) or 0
     output_tokens = getattr(usage, "output_tokens", 0) or 0
-    bedrock_usage.record(
-        invoke_type, settings.bedrock_haiku_model_id, input_tokens, output_tokens
-    )
+    bedrock_usage.record(invoke_type, model, input_tokens, output_tokens)
 
     # Guard an empty content list or a non-text block; a missing .text would
     # otherwise raise an unhandled AttributeError.

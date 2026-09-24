@@ -36,14 +36,22 @@ QA_CLASSIFICATION = "qa_classification"
 TRIM_POINT = "trim_point"
 TOPIC_SEGMENT = "topic_segment"
 FRAME_CLASSIFY = "frame_classify"
+TRAILER_SELECT = "trailer_select"
 
 
-def cost_usd(input_tokens: int, output_tokens: int) -> Decimal:
-    """USD for one invocation, from the configured per-1M-token rates."""
-    cost = (
-        input_tokens * settings.bedrock_haiku_input_usd_per_mtok
-        + output_tokens * settings.bedrock_haiku_output_usd_per_mtok
-    ) / 1_000_000
+def cost_usd(input_tokens: int, output_tokens: int, model_id: str | None = None) -> Decimal:
+    """USD for one invocation, from the configured per-1M-token rates.
+
+    Priced at the Sonnet rates when `model_id` is the configured Sonnet model,
+    and at the Haiku rates otherwise.
+    """
+    if model_id == settings.bedrock_sonnet_model_id:
+        rate_in = settings.bedrock_sonnet_input_usd_per_mtok
+        rate_out = settings.bedrock_sonnet_output_usd_per_mtok
+    else:
+        rate_in = settings.bedrock_haiku_input_usd_per_mtok
+        rate_out = settings.bedrock_haiku_output_usd_per_mtok
+    cost = (input_tokens * rate_in + output_tokens * rate_out) / 1_000_000
     return Decimal(str(round(cost, 6)))
 
 
@@ -70,7 +78,7 @@ def record(invoke_type: str, model_id: str, input_tokens: int, output_tokens: in
                     model_id=model_id,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
-                    cost_usd=cost_usd(input_tokens, output_tokens),
+                    cost_usd=cost_usd(input_tokens, output_tokens, model_id),
                 )
             )
             db.commit()

@@ -91,6 +91,9 @@ class TestCost:
         # 1M in at $1 and 1M out at $5.
         assert bedrock_usage.cost_usd(1_000_000, 0) == Decimal("1.0")
         assert bedrock_usage.cost_usd(0, 1_000_000) == Decimal("5.0")
+        sonnet = bedrock_usage.settings.bedrock_sonnet_model_id
+        assert bedrock_usage.cost_usd(1_000_000, 0, sonnet) == Decimal("3.0")
+        assert bedrock_usage.cost_usd(0, 1_000_000, sonnet) == Decimal("15.0")
 
     def test_a_small_call_keeps_six_decimals_rather_than_rounding_to_nothing(self):
         # Frame classification is thousands of cheap calls. Rounding each to
