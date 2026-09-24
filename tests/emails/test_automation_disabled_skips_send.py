@@ -23,6 +23,7 @@ from src.emails.email_template_models import EmailTemplate
 from src.emails.models import EmailSendLog
 from src.schools.models import Contact, School
 from src.workshops.models import PortalMapping, Webinar, Workshop
+from tests.emails.conftest import grant_hub_access
 
 SCHOOL_ID = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
 OPTED_IN_CONTACT_ID = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
@@ -35,15 +36,15 @@ AUTOMATION_ID = uuid.UUID("66666666-4444-4444-4444-444444444444")
 
 def _seed_common(session, *, automation_enabled: bool, auto_emails: bool) -> None:
     session.add(School(id=SCHOOL_ID, name="Test Academy", slug="test-academy", is_current_customer=True))
-    session.add(
-        Contact(
-            id=OPTED_IN_CONTACT_ID if auto_emails else OPTED_OUT_CONTACT_ID,
-            school_id=SCHOOL_ID,
-            email="family@example.com",
-            role="hub_user",
-            auto_emails=auto_emails,
-        )
+    contact = Contact(
+        id=OPTED_IN_CONTACT_ID if auto_emails else OPTED_OUT_CONTACT_ID,
+        school_id=SCHOOL_ID,
+        email="family@example.com",
+        role="hub_user",
+        auto_emails=auto_emails,
     )
+    session.add(contact)
+    grant_hub_access(session, contact)
     session.add(Workshop(id=WORKSHOP_ID, name="College Planning 101"))
     session.add(
         Webinar(

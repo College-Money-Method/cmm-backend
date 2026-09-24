@@ -57,7 +57,11 @@ def test_registrant_id_is_read_from_registrant_id_not_id(monkeypatch):
             return None
 
         def json(self) -> dict:
-            return {"id": 81276546458, "registrant_id": "CUHCqHCFRC-srNag0ZwDZQ"}
+            return {
+                "id": 81276546458,
+                "registrant_id": "CUHCqHCFRC-srNag0ZwDZQ",
+                "join_url": "https://us06web.zoom.us/w/81276546458?tk=personal",
+            }
 
     monkeypatch.setattr(zoom.settings, "zoom_account_id", "acct")
     monkeypatch.setattr(zoom.settings, "zoom_client_id", "client")
@@ -69,7 +73,9 @@ def test_registrant_id_is_read_from_registrant_id_not_id(monkeypatch):
     monkeypatch.setattr(zoom.httpx, "post", lambda *a, **k: _Resp())
 
     assert zoom.register_webinar("81276546458", "parent@example.com", "A", "B") == (
-        "CUHCqHCFRC-srNag0ZwDZQ"
+        zoom.ZoomRegistrant(
+            "CUHCqHCFRC-srNag0ZwDZQ", "https://us06web.zoom.us/w/81276546458?tk=personal"
+        )
     )
 
 
@@ -124,7 +130,8 @@ def test_a_custom_questions_refusal_relaxes_the_form_and_retries(monkeypatch):
         zoom, "_relax_custom_questions", lambda wid, _t: bool(relaxed.append(wid)) or True
     )
 
-    assert zoom.register_webinar("81276546458", "parent@example.com", "A", "B") == "real-id"
+    registrant = zoom.register_webinar("81276546458", "parent@example.com", "A", "B")
+    assert registrant is not None and registrant.registrant_id == "real-id"
     assert len(attempts) == 2
     assert relaxed == ["81276546458"]
 

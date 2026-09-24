@@ -31,6 +31,7 @@ from src.emails.broadcast_models import Broadcast
 from src.emails.models import EmailSendLog
 from src.main import app
 from src.schools.models import Contact, School
+from tests.emails.conftest import grant_hub_access
 
 # Letter-only hex UUIDs — see tests/auth/test_contact_auto_emails_self_edit.py
 # for the documented SQLite NUMERIC-affinity coercion bug this avoids.
@@ -86,7 +87,11 @@ def make_client(monkeypatch):
         # domain), so sends are withheld and logged as "sandboxed" — no SES.
         seed.add(AppConfig(email_sandbox_mode=True))
         seed.add(School(id=SCHOOL_ID, name="Test High", is_current_customer=True))
-        seed.add(
+        # Every seeded contact gets a user_roles row: hub access is now a
+        # precondition for being mailable at all, so without it these fixtures
+        # would pass for the wrong reason (nobody resolvable) instead of
+        # exercising the school/opt-in filters under test.
+        seeded = [
             Contact(
                 id=ADMIN_CONTACT_ID,
                 user_id=ADMIN_USER_ID,
@@ -97,18 +102,18 @@ def make_client(monkeypatch):
                 role="hub_admin",
                 broadcast_emails=True,
             )
-        )
+        ]
         for cid, email in (
             (FAMILY_CONTACT_1_ID, "family1@example.com"),
             (FAMILY_CONTACT_2_ID, "family2@example.com"),
             (FAMILY_CONTACT_3_ID, "family3@example.com"),
         ):
-            seed.add(
+            seeded.append(
                 Contact(
                     id=cid, school_id=SCHOOL_ID, email=email, role="hub_user", broadcast_emails=True
                 )
             )
-        seed.add(
+        seeded.append(
             Contact(
                 id=FAMILY_NO_OPTIN_ID,
                 school_id=SCHOOL_ID,
@@ -118,7 +123,7 @@ def make_client(monkeypatch):
             )
         )
         seed.add(School(id=NON_CUSTOMER_SCHOOL_ID, name="Prospect School", is_current_customer=False))
-        seed.add(
+        seeded.append(
             Contact(
                 id=NON_CUSTOMER_CONTACT_ID,
                 school_id=NON_CUSTOMER_SCHOOL_ID,
@@ -127,6 +132,8 @@ def make_client(monkeypatch):
                 broadcast_emails=True,
             )
         )
+        seed.add_all(seeded)
+        grant_hub_access(seed, *seeded)
         seed.commit()
         seed.close()
 

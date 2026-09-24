@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import time
+from typing import NamedTuple
 
 import httpx
 
@@ -31,6 +32,20 @@ class ZoomApiError(RuntimeError):
         # recording that is still transcoding and one that never existed are
         # both 404, and only this tells them apart.
         self.code = code
+
+
+class ZoomRegistrant(NamedTuple):
+    """One person's Zoom registration: their id and their personal join link."""
+
+    registrant_id: str
+    # Personal to this registrant — the same link Zoom's confirmation email
+    # carries, so showing it on the success screen is no wider than the email.
+    join_url: str | None
+
+
+def is_configured() -> bool:
+    """True when Server-to-Server OAuth credentials are set for this install."""
+    return bool(settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret)
 
 
 def _zoom_refusal(resp: httpx.Response) -> str:
@@ -244,16 +259,16 @@ def register_webinar(
     grade: str | None = None,
     school: str | None = None,
     questions: str | None = None,
-) -> str | None:
+) -> ZoomRegistrant | None:
     """
     Register an attendee for a Zoom webinar via the Zoom API.
 
-    Returns the Zoom ``registrant_id`` string on success, or ``None`` if
-    credentials are not configured or the API call fails.  Failures are
-    intentionally non-fatal — the caller's own DB record has already been
-    committed before this is called.
+    Returns the registrant's id and personal join link on success, or ``None``
+    if credentials are not configured or the API call fails. Never raises —
+    callers that must not succeed without Zoom check ``is_configured()`` to
+    tell "skipped" apart from "refused".
     """
-    if not (settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret):
+    if not is_configured():
         logger.debug("Zoom credentials not configured — skipping Zoom registration")
         return None
 
@@ -313,13 +328,20 @@ def register_webinar(
         # "registrant_id". Reading "id" here stamped the webinar id onto every
         # registration, so attendance matching by registrant id never hit and
         # silently fell back to email.
-        registrant_id: str | None = resp.json().get("registrant_id")
+        body = resp.json()
+        registrant_id: str | None = body.get("registrant_id")
+        if not registrant_id:
+            logger.warning(
+                "Zoom registration answered without a registrant id — webinar=%s",
+                zoom_webinar_id,
+            )
+            return None
         logger.info(
             "Zoom registration created — webinar=%s registrant=%s",
             zoom_webinar_id,
             registrant_id,
         )
-        return registrant_id
+        return ZoomRegistrant(str(registrant_id), body.get("join_url"))
 
     except httpx.HTTPStatusError as exc:
         logger.warning(

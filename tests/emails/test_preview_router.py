@@ -27,6 +27,7 @@ from src.main import app
 from src.cycles.models import Cycle
 from src.schools.models import Contact, School
 from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopRegistration
+from tests.emails.conftest import grant_hub_access
 
 ADMIN_USER_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 ADMIN_CONTACT_ID = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
@@ -378,7 +379,10 @@ def _set_opt_in(client, contact_ids: list[uuid.UUID]) -> None:
 def test_grouped_preview_greets_every_recipient(make_client):
     """The whole school audience shares one grouped email, so
     recipient_first_names must join all of their names — the tag is unusable in
-    a preview otherwise (it would always show a single sample contact)."""
+    a preview otherwise (it would always show a single sample contact).
+
+    Fran, the seeded contact with no hub login, is absent: hub access gates the
+    audience, so she is not a recipient even with opt_in_filter="all"."""
     client = make_client("super_admin")
     resp = client.post(
         "/api/v1/emails/preview/render",
@@ -387,7 +391,7 @@ def test_grouped_preview_greets_every_recipient(make_client):
         ),
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["subject"] == "Hi Admin, Casey and Fran,"
+    assert resp.json()["subject"] == "Hi Admin and Casey,"
 
 
 def test_grouped_preview_keeps_duplicate_first_names(make_client):
@@ -396,12 +400,12 @@ def test_grouped_preview_keeps_duplicate_first_names(make_client):
     client = make_client("super_admin")
     paul_one, paul_two = uuid.uuid4(), uuid.uuid4()
     session = client._session_local()
-    session.add(
-        Contact(id=paul_one, school_id=SCHOOL_ID, email="paul.a@example.com", first_name="Paul", last_name="Marlin")
-    )
-    session.add(
-        Contact(id=paul_two, school_id=SCHOOL_ID, email="paul.b@example.com", first_name="Paul", last_name="Munoz")
-    )
+    pauls = [
+        Contact(id=paul_one, school_id=SCHOOL_ID, email="paul.a@example.com", first_name="Paul", last_name="Marlin"),
+        Contact(id=paul_two, school_id=SCHOOL_ID, email="paul.b@example.com", first_name="Paul", last_name="Munoz"),
+    ]
+    session.add_all(pauls)
+    grant_hub_access(session, *pauls)
     session.commit()
     session.close()
     resp = client.post(
@@ -448,7 +452,9 @@ def test_grouped_preview_ignores_the_sample_contact(make_client):
     """A grouped email has no single "you" — the counselor tags come from the
     school's representative counselor even when a sample contact is picked."""
     client = make_client("super_admin")
-    _set_opt_in(client, [COUNSELOR_CONTACT_ID, FAMILY_CONTACT_ID])
+    # Two opted-in contacts, both with hub access: a single recipient would be
+    # treated as the "you" of the email and answer with their own name.
+    _set_opt_in(client, [ADMIN_CONTACT_ID, COUNSELOR_CONTACT_ID])
     resp = client.post(
         "/api/v1/emails/preview/render",
         json=_broadcast_payload(

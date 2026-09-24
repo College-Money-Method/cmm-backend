@@ -256,6 +256,7 @@ class RegistrationOut(BaseModel):
     join_time: datetime | None
     leave_time: datetime | None
     zoom_registrant_id: str | None
+    zoom_join_url: str | None = None
     questions: str | None
     registration_time: datetime | None
     created_at: datetime

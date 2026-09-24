@@ -279,6 +279,7 @@ def _registration_out(reg: WorkshopRegistration) -> RegistrationOut:
         join_time=reg.join_time,
         leave_time=reg.leave_time,
         zoom_registrant_id=str(reg.zoom_registrant_id) if reg.zoom_registrant_id is not None else None,
+        zoom_join_url=reg.zoom_join_url,
         questions=reg.questions,
         registration_time=reg.registration_time,
         created_at=reg.created_at,
@@ -1044,19 +1045,68 @@ def get_school_webinar(school_id: uuid.UUID, webinar_id: uuid.UUID, db: DbDep) -
     return _to_item(mapping)
 
 
+# Shown to the parent verbatim. A Zoom refusal means no join link and no
+# confirmation email, so telling them they are registered would be a lie.
+_ZOOM_REGISTRATION_FAILED = (
+    "We couldn't complete your registration with Zoom, so you're not registered yet. "
+    "Please try again in a few minutes."
+)
+
+
+def _register_on_zoom(
+    zoom_webinar_id: str, body: RegistrationCreate, school_name: str | None
+) -> zoom_client.ZoomRegistrant:
+    """Register the parent on the webinar's Zoom, or refuse the whole registration.
+
+    Takes plain values, not ORM objects: the caller ends its DB transaction
+    before this runs, so no pooled connection is held across Zoom's round trips.
+    """
+    registrant = zoom_client.register_webinar(
+        zoom_webinar_id=zoom_webinar_id,
+        email=body.email,
+        first_name=body.first_name,
+        last_name=body.last_name,
+        grade=body.grade,
+        school=school_name,
+        questions=body.questions,
+    )
+    if registrant is None:
+        logger.warning(
+            "Public registration refused — Zoom registration failed for zoom webinar=%s",
+            zoom_webinar_id,
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_ZOOM_REGISTRATION_FAILED)
+    return registrant
+
+
+def _load_registration(db, registration_id: uuid.UUID) -> WorkshopRegistration:
+    return db.execute(
+        select(WorkshopRegistration)
+        .where(WorkshopRegistration.id == registration_id)
+        .options(selectinload(WorkshopRegistration.school))
+    ).scalar_one()
+
+
 @router.post("/public/webinars/{webinar_id}/register", response_model=RegistrationOut, status_code=status.HTTP_201_CREATED)
 def register_public(webinar_id: uuid.UUID, body: RegistrationCreate, db: DbDep) -> RegistrationOut:
     """
     Public registration for a webinar (no auth required).
 
-    Creates a registration with 'approved' status and current timestamp.
-    If the user is already registered (same email + webinar), returns the existing registration.
+    Creates a registration with 'approved' status and current timestamp. When
+    the webinar is on Zoom, the Zoom registration happens first and a Zoom
+    failure fails the request (502) with nothing saved — the join link and
+    confirmation email both come from Zoom, so a row without it is a parent
+    who thinks they are registered and never hears back.
+
+    Registering again with the same email returns the existing registration;
+    if that one never reached Zoom, it is retried now.
     """
     webinar = db.get(Webinar, webinar_id)
     if not webinar:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webinar not found")
 
-    # Check if user is already registered (by email)
+    needs_zoom = bool(webinar.zoom_webinar_id) and zoom_client.is_configured()
+
     existing = db.execute(
         select(WorkshopRegistration)
         .where(
@@ -1066,47 +1116,42 @@ def register_public(webinar_id: uuid.UUID, body: RegistrationCreate, db: DbDep) 
         .options(selectinload(WorkshopRegistration.school))
     ).scalar_one_or_none()
 
-    if existing:
-        # Return existing registration (idempotent)
+    if existing and (existing.zoom_registrant_id or not needs_zoom):
         return _registration_out(existing)
 
-    # Create new registration
+    registrant: zoom_client.ZoomRegistrant | None = None
+    if needs_zoom:
+        zoom_webinar_id = webinar.zoom_webinar_id
+        school = db.get(School, body.school_id) if body.school_id else None
+        school_name = school.name if school else None
+        # Zoom can take several sequential calls with 10s timeouts each. End the
+        # read-only transaction first so the connection goes back to the pool —
+        # registrations burst right before a session starts.
+        db.commit()
+        registrant = _register_on_zoom(zoom_webinar_id, body, school_name)
+
+    if existing:
+        # Saved before Zoom failures were fatal and never reached Zoom. Keep
+        # the row in step with what was just sent to Zoom.
+        for field in ("first_name", "last_name", "school_id", "grade", "questions"):
+            setattr(existing, field, getattr(body, field))
+        existing.zoom_registrant_id = registrant.registrant_id
+        existing.zoom_join_url = registrant.join_url
+        db.commit()
+        return _registration_out(_load_registration(db, existing.id))
+
     reg_data = body.model_dump()
     reg_data["status"] = "approved"  # Auto-approve public registrations
     reg_data["registration_time"] = datetime.now(tz=timezone.utc)
+    if registrant:
+        reg_data["zoom_registrant_id"] = registrant.registrant_id
+        reg_data["zoom_join_url"] = registrant.join_url
 
     obj = WorkshopRegistration(webinar_id=webinar_id, **reg_data)
     db.add(obj)
     db.commit()
-    db.refresh(obj)
 
-    # Register on Zoom if this webinar has a Zoom ID (non-fatal if it fails)
-    if webinar.zoom_webinar_id:
-        school_name: str | None = None
-        if body.school_id:
-            school_obj = db.get(School, body.school_id)
-            school_name = school_obj.name if school_obj else None
-        zoom_registrant_id = zoom_client.register_webinar(
-            zoom_webinar_id=webinar.zoom_webinar_id,
-            email=body.email,
-            first_name=body.first_name,
-            last_name=body.last_name,
-            grade=body.grade,
-            school=school_name,
-            questions=body.questions,
-        )
-        if zoom_registrant_id:
-            obj.zoom_registrant_id = zoom_registrant_id
-            db.commit()
-
-    # Reload with school relationship
-    obj = db.execute(
-        select(WorkshopRegistration)
-        .where(WorkshopRegistration.id == obj.id)
-        .options(selectinload(WorkshopRegistration.school))
-    ).scalar_one()
-
-    return _registration_out(obj)
+    return _registration_out(_load_registration(db, obj.id))
 
 
 # ── Admin: Workshops (parameterised paths — registered last) ─────────────────

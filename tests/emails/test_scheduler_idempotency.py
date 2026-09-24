@@ -19,6 +19,7 @@ from src.emails.email_template_models import EmailTemplate
 from src.emails.models import EmailSendLog
 from src.schools.models import Contact, School
 from src.workshops.models import PortalMapping, Webinar, Workshop
+from tests.emails.conftest import grant_hub_access
 
 SCHOOL_ID = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
 FAMILY_CONTACT_ID = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
@@ -32,15 +33,15 @@ AUTOMATION_ID = uuid.UUID("44444444-2222-2222-2222-222222222222")
 def db_session(scheduler_sessionmaker):
     session = scheduler_sessionmaker()
     session.add(School(id=SCHOOL_ID, name="Test High", slug="test-high", is_current_customer=True))
-    session.add(
-        Contact(
-            id=FAMILY_CONTACT_ID,
-            school_id=SCHOOL_ID,
-            email="family@example.com",
-            role="hub_user",
-            auto_emails=True,
-        )
+    contact = Contact(
+        id=FAMILY_CONTACT_ID,
+        school_id=SCHOOL_ID,
+        email="family@example.com",
+        role="hub_user",
+        auto_emails=True,
     )
+    session.add(contact)
+    grant_hub_access(session, contact)
     session.add(Workshop(id=WORKSHOP_ID, name="FAFSA Basics"))
     session.add(
         Webinar(

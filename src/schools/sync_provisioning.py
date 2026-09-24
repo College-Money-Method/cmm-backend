@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from src.auth.hub_password import default_hub_password
 from src.auth.models import UserRole
 from src.auth.profile_sync import delete_profile, upsert_profile
+from src.emails.email_preferences import apply_default_opt_ins
 from src.config import settings
 from src.schools.models import Contact, School
 from src.schools.sync_utils import should_revoke_access
@@ -236,6 +237,11 @@ def provision_counselors_from_contacts(db: Session, supabase: object) -> dict:
                 )
                 db.add(user_role)
                 db.flush()
+                # Hub access just granted — subscribe them to both email streams
+                # (opt-out policy, see emails.email_preferences). Inside the
+                # savepoint so a failure here rolls the grant back as a unit
+                # rather than leaving access provisioned without its defaults.
+                apply_default_opt_ins(db, contact)
             role_by_user_id[user_id_str] = user_role
             counselors_created += 1
             logger.info("Created counselor role: email=%s role=%s", email, system_role)
