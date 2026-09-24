@@ -346,6 +346,24 @@ def test_a_create_that_never_reached_vimeo_is_not_blamed_on_the_token(tmp_path, 
     assert "VIMEO_ACCESS_TOKEN" not in str(caught.value)
 
 
+def test_a_rejected_field_is_not_blamed_on_the_token(tmp_path, monkeypatch):
+    """A 400 names the field Vimeo refused; token advice beside it misleads."""
+    source = tmp_path / "trimmed.mp4"
+    source.write_bytes(b"x" * 10)
+    monkeypatch.setattr(vimeo_upload.settings, "vimeo_upload_user_uri", "/users/151255816")
+
+    def fake_request(method, path, **kwargs):
+        raise VimeoError("Rejected — name: The provided video title exceeds 128 characters.", 400)
+
+    monkeypatch.setattr(vimeo_upload, "_request", fake_request)
+
+    with pytest.raises(VimeoError) as caught:
+        vimeo_upload.create_video(source, "Audit")
+
+    assert "exceeds 128 characters" in str(caught.value)
+    assert "VIMEO_ACCESS_TOKEN" not in str(caught.value)
+
+
 # ── configured URIs ──────────────────────────────────────────────────────────
 
 

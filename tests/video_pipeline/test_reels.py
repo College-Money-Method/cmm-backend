@@ -288,6 +288,16 @@ def test_a_ready_reel_previews_through_the_cdn_when_one_is_set(client, db, publi
     assert item["preview_expires_in"] is None
 
 
+def test_a_long_webinar_name_gives_way_so_the_reel_title_fits_vimeo(published_job):
+    published_job.webinar.webinar_name = "Applying for Financial Aid " * 10
+
+    title = reel_service.reel_title(published_job, "landscape")
+
+    assert len(title) <= 128
+    assert title.startswith("Applying for Financial Aid")
+    assert title.endswith(" — trailer (landscape)")
+
+
 def test_uploading_a_ready_reel_records_the_vimeo_video(client, db, published_job,
                                                         monkeypatch):
     reel = _reel(db, published_job, s3_key="video-pipeline/reels/j/r.mp4", hook_title="Hook")
