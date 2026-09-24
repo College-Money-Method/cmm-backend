@@ -20,6 +20,7 @@ from src.video_pipeline import (
     publish_service,
     stage_progress,
     topic_segment,
+    vimeo_transcript,
 )
 from src.video_pipeline.frame_classify import SPEAKER, TITLE_CARD, Classified
 from src.video_pipeline.publish_service import PublishError, publish
@@ -85,6 +86,54 @@ def sections(monkeypatch):
         publish_service.topic_segment, "detect_sections", lambda cues: list(found)
     )
     return found
+
+
+VIMEO_VTT = """WEBVTT
+
+00:00:05.000 --> 00:00:09.000
+Welcome everyone, thanks for joining tonight.
+
+00:25:00.000 --> 00:25:06.000
+Now let's talk about paying for college.
+"""
+
+
+@pytest.fixture(autouse=True)
+def vimeo_track(monkeypatch):
+    """Vimeo's own transcript, absent unless a test supplies one.
+
+    Autouse because a job whose Zoom transcript is empty asks Vimeo for its
+    track, and several tests here have no transcript. The wait is over by
+    default, so those still chapter from frames alone as they did before the
+    borrow existed; a test about waiting sets its own budget.
+    """
+    track = {"vtt": None, "asked": [], "saved": []}
+
+    def download(ref, language="en"):
+        track["asked"].append(ref)
+        if track["vtt"] is None:
+            raise VimeoError("no source track", status=404)
+        return track["vtt"], "Auto-generated English"
+
+    monkeypatch.setattr(vimeo_transcript.vimeo, "download_source_track", download)
+    monkeypatch.setattr(
+        vimeo_transcript.artifact_store,
+        "save_transcript",
+        lambda prefix, cues: track["saved"].append((prefix, list(cues))),
+    )
+    monkeypatch.setattr(settings, "video_transcript_wait_minutes", 0)
+    return track
+
+
+@pytest.fixture
+def untranscribed(monkeypatch, artefacts):
+    """The S3 handoff of a recording Zoom had not transcribed when it was fetched."""
+    serve = publish_service.artifact_store.load_json_artifact
+
+    def load(prefix, filename):
+        return [] if filename == artifact_store.TRANSCRIPT_FILENAME else serve(prefix, filename)
+
+    monkeypatch.setattr(publish_service.artifact_store, "load_json_artifact", load)
 
 
 @pytest.fixture
@@ -565,3 +614,66 @@ def test_a_broken_extraction_does_not_unpublish_a_live_replay(db, job, artefacts
     publish(db, job)
 
     assert job.job_state is JobState.PUBLISHED
+
+
+# ── a recording Zoom never transcribed ───────────────────────────────────────
+
+
+def test_a_replay_zoom_never_transcribed_is_chaptered_from_vimeos_transcript(
+    db, job, untranscribed, vimeo_ok, vimeo_track, monkeypatch
+):
+    """A deck without title cards has only the transcript to find its sections,
+    so an empty one from Zoom is replaced by the track Vimeo made itself — and
+    kept, so the Q&A extraction after publishing reads the same words."""
+    vimeo_track["vtt"] = VIMEO_VTT
+    seen: list[list] = []
+    monkeypatch.setattr(
+        publish_service.topic_segment, "detect_sections", lambda cues: seen.append(cues) or []
+    )
+
+    publish(db, job)
+
+    assert job.job_state is JobState.PUBLISHED
+    assert [c.text for c in seen[0]] == [
+        "Welcome everyone, thanks for joining tonight.",
+        "Now let's talk about paying for college.",
+    ]
+    assert [(prefix, len(cues)) for prefix, cues in vimeo_track["saved"]] == [(PREFIX, 2)]
+
+
+def test_a_replay_waits_for_vimeo_to_transcribe_it(
+    db, job, untranscribed, vimeo_ok, vimeo_track, monkeypatch
+):
+    """Vimeo writes the track minutes after the transcode and says nothing when
+    it does, so chaptering holds the job back rather than settle for frames."""
+    monkeypatch.setattr(settings, "video_transcript_wait_minutes", 60)
+
+    with pytest.raises(vimeo_transcript.TranscriptPending):
+        publish(db, job)
+
+    assert job.job_state is JobState.CHAPTERING
+    assert vimeo_ok == []
+
+
+def test_waiting_does_not_restart_its_own_clock(db, job, untranscribed, vimeo_ok, vimeo_track, monkeypatch):
+    """The wait is measured from ``updated_at``, so a sweep that finds no track
+    must leave it where the first one put it — or the job would wait forever."""
+    monkeypatch.setattr(settings, "video_transcript_wait_minutes", 60)
+
+    with pytest.raises(vimeo_transcript.TranscriptPending):
+        publish(db, job)
+    db.rollback()
+    first = job.updated_at
+
+    with pytest.raises(vimeo_transcript.TranscriptPending):
+        publish(db, job)
+    db.rollback()
+
+    assert job.updated_at == first
+
+
+def test_a_replay_with_zoom_transcript_does_not_ask_vimeo(db, job, artefacts, vimeo_ok, vimeo_track):
+    publish(db, job)
+
+    assert job.job_state is JobState.PUBLISHED
+    assert vimeo_track["asked"] == []

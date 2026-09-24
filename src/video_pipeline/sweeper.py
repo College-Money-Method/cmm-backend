@@ -32,7 +32,13 @@ from sqlalchemy import select
 from src.config import settings
 from src.db.base import get_session_factory
 from src.utils import single_writer
-from src.video_pipeline import caption_task, job_service, publish_service, task_dispatch
+from src.video_pipeline import (
+    caption_task,
+    job_service,
+    publish_service,
+    task_dispatch,
+    vimeo_transcript,
+)
 from src.video_pipeline.models import WebinarVideoJob
 from src.video_pipeline.states import JobState
 
@@ -106,6 +112,11 @@ def publish_chaptering_jobs(db) -> int:
         try:
             publish_service.publish(db, job)
             published += 1
+        except vimeo_transcript.TranscriptPending as exc:
+            # Not a failure: the job stays in chaptering and the next sweep
+            # looks again, until the wait runs out and frames alone are used.
+            logger.info("Chaptering deferred — job=%s %s", job.id, exc)
+            db.rollback()
         except Exception as exc:
             logger.exception("Chaptering failed — job=%s error=%s", job.id, exc)
             db.rollback()

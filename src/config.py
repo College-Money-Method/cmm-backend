@@ -329,6 +329,13 @@ class Settings(BaseSettings):
     # view at once. Resolution lost here costs nothing — the frame window is
     # wider than the block, and the title card sets the final timecode.
     video_topic_block_seconds: float = 20.0
+    # How long chaptering holds a replay back for Vimeo's English transcript
+    # when Zoom delivered none. Zoom writes its audio transcript after the
+    # recording itself, so a fetch that runs the moment `recording.completed`
+    # lands can find no TRANSCRIPT file — and a deck without title cards then
+    # collapses to one chapter. Vimeo transcribes every upload, so waiting a
+    # sweep or two for that track is what keeps the topic pass in play.
+    video_transcript_wait_minutes: int = 60
 
     # Translated captions are made after the replay is published, not before.
     # Vimeo generates the English transcript itself and offers no webhook to
