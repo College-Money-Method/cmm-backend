@@ -93,9 +93,21 @@ def audit_folder_uri() -> str:
     override is a cleared override, not a configured empty folder — it falls
     back to the seed, which is what makes the field clearable.
     """
-    override = operator_settings.vimeo_audit_folder_uri()
-    configured = (override or "").strip() or settings.vimeo_audit_folder_uri
-    return _normalised_uri(configured)
+    return _folder(operator_settings.vimeo_audit_folder_uri(), settings.vimeo_audit_folder_uri)
+
+
+def replay_folder_uri() -> str:
+    """Folder production replays are filed into, or "" for the library root."""
+    return _folder(operator_settings.vimeo_replay_folder_uri(), settings.vimeo_replay_folder_uri)
+
+
+def reel_folder_uri() -> str:
+    """Folder trailer reels are filed into, or "" for the library root."""
+    return _folder(operator_settings.vimeo_reel_folder_uri(), settings.vimeo_reel_folder_uri)
+
+
+def _folder(override: str | None, seed: str) -> str:
+    return _normalised_uri((override or "").strip() or seed)
 
 
 def _create_upload_record(

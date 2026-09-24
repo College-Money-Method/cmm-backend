@@ -28,7 +28,7 @@ import logging
 import re
 import sys
 import uuid
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 
 from src.config import settings
@@ -36,6 +36,7 @@ from src.video_pipeline import bedrock_usage
 from src.video_pipeline.archive_original import VIDEO_FILENAME
 from src.video_pipeline.artifact_store import TRANSCRIPT_FILENAME, load_json_artifact
 from src.video_pipeline.ffmpeg_ops import probe_duration, require_ffmpeg
+from src.video_pipeline.reel_build import FONTS_DIR, presenter_label, snapped
 from src.video_pipeline.stage_cache import (
     Stage,
     dump_json,
@@ -51,13 +52,12 @@ from src.video_pipeline.trailer_render import (
 )
 from src.video_pipeline.trailer_edit import SHRINK_SECONDS, plan_shots, screen_windows
 from src.video_pipeline.trailer_select import Segment, Selection, select_segments
-from src.video_pipeline.trailer_sentences import snap_to_pause, speakers, split_sentences
+from src.video_pipeline.trailer_sentences import split_sentences
 from src.video_pipeline.trailer_words import Word, transcribe_words
 from src.video_pipeline.transcript import Cue
 
 logger = logging.getLogger("trailer_reel_local")
 
-FONTS_DIR = Path("src/video_pipeline/fonts")
 # Zoom's camera-only rendition: no slides, so nothing on screen can leak.
 SPEAKER_RECORDING_TYPES = ("active_speaker", "speaker_view")
 _SPEAKER_PREFIX = re.compile(r"^[^:.?!]{1,80}:\s+")
@@ -109,7 +109,7 @@ def main() -> int:
 
     if run(3):
         offset = float(inputs["trim_offset"])
-        cuts = [_snapped(speaker, segment, offset) for segment in selection.segments]
+        cuts = [snapped(speaker, segment, offset) for segment in selection.segments]
         dump_json(out / "cuts.json", [asdict(cut) for cut in cuts])
         cut_segments(speaker, cuts, stages[3].output, offset=offset)
     reel_duration = probe_duration(stages[3].output)
@@ -134,7 +134,7 @@ def main() -> int:
         stages[5].output.write_text(
             build_ass(words, duration=reel_duration, layout=LAYOUTS[args.orientation],
                       title=selection.hook_title, cta=args.cta,
-                      presenter=_presenter_label(inputs["cues"]), screen=windows),
+                      presenter=presenter_label([Cue(**cue) for cue in inputs["cues"]]), screen=windows),
             encoding="utf-8",
         )
     if run(6):
@@ -145,17 +145,6 @@ def main() -> int:
     return _summary(stages)
 
 
-def _snapped(source: Path, segment: Segment, offset: float) -> Segment:
-    """Move both ends of a segment into the nearest pause in the speech.
-
-    Sentence times are estimates, so an unsnapped cut can clip a word. Inside
-    a long Zoom cue the estimate runs up to ~1.5 s early or late, hence the 2 s
-    reach on the side the sentence continues into.
-    """
-    start = snap_to_pause(source, segment.start + offset, before=2.0, after=0.4) - offset
-    end = snap_to_pause(source, segment.end + offset, before=0.4, after=2.0) - offset
-    logger.info("Cut %.2f-%.2f → %.2f-%.2f", segment.start, segment.end, start, end)
-    return replace(segment, start=round(start, 3), end=round(end, 3))
 
 
 def _check_boundaries(cuts: list[Segment], words: list[Word]) -> None:
@@ -185,14 +174,6 @@ def _check_boundaries(cuts: list[Segment], words: list[Word]) -> None:
             logger.warning("Segment %d: expected %r…%r, heard %r…%r — cut may clip speech",
                            n, text[0], text[-1], inside[0].text, inside[-1].text)
 
-
-def _presenter_label(cues: list[dict]) -> str:
-    """Zoom's label for the presenter, "Name, Company" → "Name · Company"."""
-    name = settings.trailer_presenter_name.casefold()
-    for label in speakers([Cue(**cue) for cue in cues]):
-        if label.casefold().startswith(name):
-            return " · ".join(part.strip() for part in label.split(",", 1))
-    return settings.trailer_presenter_name
 
 
 def _keep_bedrock_ledger_local() -> None:

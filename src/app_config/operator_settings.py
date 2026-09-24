@@ -20,27 +20,30 @@ import time
 # everywhere within minutes. The process that made the edit clears it at once.
 _TTL_SECONDS = 300
 
-_audit_folder_cache: tuple[float, str | None] | None = None
+# Every folder the pipeline uploads into, read in one query and cached together.
+_FOLDER_COLUMNS = ("vimeo_audit_folder_uri", "vimeo_replay_folder_uri", "vimeo_reel_folder_uri")
+
+_folder_cache: tuple[float, dict[str, str | None]] | None = None
 
 
-def reset_vimeo_audit_folder_cache() -> None:
-    """Drop the cached folder — called when an admin changes it."""
-    global _audit_folder_cache
-    _audit_folder_cache = None
+def reset_vimeo_folder_cache() -> None:
+    """Drop the cached folders — called when an admin changes one."""
+    global _folder_cache
+    _folder_cache = None
 
 
-def vimeo_audit_folder_uri() -> str | None:
-    """The admin-set Vimeo audit folder, or None if unset or unreadable.
+def _folders() -> dict[str, str | None]:
+    """The admin-set Vimeo folders, each None if unset; all None if unreadable.
 
     Never raises. An unreadable config row means the caller falls through to the
-    env seed, which is what every audit run used before this was editable.
+    env seed, which is what every upload used before these were editable.
     """
-    global _audit_folder_cache
+    global _folder_cache
     now = time.monotonic()
-    if _audit_folder_cache and now - _audit_folder_cache[0] < _TTL_SECONDS:
-        return _audit_folder_cache[1]
+    if _folder_cache and now - _folder_cache[0] < _TTL_SECONDS:
+        return _folder_cache[1]
 
-    value: str | None = None
+    values: dict[str, str | None] = dict.fromkeys(_FOLDER_COLUMNS)
     try:
         # Imported here so importing this module costs nothing and cannot
         # participate in an import cycle through the ORM base.
@@ -49,13 +52,36 @@ def vimeo_audit_folder_uri() -> str | None:
         from src.app_config.models import AppConfig
         from src.db.base import get_session_factory
 
+        columns = [getattr(AppConfig, name) for name in _FOLDER_COLUMNS]
         with get_session_factory()() as db:
-            value = db.scalar(select(AppConfig.vimeo_audit_folder_uri))
+            row = db.execute(select(*columns)).first()
+        if row is not None:
+            values = dict(zip(_FOLDER_COLUMNS, row))
     except Exception:  # noqa: BLE001 - see docstring
-        value = None
+        pass
 
-    _audit_folder_cache = (now, value)
-    return value
+    _folder_cache = (now, values)
+    return values
 
 
-__all__ = ["reset_vimeo_audit_folder_cache", "vimeo_audit_folder_uri"]
+def vimeo_audit_folder_uri() -> str | None:
+    """The admin-set folder audit runs upload into."""
+    return _folders()["vimeo_audit_folder_uri"]
+
+
+def vimeo_replay_folder_uri() -> str | None:
+    """The admin-set folder production replays upload into."""
+    return _folders()["vimeo_replay_folder_uri"]
+
+
+def vimeo_reel_folder_uri() -> str | None:
+    """The admin-set folder trailer reels upload into."""
+    return _folders()["vimeo_reel_folder_uri"]
+
+
+__all__ = [
+    "reset_vimeo_folder_cache",
+    "vimeo_audit_folder_uri",
+    "vimeo_reel_folder_uri",
+    "vimeo_replay_folder_uri",
+]

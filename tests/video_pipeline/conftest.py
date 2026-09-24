@@ -46,6 +46,7 @@ def _compile_tsvector_as_text_on_sqlite(type_, compiler, **kw):
 # listing that graph goes stale the moment a column is added upstream.
 PIPELINE_SEED_TABLES = (
     "webinar_video_jobs",
+    "webinar_video_reels",
     "webinars",
     "workshops",
     # Written by the failure alert through emails.ses_client.send_email.

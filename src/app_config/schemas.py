@@ -56,6 +56,8 @@ class AppConfigUpdate(BaseModel):
     workshop_display_timezone: DisplayTimezoneField = None
     # Blank clears the override, falling back to the env seed.
     vimeo_audit_folder_uri: VimeoFolderUriField = None
+    vimeo_replay_folder_uri: VimeoFolderUriField = None
+    vimeo_reel_folder_uri: VimeoFolderUriField = None
     survey_enabled: bool | None = None
     email_sandbox_mode: bool | None = None
 
@@ -68,6 +70,8 @@ class AppConfigOut(BaseModel):
     topic_overview_video_url: str | None
     workshop_display_timezone: str | None
     vimeo_audit_folder_uri: str | None
+    vimeo_replay_folder_uri: str | None
+    vimeo_reel_folder_uri: str | None
     survey_enabled: bool
     email_sandbox_mode: bool
     updated_at: datetime | None

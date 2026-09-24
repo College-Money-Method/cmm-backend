@@ -228,6 +228,11 @@ class Settings(BaseSettings):
     # here. Both empty means an audit run refuses to upload rather than
     # scattering unreviewed videos into the main library.
     vimeo_audit_folder_uri: str = ""
+    # Folders ("projects") production replays and trailer reels are uploaded
+    # into, as URIs. Only the seeds, like the audit folder's: Global Settings
+    # overrides them. Both empty files the video in the upload library's root.
+    vimeo_replay_folder_uri: str = ""
+    vimeo_reel_folder_uri: str = ""
 
     # Frame sampling. These are the tunables of the one ffmpeg pass that decides
     # what the vision model ever sees, so they are named configuration rather

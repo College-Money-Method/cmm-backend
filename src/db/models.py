@@ -35,6 +35,7 @@ from src.settings.models import Setting
 from src.storage.models import StorageFile
 from src.video_pipeline.bedrock_usage_models import BedrockUsage
 from src.video_pipeline.models import WebinarVideoJob
+from src.video_pipeline.reel_models import WebinarVideoReel
 from src.workshops.models import PortalMapping, Webinar, Workshop, WorkshopAsset, WorkshopRegistration
 from src.workshops.qa_models import (
     WebinarQaAnswerExtraction,
@@ -85,6 +86,7 @@ __all__ = [
     "WebinarQaQuestion",
     "WebinarQaSync",
     "WebinarVideoJob",
+    "WebinarVideoReel",
     "Workshop",
     "WorkshopAsset",
     "WorkshopRegistration",

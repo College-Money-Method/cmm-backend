@@ -21,14 +21,16 @@ from sqlalchemy.orm import Session
 from src.config import settings
 from src.video_pipeline import job_service, stage_progress
 from src.video_pipeline.models import WebinarVideoJob
+from src.video_pipeline.reel_models import FAILED, PENDING, RENDERING, WebinarVideoReel
 from src.video_pipeline.states import JobState
 
 logger = logging.getLogger(__name__)
 
-# Entrypoint the task image runs, appended with ``--job-id <uuid>``. An internal
-# contract with ``src/video_pipeline/run_task.py``, not an environment-varying
-# value, so it lives here rather than in config.
+# Entrypoints the task image runs, appended with ``--job-id`` / ``--reel-id``.
+# Internal contracts with ``run_task.py`` and ``reel_task.py``, not
+# environment-varying values, so they live here rather than in config.
 _TASK_COMMAND: list[str] = ["python", "-m", "src.video_pipeline.run_task"]
+_REEL_TASK_COMMAND: list[str] = ["python", "-m", "src.video_pipeline.reel_task"]
 
 
 def _split_csv(value: str) -> list[str]:
@@ -49,7 +51,18 @@ def is_configured() -> bool:
 
 
 def _run_task(job_id: str) -> str | None:
-    """Call ECS RunTask and return the task ARN, or None if ECS accepted nothing."""
+    """Launch the processing task for one job; see ``_launch``."""
+    return _launch([*_TASK_COMMAND, "--job-id", job_id])
+
+
+def _run_reel_task(reel_id: str) -> str | None:
+    """Launch the reel task for one reel; see ``_launch``."""
+    return _launch([*_REEL_TASK_COMMAND, "--reel-id", reel_id])
+
+
+def _launch(command: list[str]) -> str | None:
+    """Call ECS RunTask with `command` and return the task ARN, or None if ECS
+    accepted nothing."""
     import boto3  # local import: keeps boto3 out of the import path of every test
 
     client = boto3.client("ecs", region_name=settings.aws_region)
@@ -73,7 +86,7 @@ def _run_task(job_id: str) -> str | None:
             "containerOverrides": [
                 {
                     "name": settings.video_task_container_name,
-                    "command": [*_TASK_COMMAND, "--job-id", job_id],
+                    "command": command,
                 }
             ]
         },
@@ -132,4 +145,34 @@ def dispatch(db: Session, job: WebinarVideoJob) -> bool:
     # "started" but shows nothing yet needs to see accounted for.
     stage_progress.record(db, job, stage_progress.STARTING_TASK)
     logger.info("Video job dispatched — job=%s task=%s", job.id, task_arn)
+    return True
+
+
+def dispatch_reel(db: Session, reel: WebinarVideoReel) -> bool:
+    """Try to launch the reel task. Returns True if the reel moved to `rendering`.
+
+    Reels sit outside the processing cap: an admin asks for one at a time per
+    job, and the cap exists to keep a backlog of webhook-driven jobs in check.
+    Unconfigured (local dev) leaves the reel `pending`, to be run by hand with
+    ``python -m src.video_pipeline.reel_task --reel-id <uuid>``; a launch ECS
+    refuses fails the reel with the reason.
+    """
+    if reel.state != PENDING:
+        logger.warning("Reel not pending — skipping dispatch reel=%s state=%s", reel.id, reel.state)
+        return False
+    if not is_configured():
+        logger.warning("ECS video task not configured — reel=%s left pending", reel.id)
+        return False
+    try:
+        task_arn = _run_reel_task(str(reel.id))
+    except Exception as exc:
+        # Nothing retries a reel, so a refused launch is recorded as failed
+        # rather than left pending, where it would block the next request.
+        logger.error("ECS RunTask failed — reel=%s error=%s", reel.id, exc)
+        reel.state, reel.error = FAILED, f"Could not start the render task — {exc}"
+        db.commit()
+        return False
+    reel.state, reel.stage, reel.ecs_task_arn = RENDERING, "starting", task_arn
+    db.commit()
+    logger.info("Reel dispatched — reel=%s task=%s", reel.id, task_arn)
     return True

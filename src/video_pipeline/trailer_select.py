@@ -128,13 +128,25 @@ class Selection:
 
 
 def build_prompt(
-    cues: list[Cue], chapters: list[dict[str, Any]], title: str, allowed: list[bool]
+    cues: list[Cue],
+    chapters: list[dict[str, Any]],
+    title: str,
+    allowed: list[bool],
+    focus: str | None = None,
 ) -> str:
     """The user message: title, chapters, then every cue on its own numbered line.
 
     Presenter lines are marked. The others stay in, so the model can see what a
-    presenter answer is answering, but cannot be picked.
+    presenter answer is answering, but cannot be picked. `focus` is an admin's
+    editorial direction ("Focus on merit aid"): it steers which moments are
+    picked, never the rules the answer is validated against.
     """
+    direction = (
+        f"Editorial direction for this reel: {focus.strip()}\n"
+        "Prefer moments that serve it; every rule still applies.\n\n"
+        if focus and focus.strip()
+        else ""
+    )
     chapter_lines = "\n".join(
         f"- {format_timestamp(float(ch['timecode']))} {ch['title']}" for ch in chapters
     )
@@ -144,7 +156,7 @@ def build_prompt(
         for i, cue in enumerate(cues)
     )
     return (
-        f"Webinar title: {title}\n\nChapters:\n{chapter_lines or '- (none)'}\n\n"
+        f"{direction}Webinar title: {title}\n\nChapters:\n{chapter_lines or '- (none)'}\n\n"
         f"Transcript:\n{cue_lines}"
     )
 
@@ -155,18 +167,20 @@ def select_segments(
     title: str,
     *,
     presenter: str | None = None,
+    focus: str | None = None,
     attempts: int = 2,
 ) -> Selection:
     """Ask the model for a reel, retrying once with the reason an answer was refused.
 
     Only `presenter`'s sentences (default: the configured presenter) can be used.
+    `focus` is optional editorial direction, passed to the model as given.
     """
     if not cues:
         raise SelectionError("no transcript cues — nothing to choose from")
     allowed = presenter_mask(cues, presenter or settings.trailer_presenter_name)
     if not any(allowed):
         raise SelectionError(f"no sentences by {presenter or settings.trailer_presenter_name}")
-    prompt = build_prompt(cues, chapters, title, allowed)
+    prompt = build_prompt(cues, chapters, title, allowed, focus)
     feedback = ""
     last_error = "no attempt made"
     for attempt in range(1, attempts + 1):
