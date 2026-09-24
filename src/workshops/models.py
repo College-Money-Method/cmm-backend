@@ -156,6 +156,9 @@ class WorkshopRegistration(Base):
     join_time: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     leave_time: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     zoom_registrant_id: Mapped[str | None] = mapped_column(Text)
+    # The registrant's personal Zoom join link, kept so the portal can hand it
+    # over the moment they register instead of making them wait for an email.
+    zoom_join_url: Mapped[str | None] = mapped_column(Text)
     questions: Mapped[str | None] = mapped_column(Text)
     registration_time: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())

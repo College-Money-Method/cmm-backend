@@ -37,7 +37,8 @@ from supabase import create_client
 from src.config import settings
 from src.db.client import get_supabase
 from src.db.deps import DbDep
-from src.emails.email_preferences import sync_unsubscribe_suppression
+from src.emails.email_preferences import apply_default_opt_ins, sync_unsubscribe_suppression
+from src.emails.hub_access import has_hub_access
 from src.schools.models import Contact, School
 
 router = APIRouter(tags=["auth"])
@@ -293,10 +294,13 @@ def _upsert_contact_row(
     last_name: str,
     school_id: uuid.UUID | None,
     school_role: str | None,
-) -> None:
+) -> Contact:
     """Keep the contacts table (source of the school contact lists) coherent with
     a provisioned login: adding a contact with a role = granting hub access.
     Match by user_id first, then by unclaimed email; create the row when missing.
+
+    Returns the linked contact so the caller can apply the new-hub-access email
+    defaults when it just created the role.
     """
     contact = db.query(Contact).filter(Contact.user_id == user_id).first()
     if contact is None and email:
@@ -318,6 +322,7 @@ def _upsert_contact_row(
     if school_role and not contact.role:
         contact.role = school_role
     contact.deleted_at = None
+    return contact
 
 
 @router.post("/api/v1/contacts/sync-airtable", response_model=ContactSyncResult)
@@ -340,6 +345,10 @@ def list_contacts(
     # Email compose only: hides prospect-school contacts, who are not addressable
     # (see emails.audience — a prospect never receives CMM mail).
     customer_schools_only: bool = Query(default=False),
+    # Email compose only: hides contacts with no Counselor Hub login, whom the
+    # send paths drop anyway (see emails.hub_access) — so the picker cannot
+    # offer a recipient the broadcast would silently never reach.
+    hub_access_only: bool = Query(default=False),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> ContactListResponse:
@@ -368,6 +377,8 @@ def list_contacts(
         q = q.filter(Contact.school_id == school_id)
     if customer_schools_only:
         q = q.filter(School.is_current_customer.is_(True))
+    if hub_access_only:
+        q = q.filter(has_hub_access())
     if school_role:
         q = q.filter(Contact.role == school_role)
     # Hub permission filter: the access role on the login. "no_access" = contacts
@@ -601,9 +612,12 @@ def create_contact(
         "user_metadata": new_user.user_metadata or {},
     }
     _sync_profile_from_auth(db, new_user.id, auth_user)
-    _upsert_contact_row(
+    contact = _upsert_contact_row(
         db, uuid.UUID(new_user.id), body.email, first_name, last_name, school_id, school_role
     )
+    # Hub access granted for the first time — subscribe them to both email
+    # streams (opt-out policy, see emails.email_preferences).
+    apply_default_opt_ins(db, contact)
     db.commit()
     return _build_contact_out(role_record, auth_user)
 

@@ -28,6 +28,7 @@ from src.emails.sender import no_unsubscribe_senders, sender_omits_unsubscribe
 from src.emails.ses_client import _build_raw_message
 from src.schools.models import Contact, School
 from src.workshops.models import PortalMapping, Webinar, Workshop
+from tests.emails.conftest import grant_hub_access
 
 QUIET_SENDER = "paul.martin@collegemoneymethod.com"
 NORMAL_SENDER = "newsflash@collegemoneymethod.com"
@@ -84,16 +85,16 @@ def test_no_unsubscribe_url_means_no_list_unsubscribe_header():
 def _seed_broadcast_audience(session, sender_email: str) -> Broadcast:
     school_id, contact_id = uuid.uuid4(), uuid.uuid4()
     session.add(School(id=school_id, name="Test Academy", slug=f"s-{school_id.hex[:8]}", is_current_customer=True))
-    session.add(
-        Contact(
-            id=contact_id,
-            school_id=school_id,
-            email="counselor@example.com",
-            first_name="Caroline",
-            role="hub_user",
-            auto_emails=True,
-        )
+    contact = Contact(
+        id=contact_id,
+        school_id=school_id,
+        email="counselor@example.com",
+        first_name="Caroline",
+        role="hub_user",
+        auto_emails=True,
     )
+    session.add(contact)
+    grant_hub_access(session, contact)
     broadcast = Broadcast(
         id=uuid.uuid4(),
         subject="Checking in",
@@ -151,9 +152,11 @@ def test_automation_unsubscribe_follows_the_sender(
     )
     now = datetime.now(timezone.utc)
     session.add(School(id=school_id, name="Test Academy", slug=f"s-{school_id.hex[:8]}", is_current_customer=True))
-    session.add(
-        Contact(id=contact_id, school_id=school_id, email="family@example.com", role="hub_user", auto_emails=True)
+    contact = Contact(
+        id=contact_id, school_id=school_id, email="family@example.com", role="hub_user", auto_emails=True
     )
+    session.add(contact)
+    grant_hub_access(session, contact)
     session.add(Workshop(id=workshop_id, name="College Planning 101"))
     session.add(
         Webinar(

@@ -6,6 +6,10 @@ ALWAYS restricted server-side to current customers (``is_current_customer``)
 regardless of the caller-supplied ids — defense in depth so a forged/stale
 ``school_id`` can never reach a prospect school's contacts.
 
+Emailability also requires Counselor Hub access (see ``emails.hub_access``): a
+school's contact list holds staff who were never given a hub login, and they are
+not who CMM's broadcasts are written for.
+
 Note that being emailable is stricter than being able to *see* the School
 Resource Center: ``is_cmm_website_activated`` opens the SRC to a prospect for a
 preview (see ``schools.router._find_public_school``) but deliberately does NOT
@@ -26,6 +30,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from src.auth.models import UserRole
+from src.emails.hub_access import has_hub_access
 from src.schools.models import Contact, School
 
 
@@ -64,8 +69,8 @@ def resolve_audience(
             non-opted-in contacts.
 
     Both id lists empty means every current-customer school. Always excludes deactivated
-    contacts (``deleted_at`` set) and contacts with no email address — there is
-    nothing to send those either way.
+    contacts (``deleted_at`` set), contacts with no email address — there is
+    nothing to send those either way — and contacts without Counselor Hub access.
     """
     stmt = (
         select(Contact)
@@ -74,6 +79,7 @@ def resolve_audience(
             School.is_current_customer.is_(True),
             Contact.deleted_at.is_(None),
             Contact.email.is_not(None),
+            has_hub_access(),
         )
     )
 
@@ -109,10 +115,11 @@ def resolve_contacts_by_ids(db: Session, contact_ids: list[uuid.UUID]) -> list[C
     """Resolve an explicit, admin-edited recipient set to Contact rows.
 
     Applies the same non-negotiable server-side guards as ``resolve_audience``
-    (current-customer school only, not deactivated, has an email) so a forged or
-    stale id can never reach a prospect school's contacts — but does NOT apply the
-    opt-in filter: the admin has explicitly chosen these recipients. Unsubscribe
-    suppression is still enforced downstream at send time.
+    (current-customer school only, not deactivated, has an email, has Counselor
+    Hub access) so a forged or stale id can never reach a prospect school's
+    contacts, nor a contact who was never given a hub login — but does NOT apply
+    the opt-in filter: the admin has explicitly chosen these recipients.
+    Unsubscribe suppression is still enforced downstream at send time.
     """
     if not contact_ids:
         return []
@@ -124,6 +131,7 @@ def resolve_contacts_by_ids(db: Session, contact_ids: list[uuid.UUID]) -> list[C
             School.is_current_customer.is_(True),
             Contact.deleted_at.is_(None),
             Contact.email.is_not(None),
+            has_hub_access(),
         )
     )
     return list(db.scalars(stmt).all())

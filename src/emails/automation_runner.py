@@ -69,6 +69,7 @@ from src.emails.automation_models import EmailAutomation
 from src.emails.broadcast_send import format_name_list
 from src.emails.counselor_resolver import contact_is_school_counselor, resolve_counselor_name
 from src.emails.email_template_models import EmailTemplate
+from src.emails.hub_access import has_hub_access
 from src.emails.link_resolver import resolve_plain_text
 from src.emails.renderer import render_email
 from src.emails.school_links import email_origin
@@ -235,8 +236,8 @@ def _process_due_mapping(
         )
         return 0
 
-    # Mandatory opt-in filter — no override path exists for automations
-    # (contrast with Broadcast's selectable opt_in_filter).
+    # Mandatory opt-in + hub-access filters — no override path exists for
+    # automations (contrast with Broadcast's selectable opt_in_filter).
     recipients = list(
         db.scalars(
             select(Contact).where(
@@ -244,6 +245,7 @@ def _process_due_mapping(
                 Contact.auto_emails.is_(True),
                 Contact.deleted_at.is_(None),
                 Contact.email.is_not(None),
+                has_hub_access(),
             )
         ).all()
     )

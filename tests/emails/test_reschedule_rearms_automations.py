@@ -31,6 +31,7 @@ from src.emails.models import EmailSendLog
 from src.main import app
 from src.schools.models import Contact, School
 from src.workshops.models import PortalMapping, Webinar, Workshop
+from tests.emails.conftest import grant_hub_access
 
 ADMIN_USER_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 SCHOOL_ID = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
@@ -53,15 +54,15 @@ def sessions(scheduler_sessionmaker):
     """Seeded DB plus an admin client, both on the same in-memory engine."""
     seed = scheduler_sessionmaker()
     seed.add(School(id=SCHOOL_ID, name="Test High", slug="test-high", is_current_customer=True))
-    seed.add(
-        Contact(
-            id=CONTACT_ID,
-            school_id=SCHOOL_ID,
-            email="counselor@example.com",
-            role="hub_user",
-            auto_emails=True,
-        )
+    contact = Contact(
+        id=CONTACT_ID,
+        school_id=SCHOOL_ID,
+        email="counselor@example.com",
+        role="hub_user",
+        auto_emails=True,
     )
+    seed.add(contact)
+    grant_hub_access(seed, contact)
     seed.add(Workshop(id=WORKSHOP_ID, name="FAFSA Basics"))
     seed.add(
         Webinar(

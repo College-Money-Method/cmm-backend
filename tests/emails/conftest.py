@@ -11,6 +11,8 @@ by any scheduler code path, so dropping it from the *test* schema is safe.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from sqlalchemy import MetaData, create_engine
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
@@ -20,6 +22,7 @@ from sqlalchemy.pool import StaticPool
 
 import src.main  # noqa: F401 - imports every model module, registering them with Base.metadata
 from src.app_config.models import AppConfig
+from src.auth.models import UserRole
 from src.db.base import Base
 
 
@@ -83,3 +86,20 @@ def scheduler_sessionmaker():
     seed.close()
 
     return SessionLocal
+
+
+def grant_hub_access(session, *contacts) -> None:
+    """Provision the Counselor Hub role every send path now requires.
+
+    Mirrors what ``sync_provisioning`` does in prod: link the contact to an auth
+    user and give that user a ``user_roles`` row. A seeded contact without one is
+    correctly excluded from every automation and broadcast, so recipient
+    fixtures have to grant it explicitly.
+    """
+    for contact in contacts:
+        if contact.user_id is None:
+            contact.user_id = uuid.uuid4()
+        session.add(
+            UserRole(user_id=contact.user_id, school_id=contact.school_id, role="hub_user")
+        )
+    session.flush()

@@ -157,7 +157,7 @@ def main() -> int:
 
         fixed = still_failing = 0
         for i, r in enumerate(rows, 1):
-            registrant_id = zoom_client.register_webinar(
+            registrant = zoom_client.register_webinar(
                 zoom_webinar_id=r["zoom_webinar_id"],
                 email=r["email"],
                 first_name=r["first_name"],
@@ -166,13 +166,13 @@ def main() -> int:
                 school=r["school_name"],
                 questions=r["questions"],
             )
-            if registrant_id:
+            if registrant:
                 db.execute(
                     text(
-                        "update workshop_registrations set zoom_registrant_id = :rid "
-                        "where id = :id"
+                        "update workshop_registrations set zoom_registrant_id = :rid, "
+                        "zoom_join_url = :url where id = :id"
                     ),
-                    {"rid": registrant_id, "id": r["id"]},
+                    {"rid": registrant.registrant_id, "url": registrant.join_url, "id": r["id"]},
                 )
                 db.commit()
                 fixed += 1

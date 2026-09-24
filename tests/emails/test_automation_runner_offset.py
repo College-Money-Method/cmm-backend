@@ -24,15 +24,18 @@ from src.emails.email_template_models import EmailTemplate
 from src.emails.models import EmailSendLog
 from src.schools.models import Contact, School
 from src.workshops.models import PortalMapping, Webinar, Workshop
+from tests.emails.conftest import grant_hub_access
 
 TEMPLATE_ID = uuid.uuid4()
 
 
 def _seed_base(session, *, school_id, contact_id, workshop_id, webinar_id, start_datetime, mapping_id):
     session.add(School(id=school_id, name="Test Academy", slug=f"school-{school_id.hex[:8]}", is_current_customer=True))
-    session.add(
-        Contact(id=contact_id, school_id=school_id, email="family@example.com", role="hub_user", auto_emails=True)
+    contact = Contact(
+        id=contact_id, school_id=school_id, email="family@example.com", role="hub_user", auto_emails=True
     )
+    session.add(contact)
+    grant_hub_access(session, contact)
     session.add(Workshop(id=workshop_id, name="College Planning 101"))
     session.add(
         Webinar(

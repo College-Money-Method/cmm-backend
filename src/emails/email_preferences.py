@@ -1,4 +1,5 @@
-"""Keeping the two contact opt-ins and the unsubscribe suppression row in sync.
+"""Contact email opt-ins: their default on new hub access, and the unsubscribe
+suppression row they must stay in sync with.
 
 ``EmailSuppression`` blocks EVERY send to an address, whatever the opt-ins say,
 so the two have to move together: a contact who turns both opt-ins off is
@@ -45,3 +46,47 @@ def sync_unsubscribe_suppression(db: Session, contact: Contact) -> None:
 
     if existing is not None and existing.reason == UNSUBSCRIBE_REASON:
         db.delete(existing)
+
+
+def apply_default_opt_ins(db: Session, contact: Contact) -> bool:
+    """Opt ``contact`` into both email streams as Counselor Hub access is granted.
+
+    CMM's stance is opt-out, not opt-in: a counselor handed hub access is there
+    to run workshops, so they start subscribed to both the scheduler automations
+    and admin broadcasts, and stay that way until they turn either off
+    themselves on the Hub Team page.
+
+    Only ever applied to a contact who is subscribed to nothing, which is what
+    every deliberate opt-out looks like from here. Hub access can be revoked and
+    re-granted (the contacts row and its opt-ins outlive the login), so this runs
+    again on people who have already made a choice: someone who kept broadcasts
+    but turned workshop mail off must not have it switched back on behind them.
+
+    Anyone carrying an unsubscribe suppression — what turning BOTH streams off
+    leaves behind, see ``sync_unsubscribe_suppression`` — is likewise left alone.
+    They already said no, and being granted hub access is not consent to
+    re-subscribe them; flipping the opt-ins here would also delete that
+    suppression row on the next sync and silently undo their choice.
+
+    Returns whether the opt-ins were applied. The caller owns the commit.
+    """
+    if not contact.email:
+        return False
+
+    if contact.auto_emails or contact.broadcast_emails:
+        return False
+
+    unsubscribed = (
+        db.query(EmailSuppression)
+        .filter(
+            EmailSuppression.email == contact.email,
+            EmailSuppression.reason == UNSUBSCRIBE_REASON,
+        )
+        .first()
+    )
+    if unsubscribed is not None:
+        return False
+
+    contact.auto_emails = True
+    contact.broadcast_emails = True
+    return True
