@@ -132,12 +132,13 @@ def _create_upload_record(
             params={"fields": "uri,link,player_embed_url,upload"},
         ).json()
     except VimeoError as exc:
-        if path == "/me/videos" or exc.status is None:
+        if path == "/me/videos" or exc.status not in (401, 403):
             raise
-        # Only for a refusal Vimeo actually sent — ``status is None`` means the
-        # request never arrived, and advice about token ownership on a timeout
-        # or a DNS failure sends whoever reads it to rotate a credential that
-        # was never the problem.
+        # Only for a permissions refusal Vimeo actually sent. ``status is None``
+        # means the request never arrived, and a 400 is Vimeo rejecting a field
+        # (a title over its length cap, say): advice about token ownership on
+        # either sends whoever reads it to rotate a credential that was never
+        # the problem.
         #
         # Vimeo scopes upload permission to the API app, not the token: a token
         # held by a team member still cannot create a video in the team's

@@ -29,6 +29,7 @@ from src.video_pipeline.reel_models import (
     WebinarVideoReel,
 )
 from src.video_pipeline.reel_schemas import VideoReel
+from src.video_pipeline.video_title import MAX_TITLE
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,13 @@ def create_reel(db: Session, job: WebinarVideoJob, orientation: str,
     return reel
 
 
+def reel_title(job: WebinarVideoJob, orientation: str) -> str:
+    """The reel's Vimeo name, within Vimeo's cap: the webinar name gives way, the suffix stays."""
+    webinar = (job.webinar.webinar_name if job.webinar else None) or "Webinar"
+    suffix = f" — trailer ({orientation})"
+    return f"{webinar[:MAX_TITLE - len(suffix)].rstrip()}{suffix}"
+
+
 def upload_to_vimeo(db: Session, reel: WebinarVideoReel, job: WebinarVideoJob) -> WebinarVideoReel:
     """Upload a ready reel as an embed-only Vimeo video. Synchronous: ~40 MB."""
     if reel.state != READY or not reel.s3_key:
@@ -104,8 +112,7 @@ def upload_to_vimeo(db: Session, reel: WebinarVideoReel, job: WebinarVideoJob) -
     if reel.vimeo_video_id:
         raise ReelConflict("This reel is already on Vimeo.")
 
-    webinar = job.webinar.webinar_name if job.webinar else "Webinar"
-    name = f"{webinar} — trailer ({reel.orientation})"
+    name = reel_title(job, reel.orientation)
     with tempfile.TemporaryDirectory(prefix="video-reel-upload-") as tmp:
         path = Path(tmp) / "reel.mp4"
         try:
