@@ -16,7 +16,10 @@ GOOD = {
     "last_name": "Davico",
     "email": "patricia@example.com",
     "school_name": "St. Ignatius College Prep",
-    "message": "My daughter is a senior and we need help with the CSS Profile.",
+    "message": (
+        "I direct college counselling here and would like to talk about bringing "
+        "your financial aid sessions to our school this year."
+    ),
 }
 BOT = {
     "first_name": "ussppyXbAPxyhvUi",
@@ -120,13 +123,16 @@ def test_listing_defaults_to_the_inbox_and_spam_is_opt_in(client):
     assert [r["spam_reason"] for r in spam] == ["gibberish_name"]
 
 
-def test_counts_cover_both_tabs(client):
+def test_counts_cover_every_tab(client):
     _post(client, GOOD)
     _post(client, BOT)
+    _post(client, {**GOOD, "message": "My daughter is a senior and needs aid advice."})
     assert client.get("/api/v1/guest-contacts/counts").json() == {
         "inbox": 1,
+        "parents": 1,
         "spam": 1,
-        "unresolved": 1,
+        "inbox_unresolved": 1,
+        "parents_unresolved": 1,
     }
 
 

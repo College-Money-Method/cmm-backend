@@ -33,6 +33,12 @@ class GuestContact(Base):
     is_spam: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     spam_reason: Mapped[str | None] = mapped_column(Text)
 
+    # Parents writing about their own child are welcome but off-target for a form
+    # meant for schools, so they get their own tab. Independent of is_spam: a
+    # parent enquiry is real mail, it is only filed elsewhere.
+    is_parent: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    parent_reason: Mapped[str | None] = mapped_column(Text)
+
     # When an admin replied. Null means the enquiry is still waiting on us, which
     # is the only state the inbox really needs to distinguish; keeping the moment
     # rather than a bare flag also answers "how long did that one sit there".
