@@ -14,7 +14,10 @@ ENQUIRY = {
     "last_name": "Davico",
     "email": "patricia@example.com",
     "school_name": "St. Ignatius College Prep",
-    "message": "My daughter is a senior and we need help with the CSS Profile.",
+    "message": (
+        "I direct college counselling here and would like to talk about bringing "
+        "your financial aid sessions to our school this year."
+    ),
 }
 BOT = {
     "first_name": "ussppyXbAPxyhvUi",
@@ -75,20 +78,20 @@ def test_answering_does_not_hide_the_row(client):
 def test_the_outstanding_count_tracks_both_directions(client):
     gc_id = _submit(client)
     _submit(client, {**ENQUIRY, "email": "second@example.com"})
-    assert _counts(client)["unresolved"] == 2
+    assert _counts(client)["inbox_unresolved"] == 2
 
     client.patch(f"/api/v1/guest-contacts/{gc_id}/resolved", params={"resolved": True})
-    assert _counts(client)["unresolved"] == 1
+    assert _counts(client)["inbox_unresolved"] == 1
 
     client.patch(f"/api/v1/guest-contacts/{gc_id}/resolved", params={"resolved": False})
-    assert _counts(client)["unresolved"] == 2
+    assert _counts(client)["inbox_unresolved"] == 2
 
 
 def test_quarantined_rows_are_not_owed_a_reply(client):
     """Nobody answers spam, so it must not inflate the outstanding count."""
     _submit(client, BOT)
     counts = _counts(client)
-    assert (counts["spam"], counts["unresolved"]) == (1, 0)
+    assert (counts["spam"], counts["inbox_unresolved"]) == (1, 0)
 
 
 def test_marking_a_reply_on_a_missing_row_is_a_404(client):

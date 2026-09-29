@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
+from sqlalchemy import and_, case, func
 
 from src.auth.deps import AdminDep
 from src.auth.rate_limit import allow, client_ip
@@ -14,6 +15,7 @@ from src.guest_contacts.schemas import (
     GuestContactDetail,
     GuestContactReceipt,
 )
+from src.guest_contacts.parent_detection import detect_parent
 from src.guest_contacts.spam_detection import ADMIN_MARKED, ADMIN_RESTORED, detect_spam
 
 router = APIRouter(prefix="/api/v1/guest-contacts", tags=["guest-contacts"])
@@ -35,6 +37,10 @@ def submit_guest_contact(body: GuestContactCreate, request: Request, db: DbDep):
     a guarantee), and ``detect_spam`` quarantines what looks automated. A
     quarantined row is still stored and still answers 201: the submitter is told
     nothing, and an admin can rescue a false positive from the Spam tab.
+
+    Anything that survives that is also sorted by audience — the form is meant
+    for schools and counsellors, and a parent asking about their own child is
+    filed under Parents rather than left to crowd the inbox.
     """
     if not allow(
         f"guest-contact:{client_ip(request)}",
@@ -55,10 +61,14 @@ def submit_guest_contact(body: GuestContactCreate, request: Request, db: DbDep):
         honeypot=body.website,
     )
 
+    parent_reason = detect_parent(role=body.role, message=body.message)
+
     gc = GuestContact(
         **body.model_dump(exclude_none=True),
         is_spam=spam_reason is not None,
         spam_reason=spam_reason,
+        is_parent=parent_reason is not None,
+        parent_reason=parent_reason,
     )
     db.add(gc)
     db.commit()
@@ -75,34 +85,60 @@ def list_guest_contacts(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     spam: bool = Query(default=False, description="Return quarantined submissions instead."),
+    parent: bool | None = Query(
+        default=None,
+        description="Filter by audience. Omit for everything that is not quarantined.",
+    ),
 ):
     """List guest contact submissions (admin only), newest first.
 
-    Defaults to the clean inbox; ``spam=true`` returns the quarantine.
+    The two filters mirror the two columns rather than collapsing into one tab
+    name, so a caller that only cares about junk-or-not — the dashboard's recent
+    activity panel — keeps working without naming an audience at all.
     """
+    query = db.query(GuestContact).filter(GuestContact.is_spam.is_(spam))
+    if parent is not None:
+        query = query.filter(GuestContact.is_parent.is_(parent))
+
     rows = (
-        db.query(GuestContact)
-        .filter(GuestContact.is_spam.is_(spam))
-        .order_by(GuestContact.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
+        query.order_by(GuestContact.created_at.desc()).offset(skip).limit(limit).all()
     )
     return [GuestContactDetail.model_validate(r) for r in rows]
 
 
 @router.get("/counts")
 def guest_contact_counts(db: DbDep, _admin: AdminDep) -> dict[str, int]:
-    """Totals behind the admin header: how much sits in each tab, and how much
-    of the inbox is still waiting on a reply."""
-    spam_total = db.query(GuestContact).filter(GuestContact.is_spam.is_(True)).count()
-    total = db.query(GuestContact).count()
-    unresolved = (
-        db.query(GuestContact)
-        .filter(GuestContact.is_spam.is_(False), GuestContact.resolved_at.is_(None))
-        .count()
-    )
-    return {"inbox": total - spam_total, "spam": spam_total, "unresolved": unresolved}
+    """Totals behind the admin header: what sits in each tab, and how much of
+    each is still waiting on a reply.
+
+    One pass with conditional sums rather than a count per tab — the numbers all
+    have to agree with each other, and reading them from a single snapshot is
+    the cheapest way to be sure they do.
+    """
+    is_spam = GuestContact.is_spam.is_(True)
+    in_inbox = and_(GuestContact.is_spam.is_(False), GuestContact.is_parent.is_(False))
+    from_parent = and_(GuestContact.is_spam.is_(False), GuestContact.is_parent.is_(True))
+    awaiting = GuestContact.resolved_at.is_(None)
+
+    def tally(condition):
+        return func.sum(case((condition, 1), else_=0))
+
+    inbox, parents, spam, inbox_awaiting, parents_awaiting = db.query(
+        tally(in_inbox),
+        tally(from_parent),
+        tally(is_spam),
+        tally(and_(in_inbox, awaiting)),
+        tally(and_(from_parent, awaiting)),
+    ).one()
+
+    # SUM over no rows is null, not zero.
+    return {
+        "inbox": inbox or 0,
+        "parents": parents or 0,
+        "spam": spam or 0,
+        "inbox_unresolved": inbox_awaiting or 0,
+        "parents_unresolved": parents_awaiting or 0,
+    }
 
 
 @router.get("/{gc_id}", response_model=GuestContactDetail)
@@ -133,6 +169,30 @@ def set_guest_contact_spam(
         raise HTTPException(status_code=404, detail="Guest contact not found")
     gc.is_spam = is_spam
     gc.spam_reason = ADMIN_MARKED if is_spam else ADMIN_RESTORED
+    db.commit()
+    db.refresh(gc)
+    return GuestContactDetail.model_validate(gc)
+
+
+@router.patch("/{gc_id}/parent", response_model=GuestContactDetail)
+def set_guest_contact_parent(
+    gc_id: uuid.UUID,
+    db: DbDep,
+    _admin: AdminDep,
+    is_parent: bool = Query(description="True to file under Parents, false to return to the inbox."),
+):
+    """Move a submission between the inbox and the Parents tab (admin only).
+
+    The wording of an enquiry does not always give the sender away, so this is
+    how an admin corrects the guess. As with the spam override the reason
+    records that a human decided, which is what keeps the backfill from
+    quietly reversing it on its next run.
+    """
+    gc = db.query(GuestContact).filter(GuestContact.id == gc_id).first()
+    if not gc:
+        raise HTTPException(status_code=404, detail="Guest contact not found")
+    gc.is_parent = is_parent
+    gc.parent_reason = ADMIN_MARKED if is_parent else ADMIN_RESTORED
     db.commit()
     db.refresh(gc)
     return GuestContactDetail.model_validate(gc)
