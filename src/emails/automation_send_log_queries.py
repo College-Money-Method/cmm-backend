@@ -45,6 +45,8 @@ def automation_sends(
     automation_id: uuid.UUID,
     *,
     cycle_id: uuid.UUID | None = None,
+    school_id: uuid.UUID | None = None,
+    email: str | None = None,
     offset: int = 0,
     limit: int = 50,
 ) -> AutomationSendPage:
@@ -54,6 +56,10 @@ def automation_sends(
     no `webinar_id` (logged before that column existed, or unresolvable) are
     excluded by that filter rather than guessed into a cycle — they remain
     reachable with `cycle_id=None`.
+
+    `school_id` narrows to one school's sends; `email` is a case-insensitive
+    substring match on the recipient address (LIKE wildcards in it are escaped,
+    so `a_b` matches literally).
     """
     stmt = (
         select(
@@ -75,6 +81,10 @@ def automation_sends(
     )
     if cycle_id is not None:
         stmt = stmt.where(Webinar.cycle_id == cycle_id)
+    if school_id is not None:
+        stmt = stmt.where(EmailSendLog.school_id == school_id)
+    if email:
+        stmt = stmt.where(EmailSendLog.recipient_email.icontains(email, autoescape=True))
 
     results = db.execute(stmt).all()
     has_more = len(results) > limit
