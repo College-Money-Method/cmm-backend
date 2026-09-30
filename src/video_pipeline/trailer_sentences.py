@@ -80,6 +80,12 @@ def speakers(sentences: list[Cue]) -> list[str]:
     return names
 
 
+def strip_speaker(text: str) -> str:
+    """A sentence without the "Name: " prefix its speaker's first sentence carries."""
+    match = _SPEAKER_RE.match(text)
+    return text[match.end():] if match else text
+
+
 def _words(cues: list[Cue]) -> list[_Word]:
     words: list[_Word] = []
     speaker = ""

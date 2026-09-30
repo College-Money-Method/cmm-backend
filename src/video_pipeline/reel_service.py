@@ -1,8 +1,9 @@
-"""Trailer reels of a job: ask for one, list them, upload a finished one to Vimeo.
+"""Trailer reels of a job: list them, upload a finished one to Vimeo.
 
-The render itself runs in the ECS reel task (``reel_task``); this module owns
-the rows and the rules around them. A job renders one reel at a time, so an
-admin who asks twice does not pay Bedrock, Transcribe and a Fargate task twice.
+A reel is made as a draft and sent to render from ``reel_draft``; the render
+itself runs in the ECS reel task (``reel_task``). This module owns listing,
+the view and the Vimeo upload. A job renders one reel at a time, so an admin
+who asks twice does not pay Transcribe and a Fargate task twice.
 """
 
 from __future__ import annotations
@@ -13,22 +14,23 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.integrations import vimeo, vimeo_upload
 from src.storage.s3_client import s3_client
-from src.video_pipeline import frame_urls, reel_sources, task_dispatch
+from src.video_pipeline import frame_urls
 from src.video_pipeline.models import WebinarVideoJob
 from src.video_pipeline.reel_models import (
     ACTIVE_STATES,
+    DRAFT,
+    DRAFTING,
     FAILED,
-    ORIENTATIONS,
     READY,
     WebinarVideoReel,
 )
-from src.video_pipeline.reel_schemas import VideoReel
+from src.video_pipeline.reel_schemas import ReelSelection, VideoReel
+from src.video_pipeline.trailer_select import Selection, rule_problems
 from src.video_pipeline.video_title import MAX_TITLE
 
 logger = logging.getLogger(__name__)
@@ -37,8 +39,12 @@ PREVIEW_EXPIRES_IN = 3600
 # A task that has not moved a reel on in this long is gone: the slowest stage,
 # rendering a minute of 1080p, takes a few minutes.
 STALE_AFTER = timedelta(minutes=60)
+# A model turn is one Sonnet call and a retry, a minute or two at most; one
+# this old died with the API process that ran it (a deploy, a restart).
+DRAFTING_STALE_AFTER = timedelta(minutes=10)
 ALREADY_ACTIVE = "A reel of this recording is already being made."
 STALE_ERROR = "The reel task stopped reporting progress — it was likely interrupted."
+DRAFTING_STALE_ERROR = "That change stopped responding before it finished — send it again."
 
 
 class ReelConflict(Exception):
@@ -54,11 +60,25 @@ def _aware(at: datetime) -> datetime:
 
 
 def _expire_stale(db: Session, reels: list[WebinarVideoReel]) -> None:
-    cutoff = datetime.now(timezone.utc) - STALE_AFTER
-    stale = [r for r in reels if r.state in ACTIVE_STATES and _aware(r.updated_at) < cutoff]
+    now = datetime.now(timezone.utc)
+    stale = [r for r in reels if r.state in ACTIVE_STATES
+             and _aware(r.updated_at) < now - STALE_AFTER]
     for reel in stale:
         reel.state, reel.error = FAILED, STALE_ERROR
     if stale:
+        db.commit()
+    # A lost model turn leaves the draft as it was before the request: the
+    # admin keeps the reel and the conversation, and can ask again. Conditional
+    # on the row being unchanged since it was read, so a turn that finishes at
+    # the same moment keeps its result instead of being overwritten.
+    lost = [r for r in reels if r.state == DRAFTING
+            and _aware(r.updated_at) < now - DRAFTING_STALE_AFTER]
+    for reel in lost:
+        seen = reel.updated_at
+        db.refresh(reel, with_for_update=True)
+        if reel.state == DRAFTING and reel.updated_at == seen:
+            reel.state, reel.error = DRAFT, DRAFTING_STALE_ERROR
+    if lost:
         db.commit()
 
 
@@ -71,31 +91,6 @@ def list_reels(db: Session, job: WebinarVideoJob) -> list[WebinarVideoReel]:
     ))
     _expire_stale(db, reels)
     return reels
-
-
-def create_reel(db: Session, job: WebinarVideoJob, orientation: str,
-                prompt: str | None) -> WebinarVideoReel:
-    """Insert a reel and launch its task. Raises ReelConflict when not possible."""
-    if orientation not in ORIENTATIONS:
-        raise ValueError(f"Unknown orientation {orientation!r}")
-    reason = reel_sources.blocked_reason(job)
-    if reason:
-        raise ReelConflict(reason)
-    if any(r.state in ACTIVE_STATES for r in list_reels(db, job)):
-        raise ReelConflict(ALREADY_ACTIVE)
-
-    reel = WebinarVideoReel(job_id=job.id, orientation=orientation,
-                            prompt=(prompt or "").strip() or None)
-    db.add(reel)
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        # Another request inserted this job's active reel since the check above.
-        db.rollback()
-        raise ReelConflict(ALREADY_ACTIVE) from exc
-    task_dispatch.dispatch_reel(db, reel)
-    db.refresh(reel)
-    return reel
 
 
 def reel_title(job: WebinarVideoJob, orientation: str) -> str:
@@ -132,6 +127,19 @@ def upload_to_vimeo(db: Session, reel: WebinarVideoReel, job: WebinarVideoJob) -
     return reel
 
 
+def _selection_view(stored: dict | None) -> tuple[ReelSelection | None, list[str]]:
+    if not stored:
+        return None, []
+    selection = Selection.from_dict(stored)
+    view = ReelSelection(
+        hook_title=selection.hook_title,
+        total_seconds=round(selection.total_seconds, 2),
+        segments=[{**segment.__dict__, "duration": round(segment.duration, 2)}
+                  for segment in selection.segments],
+    )
+    return view, rule_problems(selection)
+
+
 def to_view(reel: WebinarVideoReel) -> VideoReel:
     preview = frame_urls.object_url(reel.s3_key, PREVIEW_EXPIRES_IN) \
         if reel.state == READY and reel.s3_key else None
@@ -140,9 +148,11 @@ def to_view(reel: WebinarVideoReel) -> VideoReel:
     if reel.vimeo_video_id:
         suffix = f"/{reel.vimeo_hash}" if reel.vimeo_hash else ""
         vimeo_url = f"https://vimeo.com/{reel.vimeo_video_id}{suffix}"
+    selection, problems = _selection_view(reel.selection)
     return VideoReel(
         id=reel.id, job_id=reel.job_id, orientation=reel.orientation, prompt=reel.prompt,
         state=reel.state, stage=reel.stage, hook_title=reel.hook_title,
+        selection=selection, messages=reel.messages or [], problems=problems,
         duration_seconds=float(reel.duration_seconds) if reel.duration_seconds is not None
         else None,
         preview_url=preview, preview_expires_in=expires_in,

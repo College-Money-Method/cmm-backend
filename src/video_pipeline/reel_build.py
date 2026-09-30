@@ -2,7 +2,8 @@
 
 The stages, in order, each reported through `on_stage` for the admin screen:
 
-  selecting    Bedrock picks sentence runs, steered by the admin's prompt
+  selecting    Bedrock picks sentence runs, steered by the admin's prompt —
+               skipped when the admin already approved a selection as a draft
   cutting      snap each run's ends into pauses, join the camera audio
   transcribing AWS Transcribe word timings of the joined cut
   captioning   TikTok-style ASS captions, hook title, lower third, end card
@@ -25,7 +26,7 @@ from src.video_pipeline.reel_sources import ReelInputs
 from src.video_pipeline.trailer_captions import CTA_SECONDS, LAYOUTS, build_ass
 from src.video_pipeline.trailer_edit import SHRINK_SECONDS, plan_shots, screen_windows
 from src.video_pipeline.trailer_render import cut_segments, extract_audio, render_reel
-from src.video_pipeline.trailer_select import Segment, select_segments
+from src.video_pipeline.trailer_select import Segment, Selection, select_segments
 from src.video_pipeline.trailer_sentences import snap_to_pause, speakers, split_sentences
 from src.video_pipeline.trailer_words import transcribe_words
 from src.video_pipeline.transcript import Cue
@@ -52,13 +53,16 @@ def build_reel(
     focus: str | None,
     work_dir: Path,
     scratch_prefix: str,
+    selection: Selection | None = None,
     on_stage: Callable[[str], None] = lambda _stage: None,
 ) -> BuiltReel:
     """Render the reel into `work_dir`. `scratch_prefix` is the S3 prefix the
-    reel audio passes through on its way to Transcribe (deleted after)."""
-    on_stage("selecting")
-    sentences = split_sentences(inputs.cues)
-    selection = select_segments(sentences, inputs.chapters, inputs.title, focus=focus)
+    reel audio passes through on its way to Transcribe (deleted after).
+    `selection` is the clips a draft settled on; without one they are picked here."""
+    if selection is None:
+        on_stage("selecting")
+        sentences = split_sentences(inputs.cues)
+        selection = select_segments(sentences, inputs.chapters, inputs.title, focus=focus)
 
     on_stage("cutting")
     offset = inputs.trim_offset

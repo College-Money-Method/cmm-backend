@@ -26,7 +26,7 @@ from typing import Any
 from src.config import settings
 from src.video_pipeline import bedrock_usage
 from src.video_pipeline.bedrock_client import BedrockCallError, call_json
-from src.video_pipeline.trailer_sentences import speakers
+from src.video_pipeline.trailer_sentences import speakers, strip_speaker
 from src.video_pipeline.transcript import Cue, format_timestamp
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,9 @@ class Segment:
     text: str
     why: str = ""
     flags: list[str] = field(default_factory=list)
+    # The sentences it is made of, {"start", "end", "text"} without the speaker
+    # prefix: what an admin reads to review the reel before it is rendered.
+    lines: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def duration(self) -> float:
@@ -177,37 +180,80 @@ def select_segments(
     """
     if not cues:
         raise SelectionError("no transcript cues — nothing to choose from")
-    allowed = presenter_mask(cues, presenter or settings.trailer_presenter_name)
-    if not any(allowed):
-        raise SelectionError(f"no sentences by {presenter or settings.trailer_presenter_name}")
+    allowed = presenter_allowed(cues, presenter)
     prompt = build_prompt(cues, chapters, title, allowed, focus)
+    selection, _data = ask_model(SYSTEM_PROMPT, prompt, cues, allowed,
+                                 bedrock_usage.TRAILER_SELECT, attempts)
+    return selection
+
+
+def presenter_allowed(cues: list[Cue], presenter: str | None = None) -> list[bool]:
+    """`presenter_mask` for the configured presenter; raises when they never speak."""
+    name = presenter or settings.trailer_presenter_name
+    allowed = presenter_mask(cues, name)
+    if not any(allowed):
+        raise SelectionError(f"no sentences by {name}")
+    return allowed
+
+
+def ask_model(
+    system: str,
+    prompt: str,
+    cues: list[Cue],
+    allowed: list[bool],
+    invoke_type: str,
+    attempts: int = 2,
+) -> tuple[Selection, dict[str, Any]]:
+    """Call Sonnet until an answer passes `validate`, feeding each refusal back once.
+
+    Returns the selection and the raw answer, for callers that ask the model
+    for more than the reel (a revision's reply to the admin).
+    """
     feedback = ""
     last_error = "no attempt made"
     for attempt in range(1, attempts + 1):
         try:
             data, tokens_in, tokens_out = call_json(
-                system=SYSTEM_PROMPT,
+                system=system,
                 content=prompt + feedback,
-                invoke_type=bedrock_usage.TRAILER_SELECT,
+                invoke_type=invoke_type,
                 max_tokens=1500,
                 model_id=settings.bedrock_sonnet_model_id,
             )
         except BedrockCallError as exc:
             last_error = str(exc)
-            logger.warning("Trailer selection attempt %d failed: %s", attempt, exc)
+            logger.warning("Trailer %s attempt %d failed: %s", invoke_type, attempt, exc)
             continue
-        logger.info("Trailer selection attempt %d: %d in / %d out tokens",
-                    attempt, tokens_in, tokens_out)
+        logger.info("Trailer %s attempt %d: %d in / %d out tokens",
+                    invoke_type, attempt, tokens_in, tokens_out)
         try:
-            return validate(data, cues, allowed)
+            return validate(data, cues, allowed), data
         except SelectionError as exc:
             last_error = str(exc)
-            logger.warning("Trailer selection attempt %d rejected: %s", attempt, exc)
+            logger.warning("Trailer %s attempt %d rejected: %s", invoke_type, attempt, exc)
             feedback = (
                 f"\n\nYour previous answer was rejected: {exc}\n"
                 "Answer again, fixing that, with the same JSON shape."
             )
     raise SelectionError(f"no usable reel after {attempts} attempts: {last_error}")
+
+
+def rule_problems(selection: Selection) -> list[str]:
+    """Which length rules a selection breaks, in words an admin can act on.
+
+    A model's answer never breaks them (`validate` refuses it), but an admin's
+    own edits can: removing a clip may leave the reel short. Those are shown
+    as warnings rather than refused — the admin is the editor.
+    """
+    count, total = len(selection.segments), selection.total_seconds
+    problems = []
+    if count < MIN_SEGMENTS:
+        problems.append(f"{count} clip{'s' if count != 1 else ''} — a reel usually has "
+                        f"at least {MIN_SEGMENTS}.")
+    if total < TOTAL_MIN_SECONDS:
+        problems.append(f"{total:.0f}s long — a reel usually runs at least "
+                        f"{TOTAL_MIN_SECONDS:.0f}s.")
+    return problems
 
 
 def presenter_mask(cues: list[Cue], presenter: str) -> list[bool]:
@@ -294,5 +340,8 @@ def _timed(cues: list[Cue], first: int, last: int, why: str, flags: list[str]) -
     start = max(floor, cues[first].start - PAD_SECONDS)
     end = min(ceiling, cues[last].end + PAD_SECONDS)
     text = " ".join(cue.text for cue in cues[first:last + 1])
+    lines = [{"start": cue.start, "end": cue.end, "text": strip_speaker(cue.text)}
+             for cue in cues[first:last + 1]]
     return Segment(first_cue=first, last_cue=last, start=round(start, 3),
-                   end=round(max(end, start), 3), text=text, why=why, flags=flags)
+                   end=round(max(end, start), 3), text=text, why=why, flags=flags,
+                   lines=lines)
