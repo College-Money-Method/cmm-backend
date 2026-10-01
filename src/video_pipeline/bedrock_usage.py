@@ -37,6 +37,7 @@ TRIM_POINT = "trim_point"
 TOPIC_SEGMENT = "topic_segment"
 FRAME_CLASSIFY = "frame_classify"
 TRAILER_SELECT = "trailer_select"
+TRAILER_REVISE = "trailer_revise"
 
 
 def cost_usd(input_tokens: int, output_tokens: int, model_id: str | None = None) -> Decimal:

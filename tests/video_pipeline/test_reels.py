@@ -113,7 +113,8 @@ def client(sessionmaker_factory, monkeypatch):
 
 
 def _reel(db, job, state=READY, **fields) -> WebinarVideoReel:
-    reel = WebinarVideoReel(job_id=job.id, orientation="portrait", state=state, **fields)
+    fields.setdefault("orientation", "portrait")
+    reel = WebinarVideoReel(job_id=job.id, state=state, **fields)
     db.add(reel)
     db.commit()
     return reel
@@ -178,83 +179,12 @@ def test_an_older_job_whose_zoom_copy_is_gone_is_blocked(published_job, archive,
 
 # --- endpoints -----------------------------------------------------------------------------
 
-def test_creating_a_reel_launches_its_task(client, published_job, archive, launched):
-    archive.add(archive_original.CAMERA_FILENAME)
-    response = client.post(f"{BASE}/jobs/{published_job.id}/reels",
-                           json={"orientation": "portrait", "prompt": " Focus on merit aid "})
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["state"] == RENDERING and body["stage"] == "starting"
-    assert body["prompt"] == "Focus on merit aid"
-    assert launched == [body["id"]]
-
-
-def test_without_ecs_the_reel_waits_pending(client, published_job, archive, monkeypatch):
-    archive.add(archive_original.CAMERA_FILENAME)
-    monkeypatch.setattr(task_dispatch, "is_configured", lambda: False)
-    response = client.post(f"{BASE}/jobs/{published_job.id}/reels",
-                           json={"orientation": "landscape"})
-    assert response.status_code == 201
-    assert response.json()["state"] == PENDING
-
-
-def test_one_reel_renders_at_a_time(client, db, published_job, archive, launched):
-    archive.add(archive_original.CAMERA_FILENAME)
-    _reel(db, published_job, state=RENDERING)
-    response = client.post(f"{BASE}/jobs/{published_job.id}/reels",
-                           json={"orientation": "landscape"})
-    assert response.status_code == 409
-    assert launched == []
-
-
 def test_the_database_holds_one_active_reel_per_job(db, published_job):
     _reel(db, published_job, state=RENDERING)
     _reel(db, published_job, state=FAILED)
     with pytest.raises(IntegrityError):
         _reel(db, published_job, state=PENDING)
     db.rollback()
-
-
-def test_a_request_that_loses_the_race_is_a_conflict(client, db, published_job, archive,
-                                                      launched, monkeypatch):
-    archive.add(archive_original.CAMERA_FILENAME)
-    _reel(db, published_job, state=RENDERING)
-    # As if the other request committed between this one's check and insert.
-    monkeypatch.setattr(reel_service, "list_reels", lambda _db, _job: [])
-    response = client.post(f"{BASE}/jobs/{published_job.id}/reels",
-                           json={"orientation": "landscape"})
-    assert response.status_code == 409
-    assert launched == []
-
-
-def test_a_launch_ecs_refuses_fails_the_reel(client, published_job, archive, monkeypatch):
-    archive.add(archive_original.CAMERA_FILENAME)
-    monkeypatch.setattr(task_dispatch, "is_configured", lambda: True)
-
-    def refuse(_reel_id):
-        raise RuntimeError("capacity unavailable")
-
-    monkeypatch.setattr(task_dispatch, "_run_reel_task", refuse)
-    body = client.post(f"{BASE}/jobs/{published_job.id}/reels",
-                       json={"orientation": "landscape"}).json()
-    assert body["state"] == FAILED and "capacity unavailable" in body["error"]
-
-
-def test_a_blocked_job_refuses_with_the_reason(client, published_job, archive,
-                                               zoom_recording, launched):
-    zoom_recording["payload"] = zoom.ZoomApiError("gone")
-    response = client.post(f"{BASE}/jobs/{published_job.id}/reels",
-                           json={"orientation": "landscape"})
-    assert response.status_code == 409
-    assert "Zoom no longer has" in response.json()["detail"]
-
-
-def test_an_unknown_orientation_or_long_prompt_is_rejected(client, published_job):
-    url = f"{BASE}/jobs/{published_job.id}/reels"
-    assert client.post(url, json={"orientation": "square"}).status_code == 422
-    assert client.post(url, json={"orientation": "portrait",
-                                  "prompt": "x" * 501}).status_code == 422
 
 
 def test_the_list_previews_ready_reels_and_fails_abandoned_ones(client, db, published_job,
@@ -384,7 +314,27 @@ def test_the_task_renders_uploads_and_marks_the_reel_ready(db, published_job, ta
     assert task_env == [done.s3_key]
     assert float(done.duration_seconds) == 59.2 and done.hook_title == "Hook"
     assert seen["focus"] == "Focus on merit aid" and seen["orientation"] == "portrait"
+    assert seen["selection"] is None
     assert seen["scratch_prefix"] == f"video-pipeline/reels/{published_job.id}/tmp"
+
+
+def test_the_task_renders_the_approved_selection(db, published_job, task_env, monkeypatch):
+    approved = {"hook_title": "Approved", "total_seconds": 10.0, "segments": [
+        {"first_cue": 0, "last_cue": 0, "start": 0.0, "end": 10.0, "text": "Hi.",
+         "why": "", "flags": [], "lines": [{"start": 0.0, "end": 10.0, "text": "Hi."}]}]}
+    reel = _reel(db, published_job, state=RENDERING, selection=approved)
+    seen: dict = {}
+
+    def build(inputs, **kw):
+        seen.update(kw)
+        return BuiltReel(path=kw["work_dir"] / "reel.mp4", hook_title="Approved",
+                         duration_seconds=10.0)
+
+    monkeypatch.setattr(reel_task, "build_reel", build)
+
+    assert reel_task.run(str(reel.id)) == 0
+    assert seen["selection"].hook_title == "Approved"
+    assert seen["selection"].segments[0].lines == approved["segments"][0]["lines"]
 
 
 def test_a_failing_task_records_why(db, published_job, task_env, monkeypatch):

@@ -35,6 +35,8 @@ ADMIN_USER_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 AUTOMATION_ID = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 CURRENT_CYCLE_ID = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
 PAST_CYCLE_ID = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+HAMPTON_ID = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+RIVERSIDE_ID = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
 
 BASE = f"/api/v1/emails/automations/{AUTOMATION_ID}/sends"
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
@@ -43,8 +45,8 @@ NOW = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
 @pytest.fixture
 def client(scheduler_sessionmaker):
     """Admin TestClient over a DB holding one automation with 3 sends: two for a
-    current-cycle webinar, one for a past-cycle webinar, plus one legacy row
-    with no workshop context at all."""
+    current-cycle webinar (Hampton), one for a past-cycle webinar (Riverside),
+    plus one legacy row with no workshop context at all."""
     SessionLocal = scheduler_sessionmaker
     seed = SessionLocal()
 
@@ -54,9 +56,10 @@ def client(scheduler_sessionmaker):
             Cycle(id=PAST_CYCLE_ID, name="2025-2026", is_current=False),
         ]
     )
-    school = School(id=uuid.uuid4(), name="Hampton School")
+    school = School(id=HAMPTON_ID, name="Hampton School")
+    other_school = School(id=RIVERSIDE_ID, name="Riverside High")
     workshop = Workshop(id=uuid.uuid4(), name="College Pricing")
-    seed.add_all([school, workshop])
+    seed.add_all([school, other_school, workshop])
     current_webinar = Webinar(
         id=uuid.uuid4(),
         workshop_id=workshop.id,
@@ -108,7 +111,7 @@ def client(scheduler_sessionmaker):
             log(
                 "lastyear@example.com",
                 webinar=past_webinar,
-                school_id=school.id,
+                school_id=other_school.id,
                 sent_at=NOW - timedelta(days=300),
             ),
             # Pre-migration row: no webinar/school to attribute it to.
@@ -157,6 +160,32 @@ def test_rows_carry_school_and_workshop_names(client):
     rows = client.get(BASE, params={"cycle_id": str(CURRENT_CYCLE_ID)}).json()["rows"]
     assert rows[0]["school_name"] == "Hampton School"
     assert rows[0]["workshop_name"] == "College Pricing"
+
+
+def test_rows_carry_the_webinar_start(client):
+    rows = client.get(BASE, params={"cycle_id": str(CURRENT_CYCLE_ID)}).json()["rows"]
+    assert datetime.fromisoformat(rows[0]["webinar_start"]).replace(
+        tzinfo=timezone.utc
+    ) == NOW + timedelta(days=7)
+
+
+def test_school_filter_narrows_to_that_school(client):
+    body = client.get(BASE, params={"school_id": str(RIVERSIDE_ID)}).json()
+    assert [r["recipient_email"] for r in body["rows"]] == ["lastyear@example.com"]
+
+
+def test_school_filter_combines_with_the_cycle_filter(client):
+    params = {"school_id": str(RIVERSIDE_ID), "cycle_id": str(CURRENT_CYCLE_ID)}
+    assert client.get(BASE, params=params).json()["rows"] == []
+
+
+def test_email_filter_is_a_case_insensitive_substring_match(client):
+    body = client.get(BASE, params={"email": "  OLD "}).json()
+    assert [r["recipient_email"] for r in body["rows"]] == ["older@example.com"]
+
+
+def test_email_filter_treats_like_wildcards_literally(client):
+    assert client.get(BASE, params={"email": "%"}).json()["rows"] == []
 
 
 def test_rows_without_workshop_context_are_listed_but_never_guessed_into_a_cycle(client):

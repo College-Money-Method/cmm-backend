@@ -37,6 +37,7 @@ from src.video_pipeline.reel_models import (
     RENDERING,
     WebinarVideoReel,
 )
+from src.video_pipeline.trailer_select import Selection
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +78,11 @@ def _render(db, reel: WebinarVideoReel, job: WebinarVideoJob, work: Path) -> Non
     _set_stage(db, reel, "downloading")
     camera = reel_sources.download_camera_video(job, work / "camera.mp4")
     screen = reel_sources.download_screen(job, work / "screen.mp4")
+    # A reel reviewed as a draft renders exactly the clips the admin approved;
+    # one queued before drafts existed has none and picks its own.
+    approved = Selection.from_dict(reel.selection) if reel.selection else None
     built = build_reel(inputs, camera=camera, screen=screen, orientation=reel.orientation,
-                       focus=reel.prompt, work_dir=work,
+                       focus=reel.prompt, work_dir=work, selection=approved,
                        scratch_prefix=scratch_prefix(job.id),
                        on_stage=lambda stage: _set_stage(db, reel, stage))
 

@@ -221,14 +221,25 @@ def list_automation_sends(
     _admin: AdminDep,
     db: DbDep,
     cycle_id: uuid.UUID | None = Query(default=None),
+    school_id: uuid.UUID | None = Query(default=None),
+    email: str | None = Query(default=None, max_length=320),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> AutomationSendPage:
     """One page of this automation's individual sends, newest first — the
     per-recipient detail behind the row's `sent_count`. `cycle_id` scopes to
-    sends for that cycle's webinars; omit it for every send ever."""
+    sends for that cycle's webinars; omit it for every send ever. `school_id`
+    and `email` (substring) narrow further."""
     _get_automation_or_404(db, automation_id)
-    return automation_sends(db, automation_id, cycle_id=cycle_id, offset=offset, limit=limit)
+    return automation_sends(
+        db,
+        automation_id,
+        cycle_id=cycle_id,
+        school_id=school_id,
+        email=email.strip() if email else None,
+        offset=offset,
+        limit=limit,
+    )
 
 
 @router.delete("/{automation_id}", status_code=status.HTTP_204_NO_CONTENT)
