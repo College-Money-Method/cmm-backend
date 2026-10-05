@@ -53,3 +53,8 @@ class GuestContactDetail(BaseModel):
     parent_reason: str | None = None
     # Null until an admin marks the enquiry answered.
     resolved_at: datetime | None = None
+    # Set for landing-page fit-check submissions (source "school_fit_check"):
+    # the school matched or created for the visitor, and their quiz answers.
+    school_id: uuid.UUID | None = None
+    source: str | None = None
+    quiz_answers: dict | None = None

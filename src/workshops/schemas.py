@@ -325,8 +325,10 @@ class WorkshopPortalItem(BaseModel):
     portal_mapping_id: uuid.UUID
     school_override: dict | None = None  # e.g. {"suggested_grades": "9,10"}
 
-    # Webinar fields
-    webinar_id: uuid.UUID
+    # Webinar fields. Preview schools get placeholder items whose id is the
+    # string "preview-{n}" instead of a webinar UUID.
+    webinar_id: uuid.UUID | str
+    is_preview: bool = False
     start_datetime: datetime | None
     end_datetime: datetime | None
     registration_url: str | None

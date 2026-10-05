@@ -70,6 +70,13 @@ class School(Base):
     # preview link before becoming a customer. Effective public access is
     # is_current_customer OR is_cmm_website_activated (see _find_public_school).
     is_cmm_website_activated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # Self-serve SRC preview: a prospect who used the landing-page fit check gets
+    # limited access (see src/schools/preview_shaping.py) until they convert to a
+    # customer or the preview expires. Preview mode is only in effect while
+    # `is_current_customer` is false.
+    is_src_preview: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    prospect_source: Mapped[str | None] = mapped_column(Text)
+    src_preview_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     cohort_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("cohorts.id"))
     grade_set_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("grade_sets.id", ondelete="SET NULL"), nullable=True

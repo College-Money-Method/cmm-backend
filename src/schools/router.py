@@ -4,19 +4,23 @@ import uuid
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+import hmac
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from src.analytics.group_identify import identify_school_group
 from src.auth.deps import AdminDep, CounselorDep, CurrentUserDep
 from src.auth.models import UserRole
+from src.auth.rate_limit import allow, client_ip
 from src.config import settings
 from src.db.client import get_supabase
 from src.db.deps import DbDep
 from src.cycles.models import Cycle
 from src.schools.models import Contact, School, SchoolEnrollmentCycle
 from src.schools.logo_thumbnail import generate_logo_thumbnail
+from src.schools.src_session import ensure_preview_active, issue_token, school_mode, src_error
 from src.schools.slug_utils import find_slug_owner, unique_slug_db, validate_custom_slug
 from src.storage.asset_url import s3_object_url, to_cdn_url
 from src.storage.s3_client import S3ClientDep
@@ -103,6 +107,9 @@ def get_school_counselors_public(
 ) -> list[CounselorPublicOut]:
     """Return counselors assigned to a school (public, no auth required)."""
     school = _find_public_school(db, slug=slug)
+    # A preview school has no counselors; never reveal the real team.
+    if school_mode(school) == "preview":
+        return []
 
     roles = (
         db.query(UserRole)
@@ -207,7 +214,7 @@ def list_schools_public(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> SchoolPublicListResponse:
     """List current-customer schools for the public discovery page (no auth)."""
-    q = db.query(School).filter(School.is_current_customer.is_(True))
+    q = db.query(School).filter(School.is_current_customer.is_(True), School.is_src_preview.is_(False))
     if search:
         term = f"%{search}%"
         q = q.filter((School.name.ilike(term)) | (School.city.ilike(term)))
@@ -228,13 +235,46 @@ def get_school_by_slug(slug: str, db: DbDep) -> SchoolPublic:
     return SchoolPublic.model_validate(school)
 
 
+_VERIFY_LIMIT = 10
+_VERIFY_WINDOW_SECONDS = 600.0
+
+
+def _session_response(school: School) -> dict:
+    token, mode, preview_expires_at = issue_token(school)
+    return {
+        "school": SchoolPublic.model_validate(school).model_dump(mode="json"),
+        "session_token": token,
+        "mode": mode,
+        "preview_expires_at": preview_expires_at.isoformat() if preview_expires_at else None,
+    }
+
+
 @router.post("/slug/{slug}/verify-password", status_code=status.HTTP_200_OK)
-def verify_school_password(slug: str, body: SchoolPasswordVerify, db: DbDep) -> dict:
-    """Verify the school portal password. Returns 200 + school data if correct, 401 if wrong."""
+def verify_school_password(slug: str, body: SchoolPasswordVerify, request: Request, db: DbDep) -> dict:
+    """Check the school portal password; on success return the school plus a session token."""
+    if not allow(
+        f"school-password:{client_ip(request)}",
+        limit=_VERIFY_LIMIT,
+        window_seconds=_VERIFY_WINDOW_SECONDS,
+    ):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many attempts. Please wait a few minutes.")
     school = _find_public_school(db, slug=slug)
-    if school.cmm_website_password != body.password:
+    ensure_preview_active(school)
+    expected = school.cmm_website_password or ""
+    # compare_digest on bytes: constant time and safe for non-ASCII input
+    if not expected or not hmac.compare_digest(expected.encode(), body.password.encode()):
         raise HTTPException(status_code=401, detail="Incorrect password")
-    return {"school": SchoolPublic.model_validate(school).model_dump(mode="json")}
+    return _session_response(school)
+
+
+@router.post("/slug/{slug}/session", status_code=status.HTTP_200_OK)
+def start_school_session(slug: str, db: DbDep) -> dict:
+    """Session for a school that has no password; schools with one must verify it."""
+    school = _find_public_school(db, slug=slug)
+    ensure_preview_active(school)
+    if school.cmm_website_password:
+        raise src_error(401, "password_required", "This resource center requires a password.")
+    return _session_response(school)
 
 
 @router.get("/{school_id}/public", response_model=SchoolPublic)
@@ -270,6 +310,7 @@ def list_schools(
     cohort_ids: list[uuid.UUID] | None = Query(default=None),
     is_current_customer: bool | None = Query(default=None),
     enrollment_range: str | None = Query(default=None),
+    prospect_source: str | None = Query(default=None, max_length=64),
     sort_by: Literal["name", "state", "enrollment"] = Query(default="name"),
     sort_dir: Literal["asc", "desc"] = Query(default="asc"),
     skip: int = Query(default=0, ge=0),
@@ -304,6 +345,8 @@ def list_schools(
         q = q.filter(School.is_current_customer == is_current_customer)
     if enrollment_range:
         q = q.filter(School.enrollment_range == enrollment_range)
+    if prospect_source:
+        q = q.filter(School.prospect_source == prospect_source)
 
     total = q.count()
     schools = q.order_by(*_build_order_by(sort_by, sort_dir)).offset(skip).limit(limit).all()
@@ -503,6 +546,10 @@ def update_school(
     # dedicated upload endpoint (which generates a real thumbnail itself)
     if "logo_url" in update_data and update_data["logo_url"] != school.logo_url:
         update_data["logo_thumb_url"] = update_data["logo_url"]
+
+    # A school that becomes a customer is no longer a preview
+    if update_data.get("is_current_customer"):
+        update_data["is_src_preview"] = False
 
     for field, value in update_data.items():
         setattr(school, field, value)

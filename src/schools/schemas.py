@@ -60,6 +60,10 @@ class SchoolListItem(BaseModel):
     enrollment_range: str | None = None
     is_current_customer: bool = False
     is_cmm_website_activated: bool = False
+    # Self-serve SRC preview (see src/schools/preview_shaping.py)
+    is_src_preview: bool = False
+    src_preview_expires_at: datetime | None = None
+    prospect_source: str | None = None
     logo_url: CdnUrl = None
     logo_thumb_url: CdnUrl = None
     # Authoritative public URL segment (/school/<slug>). Admin-editable; the
@@ -131,6 +135,8 @@ class SchoolUpdate(BaseModel):
     grade_set_id: uuid.UUID | None = None
     is_current_customer: bool | None = None
     is_cmm_website_activated: bool | None = None
+    is_src_preview: bool | None = None
+    src_preview_expires_at: datetime | None = None
     logo_url: CdnUrl = None
     cmm_website_password: str | None = None
     school_resource_center_url: str | None = None
@@ -206,6 +212,8 @@ class SchoolPublic(BaseModel):
     is_current_customer: bool = False
     grade_set_id: uuid.UUID | None = None
     has_password: bool = False
+    is_src_preview: bool = False
+    src_preview_expires_at: datetime | None = None
 
 
 class SchoolPublicListResponse(BaseModel):

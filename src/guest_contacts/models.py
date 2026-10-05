@@ -5,8 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Index, Text, Uuid
-from sqlalchemy.dialects.postgresql import TIMESTAMP
+from sqlalchemy import JSON, Boolean, ForeignKey, Index, Text, Uuid
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func, text
 
@@ -44,8 +44,19 @@ class GuestContact(Base):
     # rather than a bare flag also answers "how long did that one sit there".
     resolved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
+    # Set for submissions that came from the landing-page school fit check: the
+    # school the visitor was matched to or given a preview for, and their answers.
+    school_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("schools.id", ondelete="SET NULL"), nullable=True
+    )
+    source: Mapped[str | None] = mapped_column(Text)
+    quiz_answers: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
+
     __table_args__ = (
         Index("idx_guest_contacts_email", "email"),
+        Index("idx_guest_contacts_school_id", "school_id"),
         Index("idx_guest_contacts_created_at", "created_at"),
         Index(
             "idx_guest_contacts_inbox",
