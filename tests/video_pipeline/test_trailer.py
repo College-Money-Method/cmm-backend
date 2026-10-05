@@ -60,6 +60,38 @@ def test_validate_drops_a_segment_with_another_speaker():
     assert [s.first_cue for s in selection.segments] == [0, 20, 30]
 
 
+
+def _spare(a: int, b: int) -> dict:
+    return {"first_cue": a, "last_cue": b, "why": "", "flags": [], "spare": True}
+
+
+def test_validate_keeps_an_opening_and_an_ending_around_the_main_clips():
+    # A one-line opening, three two-line clips and a one-line ending: five clips.
+    selection = validate(_answer((0, 0), (10, 11), (20, 21), (30, 31), (90, 90)), _lines(100))
+    assert [s.first_cue for s in selection.segments] == [0, 10, 20, 30, 90]
+    assert 45 <= selection.total_seconds <= 65
+
+
+def test_validate_never_keeps_more_than_five_clips():
+    selection = validate(
+        _answer((0, 0), (10, 11), (20, 21), (30, 31), (40, 40), (50, 50)), _lines(100))
+    assert len(selection.segments) == 5
+
+
+def test_validate_leaves_spares_out_when_every_clip_fits():
+    answer = _answer((10, 12), (20, 22), (30, 32))
+    answer["segments"].append(_spare(50, 50))
+    selection = validate(answer, _lines(100))
+    assert [s.first_cue for s in selection.segments] == [10, 20, 30]
+
+
+def test_validate_plays_a_spare_in_place_of_a_dropped_clip():
+    # Clip 2 overlaps clip 1, so the spare plays second, before the ending.
+    answer = _answer((10, 12), (11, 13), (20, 22), (90, 90))
+    answer["segments"].append(_spare(40, 41))
+    selection = validate(answer, _lines(100))
+    assert [s.first_cue for s in selection.segments] == [10, 40, 20, 90]
+
 def test_presenter_mask_carries_each_label_forward():
     sentences = [
         Cue(0, 1, "Paul Martin, College Money Method: Welcome."),

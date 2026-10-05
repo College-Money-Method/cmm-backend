@@ -36,10 +36,13 @@ TOTAL_MAX_SECONDS = 65.0
 SEGMENT_MIN_SECONDS = 5.0
 SEGMENT_MAX_SECONDS = 25.0
 MIN_SEGMENTS = 3
-MAX_SEGMENTS = 6
-# The model may propose more than the reel keeps; the extras are the spares
-# `validate` falls back on when an earlier pick is the wrong length.
+MAX_SEGMENTS = 5
+# The model may propose spares beside the clips it means the reel to have:
+# `validate` plays one only in place of a clip it had to drop.
 MAX_CANDIDATES = 8
+# An opening or closing clip is a short aside, not one of the reel's main
+# moments. Guidance for the model only; `validate` holds it to the segment rules.
+BOOKEND_MAX_SECONDS = 10.0
 # Breathing room either side of a cut, so the first and last words are not
 # clipped. Never reaches into a neighbouring cue.
 PAD_SECONDS = 0.15
@@ -54,22 +57,30 @@ Pick the moments that make the best ~60 second trailer: a reel that makes a pare
 watch the full webinar.
 
 Rules:
-- Propose 4 to {MAX_CANDIDATES} segments in the order they should play; the reel keeps \
-{MIN_SEGMENTS}-{MAX_SEGMENTS} of them, dropping any that are the wrong length or that no longer \
-fit the total, so put the best first and the spares last. Each is a run of consecutive sentences, \
-{SEGMENT_MIN_SECONDS:.0f}-{SEGMENT_MAX_SECONDS:.0f} seconds long. \
-All segments together must total {TOTAL_MIN_SECONDS:.0f}-{TOTAL_MAX_SECONDS:.0f} seconds. \
-A segment is 1 to 4 sentences. A longer one is cut short after its last sentence that \
-fits {SEGMENT_MAX_SECONDS:.0f}s, so open each segment with its strongest line.
+- Pick {MIN_SEGMENTS} to {MAX_SEGMENTS} segments, in the order they should play. Most reels are \
+{MIN_SEGMENTS} strong moments. Add a 4th or 5th only when it earns its place: a brief opening in \
+which the presenter introduces themselves or what the session covers, a short ending that \
+invites people to the full session, or because the editorial direction asks for one. An \
+opening or ending is 1 or 2 sentences, at most {BOOKEND_MAX_SECONDS:.0f} seconds.
+- Each segment is a run of 1 to 4 consecutive sentences, \
+{SEGMENT_MIN_SECONDS:.0f}-{SEGMENT_MAX_SECONDS:.0f} seconds long. A longer one is cut short after \
+its last sentence that fits {SEGMENT_MAX_SECONDS:.0f}s, so open each segment with its strongest \
+line. All segments together must total {TOTAL_MIN_SECONDS:.0f}-{TOTAL_MAX_SECONDS:.0f} seconds.
+- After them you may list up to {MAX_CANDIDATES - MAX_SEGMENTS} spares, each with \
+"spare": true. A spare is played only in place of a segment that turns out the wrong length \
+or no longer fits the total, and is left out otherwise.
 - Each segment must make sense on its own: start at the beginning of a sentence and end at \
 the end of one. No "as I said", "this one here", or anything that needs earlier context.
 - The video shows only the presenter's face, never the slides. Skip moments that describe \
 what is on screen ("as you can see", "click here", "this chart").
-- Prefer a strong hook first (a surprising fact, a common costly mistake, a clear promise), \
-then concrete, useful advice, and end on a line that makes people want the full session.
+- Lead with a strong hook (a surprising fact, a common costly mistake, a clear promise), \
+right after the opening if there is one, then concrete, useful advice, and end on a line that \
+makes people want the full session.
 - Only the sentences marked "(presenter)" may be picked, and a segment must not include \
-any other speaker's sentence. Skip greetings, housekeeping, audio checks, attendee names and \
-answers that only make sense after hearing the question.
+any other speaker's sentence. Skip greetings ("hi everyone", "give it a minute"), \
+housekeeping, audio checks, attendee names and answers that only make sense after hearing \
+the question. The presenter saying who they are or what the session covers is not a \
+greeting, and can make the opening.
 - Do not pick a claim that becomes misleading when cut short (a dollar amount or a \
 guarantee stripped of its conditions). If a strong segment mentions dollar amounts, \
 guarantees or specific schools, keep it only if it stands alone and flag it.
@@ -79,7 +90,8 @@ Reply with only this JSON object:
 first_cue and last_cue are sentence indexes, both included.
 {{"hook_title": "<on-screen title, max 8 words, no hashtags or emoji>",
   "segments": [{{"first_cue": <int>, "last_cue": <int>, "why": "<max 10 words>",
-                 "flags": ["dollar_amount" | "guarantee" | "school_name" | "needs_context"]}}]}}"""
+                 "flags": ["dollar_amount" | "guarantee" | "school_name" | "needs_context"],
+                 "spare": <true on a spare only>}}]}}"""
 
 
 class SelectionError(RuntimeError):
@@ -274,49 +286,49 @@ def validate(
 ) -> Selection:
     """Turn the model's cue ranges into a reel that fits every rule.
 
-    The model proposes more segments than the reel needs; the arithmetic is done
-    here, because a model adding up two dozen durations is the step it gets
-    wrong. In play order, a segment is kept when it is the right length, does
-    not overlap one already kept, and still fits the total — otherwise it is
-    dropped with a reason, and the reasons go back to the model on a retry.
-    A segment containing a sentence that is not `allowed` (someone other than
-    the presenter) is dropped the same way.
+    The arithmetic is done here, because a model adding up two dozen durations
+    is the step it gets wrong. In play order, a clip is kept when it is the
+    right length, does not overlap one already kept, and still fits the total —
+    otherwise it is dropped with a reason, and the reasons go back to the model
+    on a retry. A clip containing a sentence that is not `allowed` (someone
+    other than the presenter) is dropped the same way.
+
+    Segments marked ``"spare": true`` are not part of the reel the model meant:
+    each stands in for a dropped clip, in that clip's place, or tops up a reel
+    left too short. So the clip count is the model's choice — 3, or 4 or 5 with
+    an opening or ending — never whatever happened to fit.
     """
     raw_segments = data.get("segments")
     if not isinstance(raw_segments, list) or not raw_segments:
         raise SelectionError("no segments in the answer")
 
+    clips, spares = [], []
+    for n, item in enumerate(raw_segments[:MAX_CANDIDATES], start=1):
+        spare = isinstance(item, dict) and item.get("spare") is True
+        (spares if spare else clips).append((n, item))
+
     kept: list[Segment] = []
     notes: list[str] = []
-    for n, item in enumerate(raw_segments[:MAX_CANDIDATES], start=1):
-        try:
-            first, last = int(item["first_cue"]), int(item["last_cue"])
-        except (KeyError, TypeError, ValueError):
-            notes.append(f"segment {n}: no integer first_cue/last_cue")
+    gaps: list[int] = []  # where in `kept` each dropped clip would have played
+    for n, item in clips:
+        segment = _fit(n, item, cues, allowed, kept, notes)
+        if segment is None:
+            gaps.append(len(kept))
+        else:
+            kept.append(segment)
+    for n, item in spares:
+        short = (len(kept) < MIN_SEGMENTS
+                 or sum(k.duration for k in kept) < TOTAL_MIN_SECONDS)
+        if not gaps and not short:
+            break
+        segment = _fit(n, item, cues, allowed, kept, notes)
+        if segment is None:
             continue
-        if not 0 <= first <= last < len(cues):
-            notes.append(f"segment {n}: cue range [{first}, {last}] is out of bounds")
-            continue
-        if allowed is not None and not all(allowed[first:last + 1]):
-            notes.append(f"segment {n}: cues {first}-{last} include another speaker")
-            continue
-        why, flags = str(item.get("why") or ""), [str(f) for f in item.get("flags") or []]
-        segment = _timed(cues, first, last, why, flags)
-        while segment.duration > SEGMENT_MAX_SECONDS and segment.last_cue > first:
-            # Too long: keep the leading sentences, so it still ends on one.
-            segment = _timed(cues, first, segment.last_cue - 1, why, flags)
-        if segment.last_cue < last:
-            notes.append(f"segment {n}: shortened to cues {first}-{segment.last_cue}")
-        label = f"segment {n} (cues {first}-{segment.last_cue}, {segment.duration:.1f}s)"
-        if not SEGMENT_MIN_SECONDS <= segment.duration <= SEGMENT_MAX_SECONDS:
-            notes.append(f"{label}: dropped, each must be "
-                         f"{SEGMENT_MIN_SECONDS:.0f}-{SEGMENT_MAX_SECONDS:.0f}s")
-        elif any(first <= k.last_cue and k.first_cue <= segment.last_cue for k in kept):
-            notes.append(f"{label}: dropped, overlaps an earlier segment")
-        elif len(kept) >= MAX_SEGMENTS:
-            notes.append(f"{label}: dropped, the reel already has {MAX_SEGMENTS} segments")
-        elif sum(k.duration for k in kept) + segment.duration > TOTAL_MAX_SECONDS:
-            notes.append(f"{label}: dropped, would push the reel past {TOTAL_MAX_SECONDS:.0f}s")
+        if gaps:
+            # Later gaps sit one further along for every clip slotted in before them.
+            at = gaps.pop(0)
+            kept.insert(at, segment)
+            gaps = [g + 1 for g in gaps]
         else:
             kept.append(segment)
 
@@ -331,6 +343,51 @@ def validate(
     for note in notes:
         logger.info("Trailer selection: %s", note)
     return selection
+
+
+def _fit(
+    n: int,
+    item: Any,
+    cues: list[Cue],
+    allowed: list[bool] | None,
+    kept: list[Segment],
+    notes: list[str],
+) -> Segment | None:
+    """Answer segment `n` as a timed segment that fits beside `kept`, or None.
+
+    Every reason it is shortened or dropped is added to `notes`.
+    """
+    try:
+        first, last = int(item["first_cue"]), int(item["last_cue"])
+    except (KeyError, TypeError, ValueError):
+        notes.append(f"segment {n}: no integer first_cue/last_cue")
+        return None
+    if not 0 <= first <= last < len(cues):
+        notes.append(f"segment {n}: cue range [{first}, {last}] is out of bounds")
+        return None
+    if allowed is not None and not all(allowed[first:last + 1]):
+        notes.append(f"segment {n}: cues {first}-{last} include another speaker")
+        return None
+    why, flags = str(item.get("why") or ""), [str(f) for f in item.get("flags") or []]
+    segment = _timed(cues, first, last, why, flags)
+    while segment.duration > SEGMENT_MAX_SECONDS and segment.last_cue > first:
+        # Too long: keep the leading sentences, so it still ends on one.
+        segment = _timed(cues, first, segment.last_cue - 1, why, flags)
+    if segment.last_cue < last:
+        notes.append(f"segment {n}: shortened to cues {first}-{segment.last_cue}")
+    label = f"segment {n} (cues {first}-{segment.last_cue}, {segment.duration:.1f}s)"
+    if not SEGMENT_MIN_SECONDS <= segment.duration <= SEGMENT_MAX_SECONDS:
+        notes.append(f"{label}: dropped, each must be "
+                     f"{SEGMENT_MIN_SECONDS:.0f}-{SEGMENT_MAX_SECONDS:.0f}s")
+    elif any(first <= k.last_cue and k.first_cue <= segment.last_cue for k in kept):
+        notes.append(f"{label}: dropped, overlaps an earlier segment")
+    elif len(kept) >= MAX_SEGMENTS:
+        notes.append(f"{label}: dropped, the reel already has {MAX_SEGMENTS} segments")
+    elif sum(k.duration for k in kept) + segment.duration > TOTAL_MAX_SECONDS:
+        notes.append(f"{label}: dropped, would push the reel past {TOTAL_MAX_SECONDS:.0f}s")
+    else:
+        return segment
+    return None
 
 
 def _timed(cues: list[Cue], first: int, last: int, why: str, flags: list[str]) -> Segment:
