@@ -23,6 +23,8 @@ from src.emails.automation_rearm import rearm_automations_for_webinar
 from src.emails.models import EmailSendLog
 from src.content.schemas import ContentAssetSummary
 from src.schools.models import School
+from src.schools.preview_shaping import preview_workshop, preview_workshops
+from src.schools.src_session import OptionalUserDep, SrcSessionHeader, session_for_school
 from src.workshops.models import AirtableSyncLog, PortalMapping, Webinar, Workshop, WorkshopEmailTemplate, WorkshopNotificationSubscriber, WorkshopRegistration
 from src.workshops import attendance_sync_service
 from src.workshops.upcoming_window import is_upcoming, is_upcoming_sql
@@ -921,8 +923,13 @@ def subscribe_notifications(
 
 
 @router.get("/public/school/{school_id}", response_model=SchoolWorkshopsResponse)
-def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResponse:
-    """Return upcoming and past workshops for a school portal (no auth)."""
+def get_school_workshops(
+    school_id: uuid.UUID, db: DbDep, user: OptionalUserDep, x_src_session: SrcSessionHeader = None
+) -> SchoolWorkshopsResponse:
+    """Return upcoming and past workshops for a school portal (school session or hub bearer)."""
+    session = session_for_school(db, school_id, x_src_session, user)
+    if session.mode == "preview":
+        return SchoolWorkshopsResponse(upcoming=preview_workshops(db, session.school), past=[])
     mappings = (
         db.execute(
             select(PortalMapping)
@@ -973,8 +980,13 @@ def get_school_workshops(school_id: uuid.UUID, db: DbDep) -> SchoolWorkshopsResp
 
 
 @router.get("/public/school/{school_id}/webinar/by-prefix/{prefix}", response_model=WorkshopPortalItem)
-def get_school_webinar_by_prefix(school_id: uuid.UUID, prefix: str, db: DbDep) -> WorkshopPortalItem:
+def get_school_webinar_by_prefix(
+    school_id: uuid.UUID, prefix: str, db: DbDep, user: OptionalUserDep, x_src_session: SrcSessionHeader = None
+) -> WorkshopPortalItem:
     """Return a single webinar's portal details looked up by the first 8 hex chars of its UUID."""
+    session = session_for_school(db, school_id, x_src_session, user)
+    if session.mode == "preview":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workshop not found")
     if len(prefix) != 8 or not all(c in "0123456789abcdef" for c in prefix):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="prefix must be 8 lowercase hex characters")
 
@@ -1011,8 +1023,23 @@ def get_school_webinar_by_prefix(school_id: uuid.UUID, prefix: str, db: DbDep) -
 
 
 @router.get("/public/school/{school_id}/webinar/{webinar_id}", response_model=WorkshopPortalItem)
-def get_school_webinar(school_id: uuid.UUID, webinar_id: uuid.UUID, db: DbDep) -> WorkshopPortalItem:
-    """Return a single webinar's portal details for a school (no auth)."""
+def get_school_webinar(
+    school_id: uuid.UUID, webinar_id: str, db: DbDep, user: OptionalUserDep, x_src_session: SrcSessionHeader = None
+) -> WorkshopPortalItem:
+    """Return a single webinar's portal details for a school (school session or hub bearer).
+
+    `webinar_id` is a UUID, or `preview-{n}` for a preview school's placeholders.
+    """
+    session = session_for_school(db, school_id, x_src_session, user)
+    if session.mode == "preview":
+        item = preview_workshop(db, session.school, webinar_id)
+        if item is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workshop not found")
+        return item
+    try:
+        webinar_id = uuid.UUID(webinar_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workshop not found")
     mapping = (
         db.execute(
             select(PortalMapping)

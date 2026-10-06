@@ -44,6 +44,7 @@ from src.content.submissions_router import router as submissions_router
 from src.search.router import router as search_router
 from src.cycles.router import router as cohorts_router
 from src.db import get_supabase
+from src.schools.prospects_router import router as school_prospects_router
 from src.schools.router import router as schools_router
 from src.workshops.qa_router import router as webinar_qa_router
 from src.workshops.router import router as workshops_router
@@ -72,6 +73,7 @@ from src.emails.template_router import router as emails_template_router
 from src.emails.preview_router import router as emails_preview_router
 from src.emails.scheduler import init_scheduler, shutdown_scheduler
 from src.emails.school_links import check_email_origin
+from src.schools.src_session import check_src_session_secret
 
 
 @asynccontextmanager
@@ -82,6 +84,7 @@ async def lifespan(app: FastAPI):
     Shutdown: stop the scheduler."""
     get_supabase()
     check_email_origin()
+    check_src_session_secret()
     register_video_pipeline_jobs(init_scheduler(app))
     yield
     shutdown_scheduler()
@@ -104,6 +107,8 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+# Literal /schools/prospects paths must be registered before /schools/{school_id}
+app.include_router(school_prospects_router)
 app.include_router(schools_router)
 app.include_router(cohorts_router)
 app.include_router(content_router)

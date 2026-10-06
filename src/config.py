@@ -387,5 +387,12 @@ class Settings(BaseSettings):
     # contacts are missing from a pull (guards against partial/failed Airtable fetch).
     sync_deactivation_max_missing_fraction: float = 0.1
 
+    # School Resource Center session tokens (X-SRC-Session header). The secret
+    # signs the JWT; empty falls back to an insecure dev value with a warning.
+    # While `src_session_enforced` is False a missing header is tolerated for
+    # full-access schools (legacy callers); preview schools always need one.
+    src_session_secret: str = ""
+    src_session_enforced: bool = False
+
 
 settings = Settings()

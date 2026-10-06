@@ -21,6 +21,7 @@ dependencies = [
     "premailer>=3.10.0",
     "cryptography>=43.0.0",
     "apscheduler>=3.10.0",
+    "pyjwt>=2.11.0",
 ]
 
 [project.optional-dependencies]

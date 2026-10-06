@@ -12,8 +12,16 @@ from sqlalchemy import func, select, or_
 
 from src.auth.deps import AdminDep
 from src.content.models import ContentAsset, Topic
+from src.cycles.models import Cycle
 from src.db.deps import DbDep
 from src.schools.models import School
+from src.schools.preview_shaping import (
+    PREVIEW_WORKSHOP_COUNT,
+    preview_allowed_topic_ids,
+    preview_asset_conditions,
+    preview_workshop_id,
+)
+from src.schools.src_session import SrcSessionHeader, token_school_mode
 from src.search.models import SearchLog
 from src.workshops.models import PortalMapping, Webinar, Workshop
 
@@ -56,6 +64,7 @@ class SearchResult(BaseModel):
     headline: str | None     # ts_headline snippet with <b> highlights
     slug: str | None        # topics only
     webinar_id: uuid.UUID | None  # workshops only — school-specific
+    preview_id: str | None = None  # workshops in a preview session: mock id ("preview-3")
     rank: float
 
 
@@ -134,6 +143,7 @@ def global_search(
     limit: Annotated[int, Query(ge=1, le=50)] = 3,
     type: Annotated[Literal["topics", "workshops", "resources"] | None, Query()] = None,
     school_slug: Annotated[str | None, Query()] = None,
+    x_src_session: SrcSessionHeader = None,
 ) -> GlobalSearchResponse:
     """Public: full-text search across topics, workshops, and content assets."""
     # Two complementary queries are OR-ed on every table:
@@ -154,6 +164,11 @@ def global_search(
 
     corrected_q = _correct_query(q)
     corrected_tsq = func.plainto_tsquery("english", corrected_q) if corrected_q != q else english_tsq
+
+    # A preview session only sees hits it could open: allowed topics, preview-tier
+    # resources, and the mock workshops.
+    session = token_school_mode(db, x_src_session)
+    is_preview = session is not None and session.mode == "preview"
 
     topic_results: list[SearchResult] = []
     workshop_results: list[SearchResult] = []
@@ -207,18 +222,22 @@ def global_search(
 
     # ── Workshops ─────────────────────────────────────────────────────────────
     if type is None or type == "workshops":
-        # Correlated scalar subquery: get the most upcoming webinar for this school
+        # Correlated scalar subquery: the school's latest current-cycle webinar for
+        # this workshop — the same set its workshops page lists. A preview session
+        # gets the mock workshops instead, so no real webinar is looked up.
         webinar_subq = (
             select(Webinar.id)
             .join(PortalMapping, PortalMapping.webinar_id == Webinar.id)
             .join(School, School.id == PortalMapping.school_id)
+            .join(Cycle, Cycle.id == Webinar.cycle_id)
             .where(School.slug == school_slug)
+            .where(Cycle.is_current.is_(True))
             .where(Webinar.workshop_id == Workshop.id)
             .order_by(Webinar.start_datetime.desc())
             .limit(1)
             .correlate(Workshop)
             .scalar_subquery()
-        ) if school_slug else None
+        ) if school_slug and not is_preview else None
 
         rank_expr = func.greatest(
             func.ts_rank(Workshop.search_vector, english_tsq),
@@ -238,6 +257,7 @@ def global_search(
                 Workshop.id,
                 Workshop.name,
                 Workshop.description,
+                Workshop.sequence_number,
                 rank_expr.label("rank"),
                 ws_headline_expr.label("headline"),
                 *(
@@ -255,13 +275,19 @@ def global_search(
             .order_by(rank_expr.desc())
             .limit(limit)
         )
+        if is_preview:
+            stmt = stmt.where(Workshop.sequence_number.between(1, PREVIEW_WORKSHOP_COUNT))
+        elif webinar_subq is not None:
+            # Hide workshops this school is not offered (e.g. state-specific ones).
+            stmt = stmt.where(webinar_subq.is_not(None))
         rows = db.execute(stmt).all()
         workshop_results = [
             SearchResult(
                 type="workshop", id=r.id, title=r.name, description=r.description,
                 headline=r.headline,
                 slug=None,
-                webinar_id=r.webinar_id if school_slug else None,
+                webinar_id=r.webinar_id if webinar_subq is not None else None,
+                preview_id=preview_workshop_id(r.sequence_number) if is_preview else None,
                 rank=r.rank,
             )
             for r in rows
@@ -311,6 +337,18 @@ def global_search(
             )
             for r in rows
         ]
+
+    if is_preview:
+        allowed_topics = preview_allowed_topic_ids(db, session.school)
+        topic_results = [r for r in topic_results if r.id in allowed_topics]
+        tier_ids = set(
+            db.scalars(
+                select(ContentAsset.id).where(
+                    ContentAsset.id.in_([r.id for r in asset_results]), *preview_asset_conditions()
+                )
+            ).all()
+        ) if asset_results else set()
+        asset_results = [r for r in asset_results if r.id in tier_ids]
 
     results_count = len(topic_results) + len(workshop_results) + len(asset_results)
 

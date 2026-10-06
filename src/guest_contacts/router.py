@@ -89,6 +89,9 @@ def list_guest_contacts(
         default=None,
         description="Filter by audience. Omit for everything that is not quarantined.",
     ),
+    school_id: uuid.UUID | None = Query(
+        default=None, description="Only submissions linked to this school (fit check)."
+    ),
 ):
     """List guest contact submissions (admin only), newest first.
 
@@ -99,6 +102,8 @@ def list_guest_contacts(
     query = db.query(GuestContact).filter(GuestContact.is_spam.is_(spam))
     if parent is not None:
         query = query.filter(GuestContact.is_parent.is_(parent))
+    if school_id is not None:
+        query = query.filter(GuestContact.school_id == school_id)
 
     rows = (
         query.order_by(GuestContact.created_at.desc()).offset(skip).limit(limit).all()

@@ -40,6 +40,21 @@ from src.content.models import (
     TopicResource,
 )
 from src.schools.models import School
+from src.schools.preview_shaping import (
+    asset_in_preview_tier,
+    lock_grade_config,
+    preview_allowed_topic_ids,
+    preview_asset_conditions,
+)
+from src.schools.src_session import (
+    OptionalUserDep,
+    SrcSessionHeader,
+    is_any_staff,
+    require_admin_without_school,
+    school_mode,
+    session_for_school,
+    src_error,
+)
 from src.search.models import SearchLog
 from src.workshops.models import Workshop
 from src.content.schemas import (
@@ -368,11 +383,22 @@ def list_topics_public(db: DbDep):
 def get_topic_by_slug_public(
     slug: str,
     db: DbDep,
+    user: OptionalUserDep,
     school_id: Annotated[uuid.UUID | None, Query()] = None,
+    x_src_session: SrcSessionHeader = None,
 ):
-    """Public — return a single topic by slug (published only). When `school_id`
-    is given, the topic's resources are additionally filtered by visibility
-    (cohort/state/school) so restricted resources don't leak on topic pages."""
+    """Return a single topic by slug (published only), behind a school session.
+
+    `school_id` names the school whose session is checked and whose visibility
+    (cohort/state/school) filters the topic's resources. Without it only an
+    admin may read the full body (the school-less page uses /canonical). For a
+    preview school only the allowed topics open, with the preview resource tier.
+    """
+    session = None
+    if school_id is None:
+        require_admin_without_school(user)
+    else:
+        session = session_for_school(db, school_id, x_src_session, user)
     stmt = (
         select(Topic)
         .where(Topic.slug == slug, Topic.status == "published")
@@ -388,12 +414,16 @@ def get_topic_by_slug_public(
     topic = db.scalar(stmt)
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
+    if session is not None and session.mode == "preview":
+        if topic.id not in preview_allowed_topic_ids(db, session.school):
+            raise src_error(403, "preview_locked", "This topic is part of the full resource center.")
     topic.resources = [r for r in topic.resources if r.status == "published"]
-    if school_id is not None:
-        school = db.get(School, school_id)
+    if session is not None:
         topic.resources = [
-            r for r in topic.resources if _asset_visible_to_school(r, school)
+            r for r in topic.resources if _asset_visible_to_school(r, session.school)
         ]
+        if session.mode == "preview":
+            topic.resources = [r for r in topic.resources if asset_in_preview_tier(r)]
     return topic
 
 
@@ -863,8 +893,21 @@ def list_assets_public(
     sort_dir: Annotated[str, Query()] = "desc",
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=1000)] = 50,
+    user: OptionalUserDep = None,
+    x_src_session: SrcSessionHeader = None,
 ):
-    """Public endpoint — only returns published assets with public asset types."""
+    """Published assets with public asset types, behind a school session.
+
+    With `school_id` the caller needs that school's session; a preview school is
+    held to the preview tier. Without it (and without a staff bearer) only the
+    public unrestricted tier is returned.
+    """
+    preview_tier_only = False
+    if school_id is not None:
+        session = session_for_school(db, school_id, x_src_session, user)
+        preview_tier_only = session.mode == "preview"
+    else:
+        preview_tier_only = not is_any_staff(user)
     _NAME_THRESHOLD = 0.3
     _DESC_THRESHOLD = 0.4
 
@@ -877,6 +920,8 @@ def list_assets_public(
         .where(ContentAsset.status == "published")
         .where(or_(AssetType.id.is_(None), AssetType.is_public.is_(True)))
     )
+    if preview_tier_only:
+        stmt = stmt.where(*preview_asset_conditions())
 
     has_search = bool(search and search.strip())
     if has_search:
@@ -1160,19 +1205,25 @@ def _asset_visible_to_school(asset: ContentAsset, school: School | None) -> bool
 def get_asset_public(
     asset_id: uuid.UUID,
     db: DbDep,
+    user: OptionalUserDep,
     school_id: Annotated[uuid.UUID | None, Query()] = None,
+    x_src_session: SrcSessionHeader = None,
 ):
-    """Public endpoint — only returns published assets. When `school_id` is given,
-    the asset must be visible to that school (additive cohort/state/school
-    restrictions) or a 404 is returned, so restricted assets can't be reached by
-    direct URL from a school resource center."""
+    """Published asset, behind a school session. With `school_id` the asset must
+    be visible to that school (additive cohort/state/school restrictions) or a 404
+    is returned; preview schools see the preview tier only. Without `school_id`,
+    anything outside the public unrestricted tier needs a staff bearer."""
     asset = _load_asset_detail(db, asset_id)
     if asset.status != "published":
         raise HTTPException(status_code=404, detail="Content asset not found")
     if school_id is not None:
-        school = db.get(School, school_id)
-        if not _asset_visible_to_school(asset, school):
+        session = session_for_school(db, school_id, x_src_session, user)
+        if not _asset_visible_to_school(asset, session.school) or (
+            session.mode == "preview" and not asset_in_preview_tier(asset)
+        ):
             raise HTTPException(status_code=404, detail="Content asset not found")
+    elif not is_any_staff(user) and not asset_in_preview_tier(asset):
+        raise HTTPException(status_code=404, detail="Content asset not found")
     asset.resources = _resolve_resources(db, asset)
     return asset
 
@@ -1688,6 +1739,14 @@ def _load_grade_config(db, gc: GradeConfig) -> GradeConfigOut:
     )
 
 
+def _preview_school_for_slug(db, school_slug: str | None) -> School | None:
+    """The school behind `school_slug` when it is in preview mode, else None."""
+    if not school_slug:
+        return None
+    school = db.query(School).filter(School.slug == school_slug).first()
+    return school if school is not None and school_mode(school) == "preview" else None
+
+
 @router.get("/grade-configs/public", response_model=list[GradeConfigOut])
 def list_grade_configs_public(
     db: DbDep,
@@ -1720,7 +1779,12 @@ def list_grade_configs_public(
         .order_by(GradeConfig.grade, GradeConfigGoal.sort_order)
     )
     configs = db.execute(stmt).unique().scalars().all()
-    return [_load_grade_config(db, gc) for gc in configs]
+    loaded = [_load_grade_config(db, gc) for gc in configs]
+    preview_school = _preview_school_for_slug(db, school_slug)
+    if preview_school is not None:
+        allowed = preview_allowed_topic_ids(db, preview_school)
+        loaded = [lock_grade_config(c, allowed) for c in loaded]
+    return loaded
 
 
 @router.get("/grade-configs/public/{grade}", response_model=GradeConfigOut)
@@ -1747,7 +1811,11 @@ def get_grade_config_by_grade(
     )
     if not gc:
         raise HTTPException(status_code=404, detail="Grade config not found")
-    return _load_grade_config(db, gc)
+    loaded = _load_grade_config(db, gc)
+    preview_school = _preview_school_for_slug(db, school_slug)
+    if preview_school is not None:
+        loaded = lock_grade_config(loaded, preview_allowed_topic_ids(db, preview_school))
+    return loaded
 
 
 @router.get("/grade-configs", response_model=list[GradeConfigSummary])

@@ -134,6 +134,9 @@ class TopicSummary(BaseModel):
     sort_order: int
     read_time_minutes: int | None = None
     updated_at: datetime | None = None
+    # True for topics a preview school may not open; their descriptive fields
+    # are blanked server-side, so the client only has the title to show.
+    locked: bool = False
 
     model_config = {"from_attributes": True}
 
