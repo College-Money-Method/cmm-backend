@@ -58,6 +58,8 @@ from src.analytics.admin_router import router as analytics_admin_router
 from src.communications.router import router as communications_router
 from src.surveys.router import router as surveys_router
 from src.surveys.config_router import router as survey_configs_router
+from src.surveys.review_router import router as survey_review_router
+from src.surveys.digest_job import register_survey_digest_job
 from src.zoom.webhook_router import router as zoom_webhook_router
 from src.content.translation_router import router as translation_router
 from src.content.video_cc_router import router as video_cc_router
@@ -80,12 +82,15 @@ from src.schools.src_session import check_src_session_secret
 async def lifespan(app: FastAPI):
     """Startup: ensure Supabase client is created, report the origin outgoing
     email links are built from, start the in-process email-automation
-    scheduler and register the video pipeline's sweep/reconcile jobs on it.
+    scheduler and register the video pipeline's sweep/reconcile jobs and the
+    weekday survey digest on it.
     Shutdown: stop the scheduler."""
     get_supabase()
     check_email_origin()
     check_src_session_secret()
-    register_video_pipeline_jobs(init_scheduler(app))
+    scheduler = init_scheduler(app)
+    register_video_pipeline_jobs(scheduler)
+    register_survey_digest_job(scheduler)
     yield
     shutdown_scheduler()
 
@@ -126,6 +131,7 @@ app.include_router(analytics_admin_router)
 app.include_router(communications_router)
 app.include_router(surveys_router)
 app.include_router(survey_configs_router)
+app.include_router(survey_review_router)
 app.include_router(zoom_webhook_router)
 app.include_router(translation_router)
 app.include_router(video_cc_router)
