@@ -47,6 +47,7 @@ from src.db import get_supabase
 from src.schools.prospects_router import router as school_prospects_router
 from src.schools.router import router as schools_router
 from src.workshops.qa_router import router as webinar_qa_router
+from src.workshops.host_questions_router import router as host_questions_router
 from src.workshops.router import router as workshops_router
 from src.guest_contacts.router import router as guest_contacts_router
 from src.storage.router import router as storage_router
@@ -60,6 +61,7 @@ from src.surveys.router import router as surveys_router
 from src.surveys.config_router import router as survey_configs_router
 from src.surveys.review_router import router as survey_review_router
 from src.surveys.digest_job import register_survey_digest_job
+from src.workshops.host_digest_job import register_host_digest_job
 from src.zoom.webhook_router import router as zoom_webhook_router
 from src.content.translation_router import router as translation_router
 from src.content.video_cc_router import router as video_cc_router
@@ -91,6 +93,7 @@ async def lifespan(app: FastAPI):
     scheduler = init_scheduler(app)
     register_video_pipeline_jobs(scheduler)
     register_survey_digest_job(scheduler)
+    register_host_digest_job(scheduler)
     yield
     shutdown_scheduler()
 
@@ -119,6 +122,7 @@ app.include_router(cohorts_router)
 app.include_router(content_router)
 app.include_router(submissions_router)
 app.include_router(workshops_router)
+app.include_router(host_questions_router)
 app.include_router(webinar_qa_router)
 app.include_router(guest_contacts_router)
 app.include_router(storage_router)

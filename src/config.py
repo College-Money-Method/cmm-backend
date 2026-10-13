@@ -206,6 +206,13 @@ class Settings(BaseSettings):
     # Empty means no email is sent; failures then surface only on the admin
     # monitoring screen, and the notifier logs at ERROR to say so.
     video_pipeline_alert_email: str = ""
+    # Day-before email to each upcoming webinar's Zoom co-hosts (plus the extra
+    # recipients below) with a link to the registrants' questions. Registered
+    # always, but a no-op until this is turned on.
+    webinar_host_digest_enabled: bool = False
+    # Always receive the host digest, and see which co-hosts it failed to reach.
+    # Env value is a JSON list, e.g. ["a@x.com","b@x.com"].
+    webinar_host_digest_extra_recipients: list[str] = ["paul.martin@collegemoneymethod.com"]
     # Domains registered on each uploaded video's embed whitelist. Vimeo privacy
     # is embed-only (view=disable + embed=whitelist), and a whitelist with zero
     # domains blocks the player everywhere — so registration is part of the

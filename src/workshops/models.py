@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     UniqueConstraint,
     Uuid,
@@ -101,6 +102,9 @@ class Webinar(Base):
     zoom_link: Mapped[str | None] = mapped_column(Text)
     video_embed_code: Mapped[str | None] = mapped_column(Text)
     audio_transcript: Mapped[str | None] = mapped_column(Text)
+    # Unguessable token for the public co-host questions page. Random (not an
+    # HMAC) so rotating it revokes the old link. NULL until a link is first issued.
+    host_access_token: Mapped[str | None] = mapped_column(String(64), unique=True)
     track_registrations: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     attendance_synced_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     # Zoom participants with no matching registration ("joined without registering")
@@ -170,6 +174,34 @@ class WorkshopRegistration(Base):
         Index("idx_workshop_reg_webinar_id", "webinar_id"),
         Index("idx_workshop_reg_school_id", "school_id"),
         Index("idx_workshop_reg_email", "email"),
+    )
+
+
+class WebinarHostDigestDelivery(Base):
+    """One row per (webinar, recipient, start time) the host digest was claimed for.
+
+    The unique key is the claim: inserting it wins the send, so concurrent ticks
+    cannot double-send. A reschedule changes ``start_datetime`` and so earns a
+    fresh email; a failed send deletes its row so the next tick retries, and a
+    claim abandoned mid-send (worker killed) is taken over after 15 minutes.
+    """
+
+    __tablename__ = "webinar_host_digest_deliveries"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    webinar_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("webinars.id", ondelete="CASCADE"), nullable=False)
+    recipient_email: Mapped[str] = mapped_column(Text, nullable=False)  # always lowercased
+    start_datetime: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "webinar_id", "recipient_email", "start_datetime", name="uq_webinar_host_digest_delivery"
+        ),
     )
 
 
