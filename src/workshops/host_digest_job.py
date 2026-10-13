@@ -30,7 +30,6 @@ from src.utils import single_writer
 from src.workshops.host_access import (
     approved_registrations,
     ensure_host_access_token,
-    host_link_expires_at,
     host_questions_url,
 )
 from src.workshops.host_digest_email import render_host_digest
@@ -190,9 +189,6 @@ def _deliver(db: Session, webinar: Webinar, now: datetime, tz: ZoneInfo) -> int:
         return 0
 
     cohost_list, extra_list = _recipients(cohosts)
-    expires_at = host_link_expires_at(webinar)
-    if expires_at is None:  # unreachable given selection; guards the renderer
-        return 0
     link = host_questions_url(ensure_host_access_token(db, webinar))
     regs = approved_registrations(db, webinar.id)
     logger.info(
@@ -206,7 +202,7 @@ def _deliver(db: Session, webinar: Webinar, now: datetime, tz: ZoneInfo) -> int:
     sent = 0
     undelivered: list[tuple[str, str]] = []
     if cohost_list:
-        subject, html, text = render_host_digest(webinar, regs, link, expires_at, tz=tz)
+        subject, html, text = render_host_digest(webinar, regs, link, tz=tz)
         for email in cohost_list:
             status = _send_one(db, webinar, email, subject, html, text)
             if status == "sent":
@@ -216,7 +212,7 @@ def _deliver(db: Session, webinar: Webinar, now: datetime, tz: ZoneInfo) -> int:
 
     if extra_list:
         subject, html, text = render_host_digest(
-            webinar, regs, link, expires_at, cohost_lookup_failed=lookup_failed, undelivered=undelivered, tz=tz
+            webinar, regs, link, cohost_lookup_failed=lookup_failed, undelivered=undelivered, tz=tz
         )
         for email in extra_list:
             if _send_one(db, webinar, email, subject, html, text) == "sent":

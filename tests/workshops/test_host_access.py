@@ -1,4 +1,4 @@
-"""Host-page token minting, rotation and link lifetime."""
+"""Host-page token minting, rotation and session end."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from sqlalchemy import event, update
 from src.workshops.host_access import (
     effective_end,
     ensure_host_access_token,
-    host_link_expires_at,
     host_questions_url,
     rotate_host_access_token,
 )
@@ -70,18 +69,16 @@ def test_rotate_changes_token(db):
     assert w.host_access_token == second
 
 
-def test_effective_end_and_expiry(db):
+def test_effective_end(db):
     end = START + timedelta(hours=1)
     normal = _webinar(db, start_datetime=START, end_datetime=end)
     assert effective_end(normal) == end
-    assert host_link_expires_at(normal) == end + timedelta(days=7)
 
     no_end = _webinar(db, start_datetime=START)
     assert effective_end(no_end) == START + timedelta(hours=2)
 
     no_start = _webinar(db)
     assert effective_end(no_start) is None
-    assert host_link_expires_at(no_start) is None
 
 
 def test_url_uses_email_origin(monkeypatch):

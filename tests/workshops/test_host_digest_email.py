@@ -11,7 +11,6 @@ from src.workshops.models import Webinar, WorkshopRegistration
 
 TZ = ZoneInfo("America/New_York")
 START = datetime(2026, 10, 14, 22, 0, tzinfo=timezone.utc)  # 6:00 PM EDT
-EXPIRES = datetime(2026, 10, 22, 0, 0, tzinfo=timezone.utc)
 LINK = "https://app.example.com/workshop-hosts/abc"
 
 
@@ -26,7 +25,7 @@ def _reg(questions, name="Pat Doe", school="Annie Wright", grade="11") -> Worksh
 
 
 def _render(webinar=None, regs=(), **kw):
-    return render_host_digest(webinar or _webinar(), regs, LINK, EXPIRES, tz=TZ, **kw)
+    return render_host_digest(webinar or _webinar(), regs, LINK, tz=TZ, **kw)
 
 
 def test_subject_and_body_basics():
@@ -37,7 +36,7 @@ def test_subject_and_body_basics():
         assert LINK in body
         assert "Pat Doe · Annie Wright · Grade 11" in body
         assert "Quiet" not in body  # no question, not listed
-        assert "works until Wed, Oct 21, 8:00 PM EDT" in body
+        assert "The page updates as families register." in body
 
 
 def test_escapes_name_and_questions_and_keeps_line_breaks():

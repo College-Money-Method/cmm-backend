@@ -60,7 +60,6 @@ def render_host_digest(
     webinar: Webinar,
     registrations: Sequence[WorkshopRegistration],
     link: str,
-    expires_at: datetime,
     *,
     cohost_lookup_failed: bool = False,
     undelivered: Sequence[tuple[str, str]] = (),
@@ -74,12 +73,11 @@ def render_host_digest(
     tz = tz or resolve_display_timezone()
     label = _webinar_label(webinar)
     when = format_start(webinar.start_datetime, tz)
-    expiry = format_start(expires_at, tz)
     subject = _one_line(f"Registrant questions: {label} · {when}")
 
     asked = [r for r in registrations if r.questions and r.questions.strip()]
     counts = f"{len(registrations)} approved registrant(s), {len(asked)} with questions"
-    footer = f"The page updates as families register and works until {expiry}."
+    footer = "The page updates as families register."
     undelivered_line = (
         "Not delivered to: " + ", ".join(f"{email} ({status})" for email, status in undelivered)
         if undelivered
