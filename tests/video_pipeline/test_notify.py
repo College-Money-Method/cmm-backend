@@ -143,3 +143,39 @@ def test_a_broken_send_leaves_the_replay_published(db, job, sent, monkeypatch):
     monkeypatch.setattr(notify, "send_email", boom)
 
     assert notify.notify_published(db, job, "Paying for College") is False
+
+
+# ── through the real send path ───────────────────────────────────────────────
+# The `sent` fixture's fake never touches the session. The real `send_email`
+# commits its own `email_send_log` row, so these run it end to end (SES itself
+# is stubbed offline by the root conftest).
+
+
+@pytest.fixture
+def real_send(monkeypatch):
+    monkeypatch.setattr(settings, "video_pipeline_alert_email", ALERT_ADDRESS)
+
+
+def _alert_logs(db):
+    from sqlalchemy import select
+
+    from src.emails.models import EmailSendLog
+
+    return list(db.scalars(select(EmailSendLog).where(EmailSendLog.source == "video_pipeline")))
+
+
+def test_failure_alert_through_real_send_is_stamped_and_not_repeated(db, job, real_send):
+    job_service.fail(db, job, "ffmpeg exited 1")
+    db.refresh(job)
+
+    assert job.failed_notified_at is not None
+    assert notify.notify_failure(db, job) is False
+    assert len(_alert_logs(db)) == 1
+
+
+def test_ready_alert_through_real_send_reports_success(db, job, real_send):
+    job.vimeo_video_id = "1225339276"
+    db.commit()
+
+    assert notify.notify_published(db, job, "Paying for College") is True
+    assert len(_alert_logs(db)) == 1

@@ -9,7 +9,7 @@ Three endpoints:
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from src.auth.deps import AdminDep
 from src.db.client import get_supabase
 from src.db.deps import DbDep
+from src.surveys.actionable import needs_review_clause
 from src.surveys.models import SurveyResponse
 from src.surveys.schemas import (
     SurveyListResponse,
@@ -155,6 +156,7 @@ def list_surveys(
     school_id: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    status: Literal["needs_review", "reviewed"] | None = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
 ):
@@ -167,6 +169,10 @@ def list_surveys(
         date_from=date_from,
         date_to=date_to,
     )
+    if status == "needs_review":
+        stmt = stmt.where(needs_review_clause())
+    elif status == "reviewed":
+        stmt = stmt.where(SurveyResponse.reviewed_at.is_not(None))
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     items = db.scalars(stmt.offset(skip).limit(limit)).all()

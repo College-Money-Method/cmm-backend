@@ -5,7 +5,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
+
+from src.surveys.actionable import is_actionable
 
 
 _PAGE_TYPES = {"resource", "topic", "workshop", "general", "hub_general"}
@@ -96,6 +98,14 @@ class SurveyResponseCreate(BaseModel):
     # PostHog session bridge — provided by the client via posthog.get_distinct_id()
     posthog_distinct_id: str | None = None
 
+    @field_validator("comment")
+    @classmethod
+    def normalize_comment(cls, v: str | None) -> str | None:
+        """Whitespace-only text is no comment at all."""
+        if v is None:
+            return None
+        return v.strip() or None
+
     @field_validator("rating_stars")
     @classmethod
     def validate_stars(cls, v: int | None) -> int | None:
@@ -130,7 +140,41 @@ class SurveyResponseOut(BaseModel):
     posthog_distinct_id: str | None
     user_id: str | None
 
+    # Admin triage
+    reviewed_at: datetime | None = None
+    reviewed_by: str | None = None
+    reviewed_by_email: str | None = None
+
     model_config = {"from_attributes": True}
+
+    @computed_field
+    @property
+    def needs_review(self) -> bool:
+        """Actionable (comment or negative rating) and not yet reviewed."""
+        return self.reviewed_at is None and is_actionable(
+            comment=self.comment, rating_thumbs=self.rating_thumbs, rating_stars=self.rating_stars
+        )
+
+
+class SurveyReviewUpdate(BaseModel):
+    """PATCH body — mark one response reviewed (true) or back to unreviewed (false)."""
+
+    reviewed: bool
+
+
+class SurveyReviewBulkUpdate(BaseModel):
+    """POST body — mark many responses reviewed/unreviewed in one call."""
+
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
+    reviewed: bool
+
+
+class SurveyReviewBulkResult(BaseModel):
+    updated: int
+
+
+class SurveyNeedsReviewCount(BaseModel):
+    count: int
 
 
 class SurveyListResponse(BaseModel):

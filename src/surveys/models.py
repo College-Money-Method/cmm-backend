@@ -63,3 +63,11 @@ class SurveyResponse(Base):
     # Identity — bridges to PostHog heatmap session data
     posthog_distinct_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     user_id: Mapped[str | None] = mapped_column(Text, nullable=True)   # populated for authenticated hub users
+
+    # Admin triage — shared across admins so everyone sees what has been handled
+    reviewed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(Text, nullable=True)         # Supabase user id
+    reviewed_by_email: Mapped[str | None] = mapped_column(Text, nullable=True)   # stored to avoid per-row auth lookups
+
+    # Claim stamp for the daily admin digest — NULL means not yet emailed
+    digest_sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)

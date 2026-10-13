@@ -40,10 +40,14 @@ WEBINAR_TEST_TABLES = (
     "grade_sets",
     "workshops",
     "webinars",
+    "webinar_host_digest_deliveries",
     "cycles",
     "portal_mapping",
     "workshop_registrations",
     "email_send_log",
+    # send_email reads these (suppression list, sandbox flag) before sending.
+    "email_suppression",
+    "app_config",
     # Rescheduling a webinar clears this webinar's automation claims.
     "automation_send_ledger",
     # email_send_log carries FKs to these; SQLite resolves them at create time.

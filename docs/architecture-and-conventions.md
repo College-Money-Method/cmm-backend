@@ -84,10 +84,11 @@ Conventions: name the param `_admin: AdminDep` when identity is unused; `user: C
 
 ## Background work & threading — think before you async
 
-This repo has **no task queue, no scheduler, no persistence for pending jobs**. Everything runs in-process. What exists:
+This repo has **no task queue**. Everything runs in-process. Recurring work runs on an in-process APScheduler (item 2). What exists:
 
 1. **Zoom webhook** (`src/zoom/webhook_router.py`): verifies HMAC signature, answers Zoom's `endpoint.url_validation` challenge, always returns 200 (so Zoom won't retry). On `webinar.ended` it schedules `_sync_with_retry` via FastAPI `BackgroundTasks`: retry delays `[0, 900, 1800]`s, a **fresh DB session per attempt**, and the blocking sync wrapped in `asyncio.to_thread(...)` so it doesn't stall the event loop.
-2. **AI review** (`src/content/ai_review_task.py`, triggered from `submissions_router.py`): endpoint sets `review_status="ai_reviewing"`, commits, then `background_tasks.add_task(_run_ai_review)`. The task opens **its own session** (the request session is closed by then), degrades gracefully when the API key/package is missing, and swallows all exceptions.
+2. **Scheduled jobs** — one `BackgroundScheduler` (`src/emails/scheduler.py`), started in `src/main.py` `lifespan`. Jobs register on it: email automation, video pipeline sweep/reconcile (`src/video_pipeline/scheduler_jobs.py`), weekday survey digest (`src/surveys/digest_job.py`), and `webinar_host_digest_hourly` (`src/workshops/host_digest_job.py`, 08:00–20:00 America/Los_Angeles, off unless `WEBINAR_HOST_DIGEST_ENABLED=true`). The host digest runs under a `single_writer` leader lock. It records each recipient's send in `webinar_host_digest_deliveries` (unique per webinar + recipient + start), so a re-run after a restart does not resend to anyone already delivered. Failed sends are deleted and retried.
+3. **AI review** (`src/content/ai_review_task.py`, triggered from `submissions_router.py`): endpoint sets `review_status="ai_reviewing"`, commits, then `background_tasks.add_task(_run_ai_review)`. The task opens **its own session** (the request session is closed by then), degrades gracefully when the API key/package is missing, and swallows all exceptions.
 
 **Known risks an agent must respect (and not silently worsen):**
 - A **deploy/restart kills in-flight background tasks** — a Zoom sync can be lost mid-retry (up to 45 min window); an AI review can leave a submission stuck in `ai_reviewing`. Manual fallbacks exist (`POST /webinars/{id}/sync-attendance`).

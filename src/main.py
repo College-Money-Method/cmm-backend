@@ -47,6 +47,7 @@ from src.db import get_supabase
 from src.schools.prospects_router import router as school_prospects_router
 from src.schools.router import router as schools_router
 from src.workshops.qa_router import router as webinar_qa_router
+from src.workshops.host_questions_router import router as host_questions_router
 from src.workshops.router import router as workshops_router
 from src.guest_contacts.router import router as guest_contacts_router
 from src.storage.router import router as storage_router
@@ -58,6 +59,9 @@ from src.analytics.admin_router import router as analytics_admin_router
 from src.communications.router import router as communications_router
 from src.surveys.router import router as surveys_router
 from src.surveys.config_router import router as survey_configs_router
+from src.surveys.review_router import router as survey_review_router
+from src.surveys.digest_job import register_survey_digest_job
+from src.workshops.host_digest_job import register_host_digest_job
 from src.zoom.webhook_router import router as zoom_webhook_router
 from src.content.translation_router import router as translation_router
 from src.content.video_cc_router import router as video_cc_router
@@ -80,12 +84,16 @@ from src.schools.src_session import check_src_session_secret
 async def lifespan(app: FastAPI):
     """Startup: ensure Supabase client is created, report the origin outgoing
     email links are built from, start the in-process email-automation
-    scheduler and register the video pipeline's sweep/reconcile jobs on it.
+    scheduler and register the video pipeline's sweep/reconcile jobs and the
+    weekday survey digest on it.
     Shutdown: stop the scheduler."""
     get_supabase()
     check_email_origin()
     check_src_session_secret()
-    register_video_pipeline_jobs(init_scheduler(app))
+    scheduler = init_scheduler(app)
+    register_video_pipeline_jobs(scheduler)
+    register_survey_digest_job(scheduler)
+    register_host_digest_job(scheduler)
     yield
     shutdown_scheduler()
 
@@ -114,6 +122,7 @@ app.include_router(cohorts_router)
 app.include_router(content_router)
 app.include_router(submissions_router)
 app.include_router(workshops_router)
+app.include_router(host_questions_router)
 app.include_router(webinar_qa_router)
 app.include_router(guest_contacts_router)
 app.include_router(storage_router)
@@ -126,6 +135,7 @@ app.include_router(analytics_admin_router)
 app.include_router(communications_router)
 app.include_router(surveys_router)
 app.include_router(survey_configs_router)
+app.include_router(survey_review_router)
 app.include_router(zoom_webhook_router)
 app.include_router(translation_router)
 app.include_router(video_cc_router)
