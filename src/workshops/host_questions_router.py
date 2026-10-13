@@ -1,7 +1,7 @@
 """Co-host questions page API: a public tokenized read, plus admin link management.
 
 The public route is reachable by anyone holding the link, so every way a token
-can fail (malformed, unknown, expired, webinar without a start) answers with the
+can fail (malformed, unknown, rotated away) answers with the
 same 404 — it must not reveal whether a token ever existed.
 """
 
@@ -22,7 +22,6 @@ from src.workshops.host_access import (
     approved_registrations,
     effective_end,
     ensure_host_access_token,
-    host_link_expires_at,
     host_questions_url,
     rotate_host_access_token,
 )
@@ -38,7 +37,7 @@ router = APIRouter(prefix="/api/v1/workshops", tags=["workshop-hosts"])
 
 # secrets.token_urlsafe(32) is always exactly 43 characters of this alphabet.
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{43}")
-_INVALID_LINK = "This link is invalid or has expired."
+_INVALID_LINK = "This link is invalid or has been replaced."
 # Sent on every public response, 404s included (HTTPException drops headers set on Response).
 _PRIVATE_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 
@@ -72,11 +71,9 @@ def get_host_questions(token: str, response: Response, db: DbDep):
     webinar = db.execute(
         select(Webinar).where(Webinar.host_access_token == token).options(selectinload(Webinar.workshop))
     ).scalar_one_or_none()
-    expires_at = host_link_expires_at(webinar) if webinar else None
-    end = effective_end(webinar) if webinar else None
-    now = datetime.now(timezone.utc)
-    if webinar is None or expires_at is None or end is None or now > _as_aware(expires_at):
+    if webinar is None:
         raise HTTPException(status_code=404, detail=_INVALID_LINK, headers=_PRIVATE_HEADERS)
+    end = effective_end(webinar)
 
     regs = approved_registrations(db, webinar.id)
     return HostQuestionsOut(
@@ -87,8 +84,7 @@ def get_host_questions(token: str, response: Response, db: DbDep):
             end_datetime=webinar.end_datetime,
             display_timezone=resolve_display_timezone().key,
         ),
-        ended=now > _as_aware(end),
-        expires_at=expires_at,
+        ended=end is not None and datetime.now(timezone.utc) > _as_aware(end),
         registrations=[_host_registration_out(r) for r in regs],
     )
 
@@ -98,7 +94,7 @@ def _host_link_out(webinar: Webinar, token: str) -> HostLinkOut:
         url = host_questions_url(token)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="Public site URL is not configured") from exc
-    return HostLinkOut(url=url, expires_at=host_link_expires_at(webinar))
+    return HostLinkOut(url=url)
 
 
 def _get_webinar_or_404(db, webinar_id: uuid.UUID) -> Webinar:

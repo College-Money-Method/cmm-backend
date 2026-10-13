@@ -1,7 +1,8 @@
 """Host-page access token and link lifetime for a webinar.
 
 The token is random and stored on the row (not an HMAC) so rotating it revokes
-the old link. The link lives until a week after the session effectively ends.
+the old link. The link has no time limit: it works until an admin rotates it, so
+hosts can come back to a past session's questions and registrants.
 """
 
 from __future__ import annotations
@@ -17,9 +18,8 @@ from src.emails.school_links import email_origin
 from src.db.enums import RegistrationStatus
 from src.workshops.models import Webinar, WorkshopRegistration
 
-# Used when a webinar has a start but no end, for both link TTL and digest selection.
+# Used when a webinar has a start but no end, for the "ended" flag and digest selection.
 DEFAULT_SESSION_LENGTH = timedelta(hours=2)
-HOST_LINK_TTL_AFTER_END = timedelta(days=7)
 
 
 def _new_token() -> str:
@@ -59,18 +59,12 @@ def rotate_host_access_token(db: Session, webinar: Webinar) -> str:
 
 
 def effective_end(webinar: Webinar) -> datetime | None:
-    """End time, else start + 2h, else None (no start means no valid window)."""
+    """End time, else start + 2h, else None (no start, so no known end)."""
     if webinar.end_datetime is not None:
         return webinar.end_datetime
     if webinar.start_datetime is not None:
         return webinar.start_datetime + DEFAULT_SESSION_LENGTH
     return None
-
-
-def host_link_expires_at(webinar: Webinar) -> datetime | None:
-    """When the host link stops working; None means the link is not valid."""
-    end = effective_end(webinar)
-    return end + HOST_LINK_TTL_AFTER_END if end is not None else None
 
 
 def host_questions_url(token: str) -> str:

@@ -23,7 +23,7 @@ LIVE_ID, OLD_ID, NOSTART_ID, PLAIN_ID = (uuid.UUID(int=i) for i in (10, 11, 12, 
 LIVE_TOKEN, OLD_TOKEN, NOSTART_TOKEN = ("L" * 43, "O" * 43, "N" * 43)
 NOW = datetime.now(timezone.utc)
 URL = "/api/v1/workshops/public/webinar-hosts/"
-INVALID = {"detail": "This link is invalid or has expired."}
+INVALID = {"detail": "This link is invalid or has been replaced."}
 
 
 def _reg(webinar_id, email, status, minutes, **kw):
@@ -103,7 +103,7 @@ def test_valid_token_returns_approved_rows_in_order_without_leaks(public):
         "questions", "registration_time", "created_at", "attended",
     }
     assert body["registrations"][0]["school_name"] == "Annie Wright"
-    assert set(body) == {"webinar", "ended", "expires_at", "registrations"}
+    assert set(body) == {"webinar", "ended", "registrations"}
     assert set(body["webinar"]) == {
         "webinar_name", "workshop_title", "start_datetime", "end_datetime", "display_timezone",
     }
@@ -111,13 +111,22 @@ def test_valid_token_returns_approved_rows_in_order_without_leaks(public):
     assert body["ended"] is False
 
 
-@pytest.mark.parametrize("token", ["U" * 43, OLD_TOKEN, NOSTART_TOKEN, "short", "bad chars!" + "x" * 33, "A" * 44])
+@pytest.mark.parametrize("token", ["U" * 43, "short", "bad chars!" + "x" * 33, "A" * 44])
 def test_bad_tokens_share_one_404(public, token):
     resp = public.get(URL + token)
     assert resp.status_code == 404
     assert resp.json() == INVALID
     assert resp.headers["cache-control"] == "no-store"
     assert resp.headers["referrer-policy"] == "no-referrer"
+
+
+def test_link_never_expires(public):
+    old = public.get(URL + OLD_TOKEN)  # session ended 20 days ago
+    assert old.status_code == 200
+    assert old.json()["ended"] is True
+    no_start = public.get(URL + NOSTART_TOKEN)
+    assert no_start.status_code == 200
+    assert no_start.json()["ended"] is False
 
 
 def test_malformed_token_does_not_query_db(sm, public):

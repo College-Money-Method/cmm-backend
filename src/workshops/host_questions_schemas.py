@@ -37,10 +37,8 @@ class HostRegistrationOut(BaseModel):
 class HostQuestionsOut(BaseModel):
     webinar: HostWebinarOut
     ended: bool
-    expires_at: datetime
     registrations: list[HostRegistrationOut]
 
 
 class HostLinkOut(BaseModel):
     url: str
-    expires_at: datetime | None
