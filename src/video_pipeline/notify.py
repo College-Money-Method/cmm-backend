@@ -129,17 +129,15 @@ def notify_published(db: Session, job: WebinarVideoJob, title: str) -> bool:
             return False
 
         subject, html, text = _render_published(job, title)
-        with db.begin_nested():
-            send_email(
-                db,
-                to=settings.video_pipeline_alert_email,
-                subject=subject,
-                html=html,
-                text=text,
-                source=_SOURCE,
-                webinar_id=job.webinar_id,
-            )
-        db.commit()
+        send_email(
+            db,
+            to=settings.video_pipeline_alert_email,
+            subject=subject,
+            html=html,
+            text=text,
+            source=_SOURCE,
+            webinar_id=job.webinar_id,
+        )
         logger.info("Video job ready alert sent — job=%s", job.id)
         return True
 
@@ -155,8 +153,11 @@ def notify_published(db: Session, job: WebinarVideoJob, title: str) -> bool:
 def notify_failure(db: Session, job: WebinarVideoJob) -> bool:
     """Send the one alert this failure is owed. Returns True if an email went out.
 
-    Never raises. The send runs inside a SAVEPOINT so that a failure writing the
-    ``email_send_log`` row cannot poison the caller's transaction.
+    Never raises. ``send_email`` commits its own ``email_send_log`` row, so it
+    must not run inside a SAVEPOINT: that commit closes the savepoint and the
+    context exit then raises after the email has already gone out. The caller
+    (``job_service.fail``) commits the failed state before calling this, so
+    there is no pending work for the send to disturb.
     """
     try:
         if job.failed_notified_at is not None:
@@ -173,16 +174,15 @@ def notify_failure(db: Session, job: WebinarVideoJob) -> bool:
             return False
 
         subject, html, text = _render(job)
-        with db.begin_nested():
-            send_email(
-                db,
-                to=settings.video_pipeline_alert_email,
-                subject=subject,
-                html=html,
-                text=text,
-                source=_SOURCE,
-                webinar_id=job.webinar_id,
-            )
+        send_email(
+            db,
+            to=settings.video_pipeline_alert_email,
+            subject=subject,
+            html=html,
+            text=text,
+            source=_SOURCE,
+            webinar_id=job.webinar_id,
+        )
 
         job.failed_notified_at = datetime.now(timezone.utc)
         db.commit()
