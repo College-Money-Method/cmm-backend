@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import logging
 import uuid
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email import encoders
 from functools import lru_cache
 from typing import Annotated
 
@@ -32,6 +34,9 @@ from src.config import settings
 from src.emails.models import EmailSendLog, EmailSuppression
 
 logger = logging.getLogger(__name__)
+
+# (filename, mime type "type/subtype", content)
+Attachment = tuple[str, str, bytes]
 
 # The team domain that email sandbox mode allows through. Recipients here are
 # real teammates, safe to send to while sandboxing; everyone else is withheld.
@@ -88,8 +93,12 @@ def _build_raw_message(
     *,
     unsubscribe_url: str | None = None,
     from_address: str | None = None,
+    attachments: list[Attachment] | None = None,
 ) -> bytes:
     """Build a multipart/alternative MIME message.
+
+    With ``attachments`` the alternative part is wrapped in multipart/mixed
+    alongside them; without, the message is exactly what it always was.
 
     Raw (``send_raw_email``, not the simple ``send_email`` API) so the
     ``List-Unsubscribe`` header can be attached here, one-click, per RFC 8058 —
@@ -100,15 +109,25 @@ def _build_raw_message(
     at one school): they all go on a single ``To`` header so the recipients can
     see each other, which is the point of grouping.
     """
-    message = MIMEMultipart("alternative")
+    body = MIMEMultipart("alternative")
+    body.attach(MIMEText(text, "plain", "utf-8"))
+    body.attach(MIMEText(html, "html", "utf-8"))
+    message = MIMEMultipart("mixed") if attachments else body
     message["Subject"] = subject
     message["From"] = from_address or settings.ses_from_email
     message["To"] = ", ".join(recipients)
     if unsubscribe_url:
         message["List-Unsubscribe"] = f"<{unsubscribe_url}>"
         message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
-    message.attach(MIMEText(text, "plain", "utf-8"))
-    message.attach(MIMEText(html, "html", "utf-8"))
+    if attachments:
+        message.attach(body)
+    for filename, mime_type, content in attachments or []:
+        maintype, _, subtype = mime_type.partition("/")
+        part = MIMEBase(maintype, subtype or "octet-stream")
+        part.set_payload(content)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=filename)
+        message.attach(part)
     return message.as_bytes()
 
 
@@ -160,6 +179,7 @@ def send_email(
     unsubscribe_url: str | None = None,
     sandbox_enabled: bool | None = None,
     from_address: str | None = None,
+    attachments: list[Attachment] | None = None,
 ) -> EmailSendLog:
     """Send one email, or log it, depending on suppression / sandbox state.
 
@@ -197,6 +217,9 @@ def send_email(
 
     ``from_address`` overrides the configured default sender for this one
     message (already validated + formatted by ``emails.sender``).
+
+    ``attachments`` (filename, mime type, bytes) turn the message into
+    multipart/mixed; omitted, the message and every existing caller are unchanged.
     """
     recipients = [to] if isinstance(to, str) else [address for address in to if address]
     if not recipients:
@@ -259,7 +282,13 @@ def send_email(
 
     client = _create_ses_client()
     raw_message = _build_raw_message(
-        remaining, subject, html, text, unsubscribe_url=unsubscribe_url, from_address=from_address
+        remaining,
+        subject,
+        html,
+        text,
+        unsubscribe_url=unsubscribe_url,
+        from_address=from_address,
+        attachments=attachments,
     )
 
     kwargs: dict = {

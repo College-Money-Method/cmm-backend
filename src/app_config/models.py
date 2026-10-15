@@ -9,8 +9,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Text, Uuid
-from sqlalchemy.dialects.postgresql import TIMESTAMP
+from sqlalchemy import JSON, Boolean, Text, Uuid
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -58,6 +58,19 @@ class AppConfig(Base):
     # in local/dev and left off in production.
     email_sandbox_mode: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false", default=False
+    )
+
+    # "Request a call with Paul" (see src/paul_booking). Off by default: it is the
+    # kill switch, and nothing is offered until Paul has set hours below.
+    paul_booking_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
+    # IANA zone Paul's weekly hours and days off are written in. Null = Pacific.
+    paul_booking_timezone: Mapped[str | None] = mapped_column(Text)
+    # {"mon": {"start": "09:00", "end": "17:00"}, "sat": null, ...}; one range
+    # per weekday, a missing or null day takes no calls. Validated on write.
+    paul_booking_weekly_hours: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())

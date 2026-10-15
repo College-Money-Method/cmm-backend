@@ -7,8 +7,9 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel
+from pydantic import AfterValidator, BaseModel, field_validator
 
+from src.paul_booking.hours import validate_weekly_hours
 from src.schools.display_timezone import DisplayTimezoneField
 
 
@@ -60,6 +61,20 @@ class AppConfigUpdate(BaseModel):
     vimeo_reel_folder_uri: VimeoFolderUriField = None
     survey_enabled: bool | None = None
     email_sandbox_mode: bool | None = None
+    # "Request a call with Paul". The zone is validated like the workshop one;
+    # blank clears it (Pacific is then used). Hours: weekday keys mon..sun, each
+    # null or {start, end} as HH:MM on the half hour with start before end.
+    paul_booking_enabled: bool | None = None
+    paul_booking_timezone: DisplayTimezoneField = None
+    paul_booking_weekly_hours: Annotated[dict | None, AfterValidator(validate_weekly_hours)] = None
+
+    @field_validator("paul_booking_enabled")
+    @classmethod
+    def _enabled_not_null(cls, value: bool | None) -> bool:
+        # The column is NOT NULL: an explicit null would fail at commit as a 500.
+        if value is None:
+            raise ValueError("paul_booking_enabled must be true or false")
+        return value
 
 
 class AppConfigOut(BaseModel):
@@ -74,6 +89,9 @@ class AppConfigOut(BaseModel):
     vimeo_reel_folder_uri: str | None
     survey_enabled: bool
     email_sandbox_mode: bool
+    paul_booking_enabled: bool
+    paul_booking_timezone: str | None
+    paul_booking_weekly_hours: dict | None
     updated_at: datetime | None
 
     model_config = {"from_attributes": True}
