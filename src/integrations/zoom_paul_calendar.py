@@ -20,8 +20,11 @@ from src.integrations.zoom import (
     _ZOOM_API_BASE,
     ZoomApiError,
     _get_access_token,
+    _zoom_error_code,
     _zoom_refusal,
+    forget_access_token,
     is_configured,
+    token_may_be_stale,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,6 +35,16 @@ _CACHE_TTL_SECONDS = 60.0
 # A failed lookup is remembered this long, so a slow or down Zoom is asked once
 # per window instead of once per visitor.
 _FAILURE_TTL_SECONDS = 30.0
+
+# Zoom's answer when the user has no webinar licence: code 200, "Webinar plan is
+# missing". They can host no webinars, so there is nothing to block. Code 200 is
+# also Zoom's generic "no permission", so the message must name the plan too;
+# any other refusal still fails the lookup rather than hide busy time.
+_NO_WEBINAR_PLAN = 200
+
+
+def _no_webinar_plan(exc: ZoomApiError) -> bool:
+    return exc.code == _NO_WEBINAR_PLAN and "plan" in str(exc).lower()
 
 # Zoom type codes. Fixed-time recurring entries carry their dates in
 # ``occurrences`` on the detail endpoint; "no fixed time" recurrences (3, 6)
@@ -82,6 +95,10 @@ def _get(url: str, headers: dict, params: dict | None = None) -> httpx.Response:
         raise ZoomApiError(f"Zoom unreachable: {exc.__class__.__name__}") from exc
 
 
+def _refused(resp: httpx.Response) -> ZoomApiError:
+    return ZoomApiError(_zoom_refusal(resp), status_code=resp.status_code, code=_zoom_error_code(resp))
+
+
 def _pages(url: str, headers: dict, key: str, params: dict) -> list[dict]:
     items: list[dict] = []
     token = ""
@@ -89,7 +106,7 @@ def _pages(url: str, headers: dict, key: str, params: dict) -> list[dict]:
         query = {**params, "page_size": "300", **({"next_page_token": token} if token else {})}
         resp = _get(url, headers, query)
         if not resp.is_success:
-            raise ZoomApiError(_zoom_refusal(resp), status_code=resp.status_code)
+            raise _refused(resp)
         data = resp.json() or {}
         items.extend(i for i in data.get(key) or [] if isinstance(i, dict))
         token = data.get("next_page_token") or ""
@@ -104,7 +121,7 @@ def _occurrences(kind: str, entry_id: object, headers: dict) -> list[Interval]:
     if resp.status_code == 404:  # deleted between the list and this call
         return []
     if not resp.is_success:
-        raise ZoomApiError(_zoom_refusal(resp), status_code=resp.status_code)
+        raise _refused(resp)
     found = []
     for occ in (resp.json() or {}).get("occurrences") or []:
         if isinstance(occ, dict) and occ.get("status") != "deleted":
@@ -116,13 +133,23 @@ def _occurrences(kind: str, entry_id: object, headers: dict) -> list[Interval]:
 
 def _collect(kind: str, list_params: dict, scheduled: int, recurring: int, headers: dict) -> list[Interval]:
     user = settings.paul_booking_zoom_user
+    try:
+        entries = _pages(f"{_ZOOM_API_BASE}/users/{user}/{kind}", headers, kind, list_params)
+    except ZoomApiError as exc:
+        if kind == "webinars" and _no_webinar_plan(exc):
+            logger.info("paul_booking: %s has no webinar plan, no webinars to block", user)
+            return []
+        raise
     out: list[Interval] = []
-    for entry in _pages(f"{_ZOOM_API_BASE}/users/{user}/{kind}", headers, kind, list_params):
+    expanded: set[object] = set()
+    for entry in entries:
         if entry.get("type") == scheduled:
             interval = _interval(entry.get("start_time"), entry.get("duration"))
             if interval:
                 out.append(interval)
-        elif entry.get("type") == recurring:
+        elif entry.get("type") == recurring and entry.get("id") not in expanded:
+            # One detail call per series, even if the list repeats it per occurrence.
+            expanded.add(entry.get("id"))
             out.extend(_occurrences(kind, entry.get("id"), headers))
     return out
 
@@ -175,6 +202,16 @@ def _raise_recent_failure(now: float) -> None:
 
 
 def _fetch_all() -> list[Interval]:
+    try:
+        return _fetch_all_once()
+    except ZoomApiError as exc:
+        if not token_may_be_stale(exc):
+            raise
+    forget_access_token()  # e.g. scopes were granted after the cached token was issued
+    return _fetch_all_once()
+
+
+def _fetch_all_once() -> list[Interval]:
     try:
         headers = {"Authorization": f"Bearer {_get_access_token()}"}
     except httpx.HTTPError as exc:

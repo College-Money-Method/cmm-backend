@@ -14,7 +14,9 @@ from src.integrations.zoom import (
     _get_access_token,
     _zoom_error_code,
     _zoom_refusal,
+    forget_access_token,
     is_configured,
+    token_may_be_stale,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,21 @@ def create_paul_meeting(
     if agenda:
         body["agenda"] = agenda[:_AGENDA_MAX]
     try:
+        data = _post_meeting(body)
+    except ZoomApiError as exc:
+        if not token_may_be_stale(exc):
+            raise
+        # Zoom refused the token itself, so nothing was created: safe to retry once.
+        forget_access_token()
+        data = _post_meeting(body)
+    meeting_id, join_url = data.get("id"), data.get("join_url")
+    if not meeting_id or not join_url:
+        raise ZoomApiError("Zoom created a meeting but returned no id or join link")
+    return str(meeting_id), str(join_url)
+
+
+def _post_meeting(body: dict) -> dict:
+    try:
         resp = httpx.post(
             f"{_ZOOM_API_BASE}/users/{settings.paul_booking_zoom_user}/meetings",
             headers={"Authorization": f"Bearer {_get_access_token()}"},
@@ -58,8 +75,4 @@ def create_paul_meeting(
         raise ZoomApiError(f"Zoom unreachable: {exc.__class__.__name__}") from exc
     if not resp.is_success:
         raise ZoomApiError(_zoom_refusal(resp), status_code=resp.status_code, code=_zoom_error_code(resp))
-    data = resp.json() or {}
-    meeting_id, join_url = data.get("id"), data.get("join_url")
-    if not meeting_id or not join_url:
-        raise ZoomApiError("Zoom created a meeting but returned no id or join link")
-    return str(meeting_id), str(join_url)
+    return resp.json() or {}
