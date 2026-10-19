@@ -21,6 +21,7 @@ import src.schools.models  # noqa: F401
 import src.settings.models  # noqa: F401
 import src.workshops.models  # noqa: F401
 import src.guest_contacts.models  # noqa: F401
+import src.paul_booking.models  # noqa: F401
 import src.storage.models  # noqa: F401
 import src.pages.models  # noqa: F401
 import src.calculators.models  # noqa: F401
@@ -50,6 +51,8 @@ from src.workshops.qa_router import router as webinar_qa_router
 from src.workshops.host_questions_router import router as host_questions_router
 from src.workshops.router import router as workshops_router
 from src.guest_contacts.router import router as guest_contacts_router
+from src.paul_booking.admin_router import router as paul_booking_admin_router
+from src.paul_booking.public_router import router as paul_booking_router
 from src.storage.router import router as storage_router
 from src.pages.router import router as pages_router
 from src.calculators.router import router as calculators_router
@@ -125,6 +128,8 @@ app.include_router(workshops_router)
 app.include_router(host_questions_router)
 app.include_router(webinar_qa_router)
 app.include_router(guest_contacts_router)
+app.include_router(paul_booking_router)
+app.include_router(paul_booking_admin_router)
 app.include_router(storage_router)
 app.include_router(search_router)
 app.include_router(pages_router)

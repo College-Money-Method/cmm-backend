@@ -18,31 +18,21 @@ verifying unchanged.
 from __future__ import annotations
 
 import base64
-import hashlib
 import hmac
 import time
 import uuid
 
-from src.config import settings
 from src.emails.school_links import email_origin
+from src.utils import signed_token
 
 # Unsubscribe links live in emails that may sit unread for a long time — a
 # short TTL would make old emails' links silently stop working.
 DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 365  # 1 year
 
 
-def _secret() -> bytes:
-    secret = settings.unsubscribe_secret_key or settings.supabase_service_role_key
-    if not secret:
-        raise RuntimeError(
-            "No secret configured for unsubscribe token signing "
-            "(set UNSUBSCRIBE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY)"
-        )
-    return secret.encode("utf-8")
-
-
-def _sign(payload: str) -> str:
-    return hmac.new(_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+# Shared with the Paul booking review link: same secret, same HMAC.
+_secret = signed_token.secret
+_sign = signed_token.sign
 
 
 def generate_unsubscribe_token(

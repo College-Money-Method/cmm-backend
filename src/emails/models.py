@@ -62,7 +62,7 @@ class EmailSendLog(Base):
             name="ck_email_send_log_status",
         ),
         CheckConstraint(
-            "source IN ('broadcast', 'pre_workshop', 'followup', 'post_workshop', 'video_pipeline', 'survey_digest', 'webinar_host_digest')",
+            "source IN ('broadcast', 'pre_workshop', 'followup', 'post_workshop', 'video_pipeline', 'survey_digest', 'webinar_host_digest', 'paul_booking')",
             name="ck_email_send_log_source",
         ),
         Index("idx_email_send_log_recipient_email", "recipient_email"),

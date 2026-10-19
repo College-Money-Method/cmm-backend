@@ -155,11 +155,29 @@ def _match_answer(value: str, answers: list[str]) -> str | None:
     return None
 
 
+# Zoom codes that blame the token itself: 124 invalid or expired, 4711 issued
+# before a scope was granted (Zoom keeps a token's scopes for its whole hour).
+_STALE_TOKEN_CODES = frozenset({124, 4711})
+
+
+def token_may_be_stale(exc: ZoomApiError) -> bool:
+    """True when a fresh token could succeed where the cached one was refused."""
+    return exc.status_code == 401 or exc.code in _STALE_TOKEN_CODES
+
+
+def forget_access_token() -> None:
+    """Drop the cached token so the next call fetches one with the app's current scopes."""
+    _token_cache["expires_at"] = 0.0
+    _token_cache["access_token"] = None
+
+
 def _get_access_token() -> str:
     """Return a valid Bearer token, fetching a new one if needed."""
     now = time.time()
-    if _token_cache["access_token"] and now < float(_token_cache["expires_at"]):
-        return str(_token_cache["access_token"])
+    # One read of each, so a concurrent forget_access_token cannot turn this into "None".
+    cached, expires_at = _token_cache["access_token"], float(_token_cache["expires_at"])
+    if cached and now < expires_at:
+        return str(cached)
 
     credentials = base64.b64encode(
         f"{settings.zoom_client_id}:{settings.zoom_client_secret}".encode()

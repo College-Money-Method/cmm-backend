@@ -112,6 +112,14 @@ class Settings(BaseSettings):
     environment: str = "development"
     frontend_url: str = "http://localhost:5173"
 
+    # "Request a call with Paul": whose Zoom account the confirmed meeting is
+    # created on. Who gets the review emails is a Global Setting
+    # (app_config.paul_booking_notify_email), since the approver can change.
+    paul_booking_zoom_user: str = "paul.martin@collegemoneymethod.com"
+    # Cloudflare Turnstile secret for the public booking form. Empty = no check
+    # (local dev, tests); once set, every request must carry a passing token.
+    turnstile_secret_key: str = ""
+
     # SES (automation email sender)
     # Shared Configuration Set (bounce/complaint events -> SNS -> webhook_router).
     ses_configuration_set_name: str = ""

@@ -7,8 +7,9 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel
+from pydantic import AfterValidator, BaseModel, EmailStr, TypeAdapter, field_validator
 
+from src.paul_booking.hours import validate_weekly_hours
 from src.schools.display_timezone import DisplayTimezoneField
 
 
@@ -44,6 +45,17 @@ def validate_vimeo_folder_uri(value: str | None) -> str | None:
 # with a folder reference Vimeo cannot resolve.
 VimeoFolderUriField = Annotated[str | None, AfterValidator(validate_vimeo_folder_uri)]
 
+_EMAIL = TypeAdapter(EmailStr)
+
+
+def validate_optional_email(value: str | None) -> str | None:
+    """Blank clears the value; anything else must be one valid address."""
+    cleaned = (value or "").strip()
+    return str(_EMAIL.validate_python(cleaned)) if cleaned else None
+
+
+OptionalEmailField = Annotated[str | None, AfterValidator(validate_optional_email)]
+
 
 class AppConfigUpdate(BaseModel):
     """PATCH payload — all fields optional. Pass null to clear a value."""
@@ -60,6 +72,22 @@ class AppConfigUpdate(BaseModel):
     vimeo_reel_folder_uri: VimeoFolderUriField = None
     survey_enabled: bool | None = None
     email_sandbox_mode: bool | None = None
+    # "Request a call with Paul". The zone is validated like the workshop one;
+    # blank clears it (Pacific is then used). Hours: weekday keys mon..sun, each
+    # null or {start, end} as HH:MM on the half hour with start before end.
+    paul_booking_enabled: bool | None = None
+    paul_booking_timezone: DisplayTimezoneField = None
+    paul_booking_weekly_hours: Annotated[dict | None, AfterValidator(validate_weekly_hours)] = None
+    # Who gets the review and confirmation emails; blank = Paul's own address.
+    paul_booking_notify_email: OptionalEmailField = None
+
+    @field_validator("paul_booking_enabled")
+    @classmethod
+    def _enabled_not_null(cls, value: bool | None) -> bool:
+        # The column is NOT NULL: an explicit null would fail at commit as a 500.
+        if value is None:
+            raise ValueError("paul_booking_enabled must be true or false")
+        return value
 
 
 class AppConfigOut(BaseModel):
@@ -74,6 +102,10 @@ class AppConfigOut(BaseModel):
     vimeo_reel_folder_uri: str | None
     survey_enabled: bool
     email_sandbox_mode: bool
+    paul_booking_enabled: bool
+    paul_booking_timezone: str | None
+    paul_booking_weekly_hours: dict | None
+    paul_booking_notify_email: str | None
     updated_at: datetime | None
 
     model_config = {"from_attributes": True}
