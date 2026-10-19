@@ -39,6 +39,8 @@ def test_config_roundtrip_of_booking_fields(client):
     {"paul_booking_weekly_hours": {"mon": {"start": "9am", "end": "10:00"}}},  # not HH:MM
     {"paul_booking_timezone": "Mars/Olympus"},
     {"paul_booking_enabled": None},
+    {"paul_booking_notify_email": "not-an-email"},
+    {"paul_booking_notify_email": "a@example.com, b@example.com"},
 ])
 def test_config_rejects_invalid_booking_fields(client, bad):
     assert client.patch(CONFIG, json=bad).status_code == 422
@@ -48,6 +50,13 @@ def test_config_defaults_are_off_and_unset(client):
     got = client.get(CONFIG).json()
     assert got["paul_booking_enabled"] is False
     assert got["paul_booking_timezone"] is None and got["paul_booking_weekly_hours"] is None
+    assert got["paul_booking_notify_email"] is None
+
+
+def test_config_notify_email_is_trimmed_and_blank_clears_it(client):
+    got = client.patch(CONFIG, json={"paul_booking_notify_email": "  ops@collegemoneymethod.com "}).json()
+    assert got["paul_booking_notify_email"] == "ops@collegemoneymethod.com"
+    assert client.patch(CONFIG, json={"paul_booking_notify_email": ""}).json()["paul_booking_notify_email"] is None
 
 
 # ---- Zoom busy lookup ----

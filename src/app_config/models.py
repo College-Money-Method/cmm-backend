@@ -72,6 +72,9 @@ class AppConfig(Base):
     paul_booking_weekly_hours: Mapped[dict | None] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=True
     )
+    # Inbox for new requests and confirmations (also the .ics organizer).
+    # Null = Paul's own address (rules.DEFAULT_NOTIFY_EMAIL).
+    paul_booking_notify_email: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)

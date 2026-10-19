@@ -27,6 +27,7 @@ from src.paul_booking.holds import (
 )
 from src.paul_booking.models import PaulMeetingRequest, PaulTimeOff
 from src.paul_booking.rules import (
+    DEFAULT_NOTIFY_EMAIL,
     DEFAULT_TIMEZONE,
     HORIZON,
     MIN_NOTICE,
@@ -65,6 +66,7 @@ class BookingSettings:
     tz_name: str
     tz: ZoneInfo
     weekly_hours: dict | None
+    notify_email: str
 
 
 def load_settings(db: Session) -> BookingSettings:
@@ -74,7 +76,10 @@ def load_settings(db: Session) -> BookingSettings:
         tz = ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError, OSError):
         name, tz = DEFAULT_TIMEZONE, ZoneInfo(DEFAULT_TIMEZONE)
-    return BookingSettings(bool(cfg and cfg.paul_booking_enabled), name, tz, cfg.paul_booking_weekly_hours if cfg else None)
+    return BookingSettings(
+        bool(cfg and cfg.paul_booking_enabled), name, tz, cfg.paul_booking_weekly_hours if cfg else None,
+        (cfg.paul_booking_notify_email if cfg else None) or DEFAULT_NOTIFY_EMAIL,
+    )
 
 
 def require_enabled(db: Session) -> BookingSettings:
@@ -156,7 +161,7 @@ def create_request(db: Session, cfg: BookingSettings, body: RequestCreate, now: 
     )
     reserve(db, request, wanted, now)  # SlotTaken on a lost race; session rolled back
     db.commit()
-    emails.notify_new_request(db, request, cfg.tz)
+    emails.notify_new_request(db, request, cfg)
     return receipt
 
 

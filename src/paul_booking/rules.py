@@ -23,6 +23,8 @@ APPROVE_CLAIM_TTL = timedelta(minutes=2)
 
 DURATIONS = (30, 60)
 DEFAULT_TIMEZONE = "America/Los_Angeles"
+# Who gets request and confirmation emails when Global Settings names no one.
+DEFAULT_NOTIFY_EMAIL = "paul.martin@collegemoneymethod.com"
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 

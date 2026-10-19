@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, field_validator
+from pydantic import AfterValidator, BaseModel, EmailStr, TypeAdapter, field_validator
 
 from src.paul_booking.hours import validate_weekly_hours
 from src.schools.display_timezone import DisplayTimezoneField
@@ -45,6 +45,17 @@ def validate_vimeo_folder_uri(value: str | None) -> str | None:
 # with a folder reference Vimeo cannot resolve.
 VimeoFolderUriField = Annotated[str | None, AfterValidator(validate_vimeo_folder_uri)]
 
+_EMAIL = TypeAdapter(EmailStr)
+
+
+def validate_optional_email(value: str | None) -> str | None:
+    """Blank clears the value; anything else must be one valid address."""
+    cleaned = (value or "").strip()
+    return str(_EMAIL.validate_python(cleaned)) if cleaned else None
+
+
+OptionalEmailField = Annotated[str | None, AfterValidator(validate_optional_email)]
+
 
 class AppConfigUpdate(BaseModel):
     """PATCH payload — all fields optional. Pass null to clear a value."""
@@ -67,6 +78,8 @@ class AppConfigUpdate(BaseModel):
     paul_booking_enabled: bool | None = None
     paul_booking_timezone: DisplayTimezoneField = None
     paul_booking_weekly_hours: Annotated[dict | None, AfterValidator(validate_weekly_hours)] = None
+    # Who gets the review and confirmation emails; blank = Paul's own address.
+    paul_booking_notify_email: OptionalEmailField = None
 
     @field_validator("paul_booking_enabled")
     @classmethod
@@ -92,6 +105,7 @@ class AppConfigOut(BaseModel):
     paul_booking_enabled: bool
     paul_booking_timezone: str | None
     paul_booking_weekly_hours: dict | None
+    paul_booking_notify_email: str | None
     updated_at: datetime | None
 
     model_config = {"from_attributes": True}

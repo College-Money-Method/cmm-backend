@@ -9,15 +9,19 @@ import logging
 from datetime import datetime, timedelta
 from html import escape
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy.orm import Session
 
-from src.config import settings
 from src.emails.ses_client import send_email
 from src.paul_booking import email_layout as ui
 from src.paul_booking.ics import ICS_MIME, build_ics
 from src.paul_booking.models import PaulMeetingRequest
 from src.paul_booking.review_token import make_review_token
 from src.paul_booking.rules import as_aware
+
+if TYPE_CHECKING:
+    from src.paul_booking.service import BookingSettings
 
 logger = logging.getLogger(__name__)
 SOURCE = "paul_booking"
@@ -35,7 +39,7 @@ def _name(req: PaulMeetingRequest) -> str:
     return f"{req.contact.first_name} {req.contact.last_name or ''}".strip()
 
 
-def notify_new_request(db: Session, req: PaulMeetingRequest, host_tz) -> None:
+def notify_new_request(db: Session, req: PaulMeetingRequest, cfg: BookingSettings) -> None:
     """Visitor 'request received' (with the deadline) and Paul's review email."""
     c = req.contact
     visitor_tz = ui.zone_or_utc(req.visitor_timezone)
@@ -54,22 +58,22 @@ def notify_new_request(db: Session, req: PaulMeetingRequest, host_tz) -> None:
 
     review = ui.site_link(f"/booking-requests/{make_review_token(req.id, req.expires_at)}")
     calendar = ui.site_link("/admin/workshops/calendar")
-    paul_slot = ui.when_text(req.start_at, host_tz, req.duration_minutes)
-    paul_deadline = ui.when_text(req.expires_at, host_tz)
+    paul_slot = ui.when_text(req.start_at, cfg.tz, req.duration_minutes)
+    paul_deadline = ui.when_text(req.expires_at, cfg.tz)
     rows = [("Who", f"{_name(req)} <{c.email}>"), ("School", c.school_name or "-"), ("Role", c.role or "-"),
             ("When", paul_slot), ("Reply by", paul_deadline), ("Message", c.message or "-")]
     if c.is_parent:
         rows.append(("Note", "Looks like a parent, not a counselor"))
     table = "".join(f"<tr><td style='padding:2px 12px 2px 0;color:#6b7280'>{k}</td><td>{escape(v)}</td></tr>" for k, v in rows)
     _send(
-        db, settings.paul_booking_notify_email, f"Call request: {_name(req)} ({c.school_name or 'no school'})",
+        db, cfg.notify_email, f"Call request: {_name(req)} ({c.school_name or 'no school'})",
         ui.shell("New call request", f"<table>{table}</table>" + ui.button(review, "Review request")
                  + f'<p>Or open the <a href="{escape(calendar, quote=True)}">admin calendar</a>.</p>'),
         "\n".join(f"{k}: {v}" for k, v in rows) + f"\nReview: {review}\nAdmin calendar: {calendar}",
     )
 
 
-def notify_approved(db: Session, req: PaulMeetingRequest, host_tz, now: datetime) -> None:
+def notify_approved(db: Session, req: PaulMeetingRequest, cfg: BookingSettings, now: datetime) -> None:
     """Join link + .ics to the visitor and to Paul."""
     c = req.contact
     start = as_aware(req.start_at)
@@ -79,7 +83,7 @@ def notify_approved(db: Session, req: PaulMeetingRequest, host_tz, now: datetime
         uid=str(req.id), start=start, duration_minutes=req.duration_minutes,
         summary=f"College Money Method x {c.school_name or _name(req)}",
         description=f"Zoom: {join_url}", location=join_url,
-        organizer_email=settings.paul_booking_notify_email, now=now))]
+        organizer_email=cfg.notify_email, now=now))]
 
     visitor_slot = ui.when_text(start, ui.zone_or_utc(req.visitor_timezone), req.duration_minutes)
     gcal = ui.google_calendar_url(title="Call with Paul Martin", start=start, end=end,
@@ -92,9 +96,9 @@ def notify_approved(db: Session, req: PaulMeetingRequest, host_tz, now: datetime
         f"Hi {c.first_name}, Paul confirmed your call: {visitor_slot}.\nJoin: {join_url}\nAdd to calendar: {gcal}",
         ics,
     )
-    paul_slot = ui.when_text(start, host_tz, req.duration_minutes)
+    paul_slot = ui.when_text(start, cfg.tz, req.duration_minutes)
     _send(
-        db, settings.paul_booking_notify_email, f"Confirmed: {_name(req)} - {paul_slot}",
+        db, cfg.notify_email, f"Confirmed: {_name(req)} - {paul_slot}",
         ui.shell("Call confirmed", ui.para(f"{_name(req)} ({c.school_name or 'no school'}): {paul_slot}.")
                  + ui.button(join_url, "Zoom link")),
         f"{_name(req)} ({c.school_name or 'no school'}): {paul_slot}\nZoom: {join_url}",

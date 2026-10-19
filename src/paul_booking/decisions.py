@@ -141,7 +141,7 @@ def approve(db: Session, request_id: uuid.UUID, now: datetime) -> PaulMeetingReq
     db.commit()
 
     req = _load(db, request_id)
-    emails.notify_approved(db, req, cfg.tz, now)
+    emails.notify_approved(db, req, cfg, now)
     return _load(db, request_id)
 
 

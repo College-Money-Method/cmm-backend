@@ -14,6 +14,7 @@ from src.paul_booking.models import (
 from tests.paul_booking.conftest import (
     first_slots,
     post_request,
+    set_config,
 )
 
 SLOTS = "/api/v1/paul-booking/slots"
@@ -82,6 +83,13 @@ def test_request_creates_hold_and_sends_two_emails(booking_on, _no_real_email):
     recipients = sorted(call["Destinations"][0] for call in _no_real_email.calls)
     assert recipients == ["ana@example.com", "paul.martin@collegemoneymethod.com"]
     assert slot not in first_slots(booking_on, 60)
+
+
+def test_request_email_goes_to_the_inbox_named_in_settings(booking_on, _no_real_email):
+    set_config(booking_on, paul_booking_notify_email="ops@collegemoneymethod.com")
+    assert post_request(booking_on, first_slots(booking_on)[5]).status_code == 202
+    recipients = sorted(call["Destinations"][0] for call in _no_real_email.calls)
+    assert recipients == ["ana@example.com", "ops@collegemoneymethod.com"]
 
 
 def test_overlapping_sixty_vs_thirty_is_409(booking_on):
