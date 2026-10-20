@@ -7,20 +7,25 @@ from zoneinfo import ZoneInfo
 
 from src.schools.models import School
 from src.workshops.host_digest_email import COHOST_LOOKUP_BANNER, render_host_digest
-from src.workshops.models import Webinar, WorkshopRegistration
+from src.workshops.models import Webinar, Workshop, WorkshopRegistration
 
 TZ = ZoneInfo("America/New_York")
 START = datetime(2026, 10, 14, 22, 0, tzinfo=timezone.utc)  # 6:00 PM EDT
 LINK = "https://app.example.com/workshop-hosts/abc"
 
 
-def _webinar(name="FAFSA Night") -> Webinar:
-    return Webinar(webinar_name=name, start_datetime=START)
+def _webinar(title="FAFSA Night", name="FAFSA Night · Annie Wright, East High") -> Webinar:
+    return Webinar(webinar_name=name, start_datetime=START, workshop=Workshop(name=title))
 
 
 def _reg(questions, name="Pat Doe", school="Annie Wright", grade="11") -> WorkshopRegistration:
     return WorkshopRegistration(
-        full_name=name, grade=grade, questions=questions, school=School(name=school) if school else None
+        full_name=name,
+        email="pat@example.com",
+        grade=grade,
+        questions=questions,
+        school=School(name=school) if school else None,
+        created_at=datetime(2026, 10, 12, 16, 0, tzinfo=timezone.utc),
     )
 
 
@@ -32,15 +37,33 @@ def test_subject_and_body_basics():
     subject, html, text = _render(regs=[_reg("Will aid cover room?"), _reg(None, name="Quiet")])
     assert subject == "Registrant questions: FAFSA Night · Wed, Oct 14, 6:00 PM EDT"
     for body in (html, text):
-        assert "2 approved registrant(s), 1 with questions" in body
+        assert "1 question(s) so far" in body
         assert LINK in body
-        assert "Pat Doe · Annie Wright · Grade 11" in body
-        assert "Quiet" not in body  # no question, not listed
-        assert "The page updates as families register." in body
+        assert "Will aid cover room?" in body
+        assert "Grade 11 · Submitted Oct 12" in body
+        assert "The page updates as new questions come in." in body
 
 
-def test_escapes_name_and_questions_and_keeps_line_breaks():
-    subject, html, text = _render(
+def test_no_registrant_identity_session_name_or_count():
+    subject, html, text = _render(regs=[_reg("Will aid cover room?"), _reg(None, name="Quiet")])
+    for body in (subject, html, text):
+        for leak in ("Pat Doe", "pat@example.com", "Annie Wright", "East High", "Quiet", "registrant(s)"):
+            assert leak not in body
+
+
+def test_questions_newest_first_by_registration_time_then_created_at():
+    old = _reg("Old?")
+    newer = _reg("Newer?")
+    newer.created_at = datetime(2026, 10, 13, 9, 0, tzinfo=timezone.utc)
+    newest = _reg("Newest?")
+    newest.registration_time = datetime(2026, 10, 14, 1, 0, tzinfo=timezone.utc)
+    _, html, text = _render(regs=[old, newer, newest])
+    for body in (html, text):
+        assert body.index("Newest?") < body.index("Newer?") < body.index("Old?")
+
+
+def test_escapes_title_and_questions_and_keeps_line_breaks():
+    _, html, text = _render(
         webinar=_webinar("<b>A&B</b>"), regs=[_reg("<script>alert(1)</script> & more\nline two")]
     )
     assert "<script>" not in html and "<b>A&B</b>" not in html

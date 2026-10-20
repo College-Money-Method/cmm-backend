@@ -44,7 +44,8 @@ def sm(webinar_sessionmaker):
     s.add(School(id=SCHOOL_ID, name="Annie Wright", slug="annie-wright"))
     s.flush()
     start = NOW + timedelta(hours=3)
-    s.add(Webinar(id=LIVE_ID, workshop_id=WORKSHOP_ID, webinar_name="Live", host_access_token=LIVE_TOKEN,
+    s.add(Webinar(id=LIVE_ID, workshop_id=WORKSHOP_ID, webinar_name="Live · Annie Wright, East High",
+                  host_access_token=LIVE_TOKEN,
                   start_datetime=start, end_datetime=start + timedelta(hours=1)))
     s.add(Webinar(id=OLD_ID, workshop_id=WORKSHOP_ID, host_access_token=OLD_TOKEN,
                   start_datetime=NOW - timedelta(days=20), end_datetime=NOW - timedelta(days=20) + timedelta(hours=1)))
@@ -52,10 +53,11 @@ def sm(webinar_sessionmaker):
     s.add(Webinar(id=PLAIN_ID, workshop_id=WORKSHOP_ID, start_datetime=start))
     s.flush()
     s.add_all([
-        _reg(LIVE_ID, "second@x.org", RegistrationStatus.APPROVED, 1, first_name="Sec", questions="Q2?"),
-        _reg(LIVE_ID, "first@x.org", RegistrationStatus.APPROVED, 5, first_name="Fir", questions="Q1?"),
-        _reg(LIVE_ID, "pending@x.org", RegistrationStatus.PENDING, 3),
-        _reg(LIVE_ID, "denied@x.org", RegistrationStatus.DENIED, 4),
+        _reg(LIVE_ID, "second@x.org", RegistrationStatus.APPROVED, 1, first_name="Sec", questions=" Q2? ", grade="12"),
+        _reg(LIVE_ID, "first@x.org", RegistrationStatus.APPROVED, 5, first_name="Fir", questions="Q1?", grade="11"),
+        _reg(LIVE_ID, "quiet@x.org", RegistrationStatus.APPROVED, 2, first_name="Qui", questions="   "),
+        _reg(LIVE_ID, "pending@x.org", RegistrationStatus.PENDING, 3, questions="Pending Q?"),
+        _reg(LIVE_ID, "denied@x.org", RegistrationStatus.DENIED, 4, questions="Denied Q?"),
     ])
     s.commit()
     s.close()
@@ -91,24 +93,26 @@ def admin(sm):
     app.dependency_overrides.clear()
 
 
-def test_valid_token_returns_approved_rows_in_order_without_leaks(public):
+def test_valid_token_returns_only_approved_questions_newest_first(public):
     resp = public.get(URL + LIVE_TOKEN)
     assert resp.status_code == 200
     assert resp.headers["cache-control"] == "no-store"
     assert resp.headers["referrer-policy"] == "no-referrer"
     body = resp.json()
-    assert [r["email"] for r in body["registrations"]] == ["first@x.org", "second@x.org"]
-    assert set(body["registrations"][0]) == {
-        "first_name", "last_name", "full_name", "email", "grade", "school_name",
-        "questions", "registration_time", "created_at", "attended",
-    }
-    assert body["registrations"][0]["school_name"] == "Annie Wright"
-    assert set(body) == {"webinar", "ended", "registrations"}
-    assert set(body["webinar"]) == {
-        "webinar_name", "workshop_title", "start_datetime", "end_datetime", "display_timezone",
-    }
+    assert set(body) == {"webinar", "ended", "questions"}
+    assert [(q["question"], q["grade"]) for q in body["questions"]] == [("Q2?", "12"), ("Q1?", "11")]
     assert body["webinar"]["workshop_title"] == "FAFSA Basics"
     assert body["ended"] is False
+
+
+def test_payload_carries_no_registrant_identity_or_session_name(public):
+    body = public.get(URL + LIVE_TOKEN).json()
+    # Hosts span every school in a cohort: only a registrant's own school may know who registered.
+    assert set(body["questions"][0]) == {"question", "grade", "submitted_at"}
+    assert set(body["webinar"]) == {"workshop_title", "start_datetime", "end_datetime", "display_timezone"}
+    raw = public.get(URL + LIVE_TOKEN).text
+    for leak in ("first@x.org", "Fir", "Annie Wright", "East High", "Live"):
+        assert leak not in raw
 
 
 @pytest.mark.parametrize("token", ["U" * 43, "short", "bad chars!" + "x" * 33, "A" * 44])
