@@ -93,7 +93,7 @@ def test_sends_cohosts_then_paul_with_webinar_id_and_source(db, zoom, mail):
     assert run_host_digest(db, NOW) == 3
     assert _recipients(mail) == ["a@x.com", "b@x.com", PAUL]
     assert all(m.source == "webinar_host_digest" and m.webinar_id == w.id for m in mail.sent)
-    assert "FAFSA Night" in mail.sent[0].subject
+    assert mail.sent[0].subject.startswith("Registrant questions: FAFSA · ")  # workshop title, not session name
     assert "/workshop-hosts/" in mail.sent[0].text
 
 

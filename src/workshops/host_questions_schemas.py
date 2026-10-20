@@ -1,9 +1,9 @@
 """Response shapes for the public co-host questions page and the admin host-link.
 
-``HostRegistrationOut`` is deliberately a separate, narrow model rather than a
-trimmed ``RegistrationOut``: this payload is readable by anyone holding the
-link, so ids, status, school ids and Zoom fields must not be reachable even by
-mistake.
+This payload is readable by anyone holding the link, and hosts span every school
+in a cohort session, so it carries no registrant identity at all: no names,
+emails, schools, ids or Zoom fields — only each question, its grade and when it
+was submitted. Only a registrant's own school may know who registered.
 """
 
 from __future__ import annotations
@@ -14,30 +14,24 @@ from pydantic import BaseModel
 
 
 class HostWebinarOut(BaseModel):
-    webinar_name: str | None
+    # webinar_name is deliberately absent: cohort session names list the schools.
     workshop_title: str | None
     start_datetime: datetime | None
     end_datetime: datetime | None
     display_timezone: str
 
 
-class HostRegistrationOut(BaseModel):
-    first_name: str | None
-    last_name: str | None
-    full_name: str | None
-    email: str
+class HostQuestionOut(BaseModel):
+    question: str
     grade: str | None
-    school_name: str | None
-    questions: str | None
-    registration_time: datetime | None
-    created_at: datetime
-    attended: bool
+    submitted_at: datetime
 
 
 class HostQuestionsOut(BaseModel):
     webinar: HostWebinarOut
     ended: bool
-    registrations: list[HostRegistrationOut]
+    # Newest first, so questions from late registrations surface at the top.
+    questions: list[HostQuestionOut]
 
 
 class HostLinkOut(BaseModel):

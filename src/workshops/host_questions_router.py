@@ -27,8 +27,8 @@ from src.workshops.host_access import (
 )
 from src.workshops.host_questions_schemas import (
     HostLinkOut,
+    HostQuestionOut,
     HostQuestionsOut,
-    HostRegistrationOut,
     HostWebinarOut,
 )
 from src.workshops.models import Webinar, WorkshopRegistration
@@ -47,19 +47,19 @@ def _as_aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-def _host_registration_out(reg: WorkshopRegistration) -> HostRegistrationOut:
-    return HostRegistrationOut(
-        first_name=reg.first_name,
-        last_name=reg.last_name,
-        full_name=reg.full_name,
-        email=reg.email,
-        grade=reg.grade,
-        school_name=reg.school.name if reg.school else None,
-        questions=reg.questions,
-        registration_time=reg.registration_time,
-        created_at=reg.created_at,
-        attended=reg.attended,
-    )
+def _host_questions_out(regs: list[WorkshopRegistration]) -> list[HostQuestionOut]:
+    """Only registrants who asked something, newest first, stripped of identity."""
+    asked = [
+        HostQuestionOut(
+            question=reg.questions.strip(),
+            grade=reg.grade,
+            # Zoom's registration time when we have it, else when the row arrived.
+            submitted_at=_as_aware(reg.registration_time or reg.created_at),
+        )
+        for reg in regs
+        if reg.questions and reg.questions.strip()
+    ]
+    return sorted(asked, key=lambda q: q.submitted_at, reverse=True)
 
 
 @router.get("/public/webinar-hosts/{token}", response_model=HostQuestionsOut)
@@ -75,17 +75,15 @@ def get_host_questions(token: str, response: Response, db: DbDep):
         raise HTTPException(status_code=404, detail=_INVALID_LINK, headers=_PRIVATE_HEADERS)
     end = effective_end(webinar)
 
-    regs = approved_registrations(db, webinar.id)
     return HostQuestionsOut(
         webinar=HostWebinarOut(
-            webinar_name=webinar.webinar_name,
             workshop_title=webinar.workshop.name if webinar.workshop else None,
             start_datetime=webinar.start_datetime,
             end_datetime=webinar.end_datetime,
             display_timezone=resolve_display_timezone().key,
         ),
         ended=end is not None and datetime.now(timezone.utc) > _as_aware(end),
-        registrations=[_host_registration_out(r) for r in regs],
+        questions=_host_questions_out(approved_registrations(db, webinar.id)),
     )
 
 

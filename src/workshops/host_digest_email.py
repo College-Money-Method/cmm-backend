@@ -1,9 +1,11 @@
 """Renders the day-before host digest: registrants' questions plus the live-page link.
 
-Pure: no DB or network. Webinar and workshop names, registrant names, schools and
-free-text questions are all untrusted (registrations arrive through a public form),
-so every interpolated value is HTML-escaped and the subject is stripped of CR/LF
-to rule out header injection.
+Pure: no DB or network. Hosts span every school in a cohort session, so the email
+carries no registrant identity — no names, emails or schools, and not the session
+name (cohort names list the schools) — only each question, its grade and when it
+was submitted. Workshop titles and free-text questions are untrusted (registrations
+arrive through a public form), so every interpolated value is HTML-escaped and the
+subject is stripped of CR/LF to rule out header injection.
 """
 
 from __future__ import annotations
@@ -40,19 +42,23 @@ def format_start(start: datetime, tz: ZoneInfo) -> str:
     return f"{local:%a, %b} {local.day}, {local.hour % 12 or 12}:{local:%M %p %Z}"
 
 
-def _webinar_label(webinar: Webinar) -> str:
-    if webinar.webinar_name:
-        return webinar.webinar_name
-    return webinar.workshop.name if webinar.workshop else "Workshop"
+def _workshop_title(webinar: Webinar) -> str:
+    return webinar.workshop.name if webinar.workshop and webinar.workshop.name else "Workshop"
 
 
-def _who(reg: WorkshopRegistration) -> str:
-    name = reg.full_name or " ".join(p for p in (reg.first_name, reg.last_name) if p) or "Registrant"
-    parts = [name]
-    if reg.school:
-        parts.append(reg.school.name)
-    if reg.grade:
-        parts.append(f"Grade {reg.grade}")
+def _submitted_at(reg: WorkshopRegistration) -> datetime | None:
+    # Zoom's registration time when we have it, else when the row arrived.
+    raw = reg.registration_time or reg.created_at
+    return _aware(raw) if raw else None
+
+
+def _question_meta(reg: WorkshopRegistration, tz: ZoneInfo) -> str:
+    """``Grade 11 · Submitted Oct 12`` — nothing that identifies the registrant."""
+    parts = [f"Grade {reg.grade}"] if reg.grade else []
+    submitted = _submitted_at(reg)
+    if submitted:
+        submitted = submitted.astimezone(tz)
+        parts.append(f"Submitted {submitted:%b} {submitted.day}")
     return " · ".join(parts)
 
 
@@ -65,19 +71,24 @@ def render_host_digest(
     undelivered: Sequence[tuple[str, str]] = (),
     tz: ZoneInfo | None = None,
 ) -> tuple[str, str, str]:
-    """Return (subject, html, text). ``registrations`` are the approved ones, oldest first.
+    """Return (subject, html, text). ``registrations`` are the approved ones; questions
+    are listed newest first, matching the live page.
 
     ``undelivered`` is (email, status) for co-hosts whose send this run did not
     reach "sent"; it is only passed to the extra recipients' copy.
     """
     tz = tz or resolve_display_timezone()
-    label = _webinar_label(webinar)
+    label = _workshop_title(webinar)
     when = format_start(webinar.start_datetime, tz)
     subject = _one_line(f"Registrant questions: {label} · {when}")
 
-    asked = [r for r in registrations if r.questions and r.questions.strip()]
-    counts = f"{len(registrations)} approved registrant(s), {len(asked)} with questions"
-    footer = "The page updates as families register."
+    asked = sorted(
+        (r for r in registrations if r.questions and r.questions.strip()),
+        key=lambda r: _submitted_at(r) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    counts = f"{len(asked)} question(s) so far"
+    footer = "The page updates as new questions come in."
     undelivered_line = (
         "Not delivered to: " + ", ".join(f"{email} ({status})" for email, status in undelivered)
         if undelivered
@@ -91,7 +102,7 @@ def render_host_digest(
     text_lines += [f"Open live questions page: {link}", ""]
     if asked:
         for reg in asked:
-            text_lines += [_who(reg), reg.questions.strip(), ""]
+            text_lines += [reg.questions.strip(), _question_meta(reg, tz), ""]
     else:
         text_lines += ["No questions yet.", ""]
     text_lines.append(footer)
@@ -106,8 +117,8 @@ def render_host_digest(
     )
     if asked:
         items = "".join(
-            f"<li style='margin-bottom:12px'><strong>{escape(_who(reg))}</strong><br>"
-            f"{_multiline_html(reg.questions.strip())}"
+            f"<li style='margin-bottom:12px'>{_multiline_html(reg.questions.strip())}<br>"
+            f"<span style='color:#667085'>{escape(_question_meta(reg, tz))}</span>"
             "</li>"
             for reg in asked
         )

@@ -2,7 +2,7 @@
 
 The token is random and stored on the row (not an HMAC) so rotating it revokes
 the old link. The link has no time limit: it works until an admin rotates it, so
-hosts can come back to a past session's questions and registrants.
+hosts can come back to a past session's questions.
 """
 
 from __future__ import annotations
@@ -12,10 +12,10 @@ import uuid
 from datetime import datetime, timedelta
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
-from src.emails.school_links import email_origin
 from src.db.enums import RegistrationStatus
+from src.emails.school_links import email_origin
 from src.workshops.models import Webinar, WorkshopRegistration
 
 # Used when a webinar has a start but no end, for the "ended" flag and digest selection.
@@ -77,7 +77,7 @@ def host_questions_url(token: str) -> str:
 
 
 def approved_registrations(db: Session, webinar_id: uuid.UUID) -> list[WorkshopRegistration]:
-    """Approved registrants oldest first, school preloaded: what hosts may see."""
+    """Approved registrants oldest first: the only ones whose questions hosts may see."""
     return list(
         db.execute(
             select(WorkshopRegistration)
@@ -85,7 +85,6 @@ def approved_registrations(db: Session, webinar_id: uuid.UUID) -> list[WorkshopR
                 WorkshopRegistration.webinar_id == webinar_id,
                 WorkshopRegistration.status == RegistrationStatus.APPROVED,
             )
-            .options(selectinload(WorkshopRegistration.school))
             .order_by(WorkshopRegistration.created_at)
         )
         .scalars()
