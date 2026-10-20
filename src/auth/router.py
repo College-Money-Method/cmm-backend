@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from src.auth.deps import AdminDep, CurrentUserDep, get_current_user
 from src.auth.hub_password import default_hub_password
+from src.auth.hub_welcome_email import added_by_name, send_hub_welcome_email
 from src.auth.models import Profile, UserRole
 from src.auth.profile_sync import delete_profile, upsert_profile
 from src.auth.rate_limit import allow, client_ip
@@ -585,6 +586,7 @@ def create_contact(
             db, uuid.UUID(new_user.id), body.email, first_name, last_name, school_id, school_role
         )
         db.commit()
+        _send_welcome(db, current, body, first_name, school, create_params["password"])
         return _build_contact_out(role_record, auth_user)
 
     # Create role record
@@ -619,7 +621,23 @@ def create_contact(
     # streams (opt-out policy, see emails.email_preferences).
     apply_default_opt_ins(db, contact)
     db.commit()
+    _send_welcome(db, current, body, first_name, school, create_params["password"])
     return _build_contact_out(role_record, auth_user)
+
+
+def _send_welcome(
+    db: Session, current: CurrentUser, body: ContactCreate, first_name: str, school: School, password: str
+) -> None:
+    """Email the new hub user their login. A custom password is never emailed."""
+    send_hub_welcome_email(
+        db,
+        to=body.email,
+        first_name=first_name,
+        default_password=None if body.password else password,
+        role=body.role,
+        school=school,
+        added_by=added_by_name(db, current.user_id, current.email),
+    )
 
 
 @router.get("/api/v1/contacts/{contact_id}", response_model=ContactOut)
