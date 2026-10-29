@@ -90,6 +90,7 @@ def plan_import(
     parsed = [(n, r.values, r.warnings) for n, r in rows]
     by_id = {c.id: c for c in colleges}
     by_key = {(c.name_key, c.state): c for c in by_id.values()}
+    by_unitid = {c.unitid: c for c in by_id.values() if c.unitid is not None}
     stored: dict[Any, dict[str | None, CollegeAidRecord]] = defaultdict(dict)
     for rec in records:
         stored[rec.college_id][rec.cds_year] = rec
@@ -101,7 +102,7 @@ def plan_import(
         for message in row_warnings:
             issues.warn(n, v["name"], message)
         key = (normalize_name(v["name"]), v["state"])
-        cplan = _resolve_college(n, v, key, by_id, by_key, claimed, flags, plan, issues)
+        cplan = _resolve_college(n, v, key, (by_id, by_unitid, by_key), claimed, flags, plan, issues)
         if cplan is None:
             continue
         identity = cplan.college.id if cplan.college else ("new", key)
@@ -114,8 +115,14 @@ def plan_import(
     return plan
 
 
-def _resolve_college(n, v, key, by_id, by_key, claimed, flags, plan, issues) -> CollegePlan | None:
-    college = by_id.get(v["college_id"]) if v["college_id"] else by_key.get(key)
+def _resolve_college(n, v, key, lookups, claimed, flags, plan, issues) -> CollegePlan | None:
+    """Match order: college_id, then UNITID, then name + state."""
+    by_id, by_unitid, by_key = lookups
+    uid = v.get("unitid")
+    if v["college_id"]:
+        college = by_id.get(v["college_id"])
+    else:
+        college = by_unitid.get(uid) if uid in by_unitid else by_key.get(key)
     if v["college_id"] and college is None:
         issues.error(n, "college_id", f"college_id not found: {echo(v['college_id'])}")
         return None
@@ -124,19 +131,26 @@ def _resolve_college(n, v, key, by_id, by_key, claimed, flags, plan, issues) -> 
     if claimed.setdefault(key, identity) != identity or (owner is not None and owner is not college):
         issues.error(n, "name", "name and state already belong to a different college")
         return None
-    signature = (key, v["control"])
+    uid_owner = by_unitid.get(uid)
+    if uid is not None and (claimed.setdefault(("unitid", uid), identity) != identity
+                            or (uid_owner is not None and uid_owner is not college)):
+        issues.error(n, "unitid", f"UNITID {uid} already belongs to a different college")
+        return None
+    signature = (key, v["control"], uid)
     if college is None:
         if identity not in plan.colleges:
             values = {k: v[k] for k in ("name", "state", "region", "control")} | {"name_key": key[0]}
+            if uid is not None:
+                values["unitid"] = uid
             plan.colleges[identity] = CollegePlan(None, values, n, signature)
             issues.warn(n, v["name"], "new college", important=False)
         elif plan.colleges[identity].signature != signature:
-            issues.error(n, "control", "rows disagree on the college's control")
+            issues.error(n, "control", "rows disagree on the college's control or UNITID")
             return None
         return plan.colleges[identity]
     if identity in plan.colleges:
         if plan.colleges[identity].signature != signature:
-            issues.error(n, "name", "rows disagree on the college's name, state or control")
+            issues.error(n, "name", "rows disagree on the college's name, state, control or UNITID")
             return None
         return plan.colleges[identity]
     changes: dict[str, Any] = {}
@@ -149,6 +163,12 @@ def _resolve_college(n, v, key, by_id, by_key, claimed, flags, plan, issues) -> 
             changes[column] = v[column]
     if "state" in changes:
         changes["region"] = REGION_BY_STATE[v["state"]]
+    if uid is not None and college.unitid != uid:  # a blank cell keeps the stored UNITID
+        if college.unitid is not None and not flags.allow_identity_change:
+            issues.error(n, "unitid", f"unitid change {college.unitid} -> {uid} needs allow_identity_change")
+            return None
+        issues.warn(n, v["name"], f"unitid: {_show(college.unitid)} -> {uid}", important=college.unitid is not None)
+        changes["unitid"] = uid
     if college.name != v["name"]:
         issues.warn(n, v["name"], f"name: {_show(college.name)} -> {_show(v['name'])}", important=True)
         changes |= {"name": v["name"], "name_key": key[0]}

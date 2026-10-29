@@ -21,6 +21,8 @@ COLUMNS = (
     "coa_estimated", "full_time_undergrads", "aid_application", "pct_need_met",
     "pct_non_need_receiving_merit", "avg_merit_award", "cds_year", "source", "release_label", "data_notes",
 )
+# Columns a file may add to COLUMNS; older files without them stay valid.
+OPTIONAL_COLUMNS = ("unitid",)
 # Record facts an admin may edit by hand or the CSV may refresh (cds_year/release_label handled apart).
 FACT_FIELDS = (
     "coa_in_state", "coa_out_of_state", "coa_year", "coa_estimated", "full_time_undergrads", "aid_application",
@@ -141,6 +143,18 @@ def parse_bool(value: Any) -> bool | None:
     if str(value).lower() in ("true", "false"):
         return str(value).lower() == "true"
     raise RuleError(f"must be true or false: {echo(value)}")
+
+
+def parse_unitid(value: Any) -> int | None:
+    """Federal IPEDS UNITID: a 6-digit number, or blank for not known."""
+    value = clean(value)
+    if value is None:
+        return None
+    text = str(value).strip()
+    # ASCII only: str.isdigit() accepts "²", which int() then rejects.
+    if isinstance(value, bool) or not re.fullmatch(r"[1-9][0-9]{5}", text):
+        raise RuleError(f"UNITID must be a 6-digit number: {echo(value)}")
+    return int(text)
 
 
 def parse_state(value: Any) -> str:

@@ -49,7 +49,7 @@ def import_csv(
 
 @router.get("", response_model=list[CollegeListItem])
 def list_colleges(db: DbDep, _admin: AdminDep, fmt: str | None = Query(None, alias="format")):
-    """Every college (hidden too). ``?format=csv`` is the ``college_id,name,state`` export for the converter."""
+    """Every college (hidden too). ``?format=csv`` is the ``college_id,name,state,unitid`` export for the converter."""
     items = edit_service.list_colleges(db)
     if fmt is None:
         return items
@@ -57,6 +57,6 @@ def list_colleges(db: DbDep, _admin: AdminDep, fmt: str | None = Query(None, ali
         raise HTTPException(status_code=422, detail="format must be csv")
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
-    writer.writerow(["college_id", "name", "state"])
-    writer.writerows([str(i.college_id), i.name, i.state] for i in items)
+    writer.writerow(["college_id", "name", "state", "unitid"])
+    writer.writerows([str(i.college_id), i.name, i.state, i.unitid or ""] for i in items)
     return Response(content=out.getvalue(), media_type="text/csv")

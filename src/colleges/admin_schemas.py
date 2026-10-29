@@ -41,6 +41,7 @@ class CollegeListItem(BaseModel):
     name: str
     state: str
     control: str
+    unitid: int | None = None  # federal IPEDS UNITID; admin only
     hidden: bool
     latest_cds_year: str | None = None  # newest real year; N/R-only colleges have none
     record_count: int
@@ -78,16 +79,18 @@ class CollegeCreate(BaseModel):
     name: str
     state: str
     control: str
+    unitid: str | int | None = None  # loose so parse_unitid writes the message
 
 
 class CollegePatch(BaseModel):
-    """Identity edit; every field optional. Text/state/control go through import_rules."""
+    """Identity edit; every field optional. Text/state/control/unitid go through import_rules."""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = None
     state: str | None = None
     control: str | None = None
+    unitid: str | int | None = None  # explicit null or blank clears
     hidden: bool | None = None
 
 

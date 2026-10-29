@@ -56,7 +56,9 @@ def _admin(app, role="super_admin"):
 
 
 def _seed(db):
-    c = College(name="Adelphi", name_key="adelphi", state="NY", region="Mid-Atlantic", control="private")
+    c = College(
+        name="Adelphi", name_key="adelphi", state="NY", region="Mid-Atlantic", control="private", unitid=188429,
+    )
     nr = College(name="JTS", name_key="jts", state="NY", region="Mid-Atlantic", control="private")
     hidden = College(
         name="Hidden", name_key="hidden", state="NY", region="Mid-Atlantic", control="private",
@@ -172,6 +174,7 @@ def test_public_payload_shape_and_rules(app, client, db):
     assert a["merit_pct_of_coa_in_state"] is None
     assert items["JTS"]["cds_year"] is None
     assert items["JTS"]["pct_need_unmet"] is None
+    assert "unitid" not in a  # admin-only field
 
 
 def test_public_payload_carries_sai_calculator_url(app, client, db):

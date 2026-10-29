@@ -9,6 +9,7 @@ produces contract-shaped data.
 
 - UTF-8 (a BOM is accepted), comma separated, one header row, ≤ 5,000 rows, ≤ 2 MB.
 - Header set is exact: every column below, no extras. Order does not matter.
+  The one optional column is `unitid`; files without it stay valid.
 - One `release_label` for the whole file.
 - An empty cell means **not reported**. `N/R` / `NR` are accepted and read as empty.
   On import an empty cell never erases a value already stored.
@@ -18,6 +19,7 @@ produces contract-shaped data.
 | Column | Type / allowed values | Workbook header (Sept-2026) | CDS line |
 |--------|----------------------|-----------------------------|----------|
 | `college_id` | empty or uuid of an existing college | – | – |
+| `unitid` (optional) | empty or the federal IPEDS UNITID, 6 digits | – | – |
 | `name` | text, required | Institution | – |
 | `state` | USPS code, 2 letters, required | State | – |
 | `region` | one of the 8 CMM regions; must match `state` | Region | – |
@@ -47,9 +49,16 @@ and "merit % of COA" are computed at read time.
 
 ## College matching
 
+- Order: `college_id`, then `unitid`, then `(normalize_name(name), state)`.
 - `college_id` set → that college (must exist). A name change is a warning.
-- `college_id` empty → matched by `(normalize_name(name), state)`. No match → a **new
+- `college_id` empty, `unitid` set and stored on a college → that college.
+- Otherwise matched by `(normalize_name(name), state)`. No match → a **new
   college** is created (listed as a warning in the dry run so renames get caught).
+- `unitid` fills an empty stored UNITID; an empty cell keeps the stored one.
+  Changing a stored UNITID needs `allow_identity_change=true`. A UNITID already
+  held by another college, or shared by two colleges in the file, is an error.
+  Every row of one college must carry the same `unitid` (like `control`): fill
+  it on all of its year rows or on none.
 - `normalize_name` (`src/colleges/name_key.py`): lowercase, `&` → `and`, drop
   punctuation, collapse spaces. `"St. John's College"` → `st johns college`.
 - Changing `state` or `control` of an existing college is an error unless the
@@ -67,10 +76,23 @@ and "merit % of COA" are computed at read time.
 
 ## Keeping ids stable across years
 
-Download `college_id,name,state` from the admin College Aid page (or
+Download `college_id,name,state,unitid` from the admin College Aid page (or
 `GET /api/v1/colleges/admin?format=csv`) and pass it to the converter as
 `--colleges-export`. For a renamed school add a row to
 `scripts/colleges/college_aliases.csv` (`source_name,state,college_id,note`).
+
+UNITIDs are admin only (not shown in the explorer). The converter fills the
+`unitid` column from `scripts/colleges/college_unitids.csv` (`name,state,unitid`,
+reviewed by a person). For new colleges, suggest ids from the College Scorecard
+"Most Recent Cohorts – Institution" file, then review before adding them:
+
+```bash
+uv run python -I scripts/colleges/match_college_unitids.py --scorecard /path/Most-Recent-Cohorts-Institution.csv \
+  --colleges college-aid-<release>.csv --out /path/outside/repo
+```
+
+`unitid-auto.csv` holds exact name + state matches; `unitid-review.csv` lists the
+rest with up to three candidates.
 
 ## Converting a workbook
 

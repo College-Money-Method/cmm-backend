@@ -19,6 +19,7 @@ from src.colleges.import_rules import (
     parse_name,
     parse_release,
     parse_state,
+    parse_unitid,
     parse_year,
 )
 
@@ -69,6 +70,7 @@ def parse_row(raw: dict[str, Any]) -> ParsedRow:
             row.values["college_id"] = uuid.UUID(str(raw_id))
         except ValueError:
             row.errors.append(("college_id", f"not a valid id: {echo(raw_id)}"))
+    take("unitid", parse_unitid)  # absent column -> None, same as blank
     take("name", parse_name)
     take("state", parse_state)
     take("control", parse_control)

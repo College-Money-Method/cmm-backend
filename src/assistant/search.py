@@ -59,6 +59,17 @@ def keyword_query(question: str) -> str:
     return " | ".join(sorted(words))
 
 
+def retrieval_query(history: list[dict], message: str, prior_questions: int = 2) -> str:
+    """Text to search with: the new message plus the last few user turns.
+
+    A follow-up or an answer to the assistant's own follow-up question ("yes,
+    they're divorced") retrieves poorly alone. Two prior questions keep the
+    original subject even after one round of clarification.
+    """
+    asked = [m["content"] for m in history if m["role"] == "user"][-prior_questions:]
+    return "\n".join([*asked, message])
+
+
 def _audience_filter(role: str):
     return AssistantChunk.for_counselor.is_(True) if role == "counselor" else AssistantChunk.for_family.is_(True)
 

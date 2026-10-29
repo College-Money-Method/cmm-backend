@@ -17,7 +17,7 @@ from src.colleges.admin_schemas import ImportSummary
 from src.colleges.import_diff import Flags, plan_import
 from src.colleges.import_issues import IssueLog
 from src.colleges.import_row import ParsedRow, parse_row
-from src.colleges.import_rules import COLUMNS, echo
+from src.colleges.import_rules import COLUMNS, OPTIONAL_COLUMNS, echo
 from src.colleges.models import College, CollegeAidRecord
 
 logger = logging.getLogger(__name__)
@@ -49,9 +49,10 @@ def _read_rows(data: bytes, log: IssueLog) -> list[tuple[int, ParsedRow]]:
     if len(header) > MAX_COLUMNS:
         log.error(1, None, f"too many columns (max {MAX_COLUMNS})")
         return []
-    if len(set(header)) != len(header) or set(header) != set(COLUMNS):
+    allowed = set(COLUMNS) | set(OPTIONAL_COLUMNS)
+    if len(set(header)) != len(header) or not set(COLUMNS) <= set(header) <= allowed:
         missing = [c for c in COLUMNS if c not in header]
-        extra = [echo(c) for c in dict.fromkeys(header) if c not in COLUMNS]
+        extra = [echo(c) for c in dict.fromkeys(header) if c not in allowed]
         log.error(1, None, f"header must match the contract exactly; missing: {missing or 'none'}; "
                   f"unexpected or duplicated: {extra[:5] or 'none'}")
         return []
