@@ -132,3 +132,27 @@ def test_delete_college_removes_records(client, db):
     db.expire_all()
     assert len(db.scalars(select(College)).all()) == 1
     assert len(db.scalars(select(CollegeAidRecord)).all()) == 1
+
+
+def test_create_college_by_hand(client, db):
+    resp = client.post(BASE_URL, json={"name": " Gamma College ", "state": "ca", "control": "Private"})
+    assert resp.status_code == 201
+    body = resp.json()
+    assert (body["name"], body["state"], body["control"]) == ("Gamma College", "CA", "private")
+    assert (body["hidden"], body["record_count"], body["latest_cds_year"]) == (False, 0, None)
+    college = db.get(College, uuid.UUID(body["college_id"]))
+    assert college.region == "West Coast" and college.name_key == "gamma college"
+    assert records_of(client, body["college_id"]) == []
+
+
+def test_create_college_validation_and_clash(client):
+    seed(client, row())
+    good = {"name": "Delta U", "state": "NY", "control": "public"}
+    assert client.post(BASE_URL, json={**good, "state": "ZZ"}).status_code == 422
+    assert client.post(BASE_URL, json={**good, "control": "x"}).status_code == 422
+    assert client.post(BASE_URL, json={**good, "name": "!!!"}).status_code == 422
+    assert client.post(BASE_URL, json={**good, "hidden": True}).status_code == 422
+    assert client.post(BASE_URL, json={"name": "Delta U"}).status_code == 422
+    alpha = client.get(BASE_URL).json()[0]
+    clash = client.post(BASE_URL, json={"name": "ALPHA college", "state": alpha["state"], "control": "public"})
+    assert clash.status_code == 409

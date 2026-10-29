@@ -70,6 +70,16 @@ class CollegeDetail(CollegeListItem):
     records: list[RecordOut]
 
 
+class CollegeCreate(BaseModel):
+    """New college by hand. Values go through import_rules, like the CSV import."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    state: str
+    control: str
+
+
 class CollegePatch(BaseModel):
     """Identity edit; every field optional. Text/state/control go through import_rules."""
 

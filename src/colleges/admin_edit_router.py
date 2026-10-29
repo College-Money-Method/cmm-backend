@@ -1,4 +1,4 @@
-"""Admin (super_admin) College Aid manual corrections: college and per-year record edits."""
+"""Admin (super_admin) College Aid manual corrections: add/edit colleges and per-year records."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from fastapi import APIRouter, Response, status
 from src.auth.deps import AdminDep
 from src.colleges import edit_service
 from src.colleges.admin_schemas import (
+    CollegeCreate,
     CollegeDetail,
     CollegeListItem,
     CollegePatch,
@@ -19,6 +20,11 @@ from src.colleges.admin_schemas import (
 from src.db.deps import DbDep
 
 router = APIRouter(prefix="/api/v1/colleges/admin", tags=["college-aid-admin"])
+
+
+@router.post("", response_model=CollegeListItem, status_code=status.HTTP_201_CREATED)
+def create_college(body: CollegeCreate, db: DbDep, admin: AdminDep):
+    return edit_service.create_college(db, body, admin.user_id)
 
 
 @router.get("/{college_id}", response_model=CollegeDetail)

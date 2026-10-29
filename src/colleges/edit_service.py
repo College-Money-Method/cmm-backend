@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from src.colleges import import_rules as rules
 from src.colleges.admin_schemas import (
+    CollegeCreate,
     CollegeDetail,
     CollegeListItem,
     CollegePatch,
@@ -89,8 +90,9 @@ def get_detail(db: Session, college_id: uuid.UUID) -> CollegeDetail:
     return CollegeDetail(**item.model_dump(), records=[RecordOut.model_validate(r) for r in records])
 
 
-def patch_college(db: Session, college_id: uuid.UUID, body: CollegePatch, admin_id: uuid.UUID) -> CollegeListItem:
-    college, errors, changes = _college(db, college_id), [], {}
+def _identity_changes(body: CollegeCreate | CollegePatch) -> dict[str, Any]:
+    """Parse the identity fields the client sent, adding the derived name_key and region."""
+    errors, changes = [], {}
     for column, parser in (("name", rules.parse_name), ("state", rules.parse_state), ("control", rules.parse_control)):
         if column in body.model_fields_set:
             try:
@@ -107,6 +109,21 @@ def patch_college(db: Session, college_id: uuid.UUID, body: CollegePatch, admin_
         changes["name_key"] = normalize_name(changes["name"])
     if "state" in changes:
         changes["region"] = rules.REGION_BY_STATE[changes["state"]]
+    return changes
+
+
+def create_college(db: Session, body: CollegeCreate, admin_id: uuid.UUID) -> CollegeListItem:
+    """A college with no records yet; it reaches the explorer once a record is added."""
+    college = College(**_identity_changes(body))
+    db.add(college)
+    _commit_or_conflict(db, "Another college already has this name and state")
+    logger.info("college aid college %s created by admin %s", college.id, admin_id)
+    return _item(college, 0, None)
+
+
+def patch_college(db: Session, college_id: uuid.UUID, body: CollegePatch, admin_id: uuid.UUID) -> CollegeListItem:
+    college = _college(db, college_id)
+    changes = _identity_changes(body)
     log = {k: f"{rules.echo(getattr(college, k))} -> {rules.echo(v)}" for k, v in changes.items() if getattr(college, k) != v}
     for column, value in changes.items():
         setattr(college, column, value)
