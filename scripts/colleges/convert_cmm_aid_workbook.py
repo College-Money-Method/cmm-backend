@@ -39,6 +39,7 @@ HEADERS = [
     "college_id", "name", "state", "region", "control", "coa_in_state", "coa_out_of_state", "coa_year",
     "coa_estimated", "full_time_undergrads", "aid_application", "pct_need_met",
     "pct_non_need_receiving_merit", "avg_merit_award", "cds_year", "source", "release_label", "data_notes",
+    "unitid",
 ]
 # Workbook header (whitespace-collapsed, lowercase, prefix) -> internal key. Detected by name, not position.
 COLUMN_PREFIXES = {
@@ -83,6 +84,14 @@ def load_ids(export: Path | None, aliases: Path) -> dict[tuple[str, str], str]:
                     uuid.UUID(rec["college_id"])  # validates
                     ids[(normalize_name(rec[name_col]), rec["state"].strip().upper())] = rec["college_id"]
     return ids
+
+
+def load_unitids(path: Path) -> dict[tuple[str, str], str]:
+    """(normalized name, state) -> reviewed IPEDS UNITID (see match_college_unitids.py)."""
+    if not path.exists():
+        return {}
+    with path.open(newline="", encoding="utf-8") as fh:
+        return {(normalize_name(r["name"]), r["state"].strip().upper()): r["unitid"].strip() for r in csv.DictReader(fh)}
 
 
 def convert(xlsx: Path, release: str, ids: dict) -> tuple[list[dict], list[dict]]:
@@ -147,7 +156,7 @@ def convert(xlsx: Path, release: str, ids: dict) -> tuple[list[dict], list[dict]
             "aid_application": clean(raw["aid_application"]),
             "pct_need_met": fmt_pct(need), "pct_non_need_receiving_merit": fmt_pct(merit),
             "avg_merit_award": fmt_money(award), "cds_year": year, "source": clean(raw["source"]),
-            "release_label": release, "data_notes": note,
+            "release_label": release, "data_notes": note, "unitid": "",
         })
 
     keys = [(normalize_name(x["name"]), x["state"]) for x in rows]
@@ -176,11 +185,15 @@ def main() -> int:
     ap.add_argument("--out", required=True, type=Path, help="output directory (outside the repo)")
     ap.add_argument("--colleges-export", type=Path, help="colleges-export.csv from the admin list")
     ap.add_argument("--aliases", type=Path, default=Path(__file__).with_name("college_aliases.csv"))
+    ap.add_argument("--unitids", type=Path, default=Path(__file__).with_name("college_unitids.csv"))
     args = ap.parse_args()
     try:
         if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", args.release):
             raise ConversionError("--release must be YYYY-MM")
         rows, warns = convert(args.workbook, args.release, load_ids(args.colleges_export, args.aliases))
+        unitids = load_unitids(args.unitids)
+        for row in rows:
+            row["unitid"] = unitids.get((normalize_name(row["name"]), row["state"]), "")
     except (ConversionError, ValueError, OSError, KeyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

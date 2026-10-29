@@ -102,7 +102,7 @@ def test_list_and_csv_export(client, db):
     resp = client.get(BASE_URL, params={"format": "csv"})
     assert resp.headers["content-type"].startswith("text/csv")
     parsed = list(csv.reader(io.StringIO(resp.text)))
-    assert parsed[0] == ["college_id", "name", "state"] and len(parsed) == 4
+    assert parsed[0] == ["college_id", "name", "state", "unitid"] and len(parsed) == 4
     assert client.get(BASE_URL, params={"format": "xml"}).status_code == 422
 
 

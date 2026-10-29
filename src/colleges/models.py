@@ -50,6 +50,7 @@ class College(Base):
     state: Mapped[str] = mapped_column(Text, nullable=False)  # USPS code
     region: Mapped[str] = mapped_column(Text, nullable=False)
     control: Mapped[str] = mapped_column(Text, nullable=False)  # 'public' | 'private'
+    unitid: Mapped[int | None] = mapped_column(Integer)  # federal IPEDS UNITID; admin only
     hidden_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))  # hidden, history kept
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
@@ -60,6 +61,7 @@ class College(Base):
 
     __table_args__ = (
         UniqueConstraint("name_key", "state", name="uq_colleges_name_key_state"),
+        UniqueConstraint("unitid", name="uq_colleges_unitid"),
         CheckConstraint("length(state) = 2", name="ck_colleges_state"),
         CheckConstraint(_in_list("control", ("public", "private")), name="ck_colleges_control"),
         CheckConstraint(_in_list("region", REGIONS), name="ck_colleges_region"),

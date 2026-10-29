@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 _PARSERS: dict[str, Any] = dict(rules.FACT_PARSERS) | {"cds_year": rules.parse_year, "release_label": rules.parse_release}
 
 
+_CLASH = "Another college already has this name and state, or this UNITID"
+
+
 def _invalid(errors: list[tuple[str, str]]) -> HTTPException:
     detail = [{"loc": ["body", field], "msg": msg, "type": "value_error"} for field, msg in errors]
     return HTTPException(status_code=422, detail=detail)
@@ -64,7 +67,7 @@ def _commit_or_conflict(db: Session, message: str) -> None:
 
 def _item(college: College, record_count: int, latest: str | None) -> CollegeListItem:
     return CollegeListItem(
-        college_id=college.id, name=college.name, state=college.state, control=college.control,
+        college_id=college.id, name=college.name, state=college.state, control=college.control, unitid=college.unitid,
         hidden=college.hidden_at is not None, latest_cds_year=latest, record_count=record_count,
     )
 
@@ -93,7 +96,9 @@ def get_detail(db: Session, college_id: uuid.UUID) -> CollegeDetail:
 def _identity_changes(body: CollegeCreate | CollegePatch) -> dict[str, Any]:
     """Parse the identity fields the client sent, adding the derived name_key and region."""
     errors, changes = [], {}
-    for column, parser in (("name", rules.parse_name), ("state", rules.parse_state), ("control", rules.parse_control)):
+    parsers = (("name", rules.parse_name), ("state", rules.parse_state), ("control", rules.parse_control),
+               ("unitid", rules.parse_unitid))
+    for column, parser in parsers:
         if column in body.model_fields_set:
             try:
                 changes[column] = parser(getattr(body, column))
@@ -112,11 +117,22 @@ def _identity_changes(body: CollegeCreate | CollegePatch) -> dict[str, Any]:
     return changes
 
 
+def _check_unitid_free(db: Session, changes: dict[str, Any], college_id: uuid.UUID | None = None) -> None:
+    """409 naming the owner, clearer than the bare unique-constraint conflict."""
+    if changes.get("unitid") is None:
+        return
+    owner = db.scalar(select(College).where(College.unitid == changes["unitid"]))
+    if owner is not None and owner.id != college_id:
+        raise HTTPException(status_code=409, detail=f"UNITID {changes['unitid']} already belongs to {owner.name} ({owner.state})")
+
+
 def create_college(db: Session, body: CollegeCreate, admin_id: uuid.UUID) -> CollegeListItem:
     """A college with no records yet; it reaches the explorer once a record is added."""
-    college = College(**_identity_changes(body))
+    changes = _identity_changes(body)
+    _check_unitid_free(db, changes)
+    college = College(**changes)
     db.add(college)
-    _commit_or_conflict(db, "Another college already has this name and state")
+    _commit_or_conflict(db, _CLASH)
     logger.info("college aid college %s created by admin %s", college.id, admin_id)
     return _item(college, 0, None)
 
@@ -124,6 +140,7 @@ def create_college(db: Session, body: CollegeCreate, admin_id: uuid.UUID) -> Col
 def patch_college(db: Session, college_id: uuid.UUID, body: CollegePatch, admin_id: uuid.UUID) -> CollegeListItem:
     college = _college(db, college_id)
     changes = _identity_changes(body)
+    _check_unitid_free(db, changes, college.id)
     log = {k: f"{rules.echo(getattr(college, k))} -> {rules.echo(v)}" for k, v in changes.items() if getattr(college, k) != v}
     for column, value in changes.items():
         setattr(college, column, value)
@@ -134,7 +151,7 @@ def patch_college(db: Session, college_id: uuid.UUID, body: CollegePatch, admin_
         college.hidden_at = (college.hidden_at or datetime.now(UTC)) if hidden else None
     if log:
         college.updated_at = datetime.now(UTC)
-    _commit_or_conflict(db, "Another college already has this name and state")
+    _commit_or_conflict(db, _CLASH)
     logger.info("college aid college %s edited by admin %s: %s", college.id, admin_id, log)
     return _item(college, len(college.records), max((r.cds_year for r in college.records if r.cds_year), default=None))
 

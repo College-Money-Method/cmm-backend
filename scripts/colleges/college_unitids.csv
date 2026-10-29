@@ -1,0 +1,460 @@
+name,state,unitid
+Auburn University,AL,100858
+Tuskegee University,AL,102377
+University of Alabama - Birmingham,AL,100663
+University of Alabama - Tuscaloosa,AL,100751
+John Brown University,AR,107141
+University of Arkansas,AR,106397
+Arizona State University,AZ,104151
+Embry Riddle Aeronautical U. - Prescott,AZ,104586
+Northern Arizona University,AZ,105330
+Prescott College,AZ,105589
+St. John's College - Santa Fe,AZ,245652
+University of Arizona,AZ,104179
+Biola University,CA,110097
+California Institute of Technology,CA,110404
+California Poly State U. - San Luis Obispo,CA,110422
+California State Poly. U. - Pomona,CA,110529
+California State University - Long Beach,CA,110583
+California State University - Los Angeles,CA,110592
+California State University - Northridge,CA,110608
+Chapman University,CA,111948
+Claremont McKenna College,CA,112260
+Harvey Mudd College,CA,115409
+Loyola Marymount University,CA,117946
+Occidental College,CA,120254
+Pepperdine University,CA,121150
+Pitzer College,CA,121257
+Pomona College,CA,121345
+Saint Mary's College of California,CA,123554
+San Diego State University,CA,122409
+San Francisco State University,CA,122597
+San Jose State University,CA,122755
+Santa Clara University,CA,122931
+Scripps College,CA,123165
+Soka University of America,CA,399911
+Stanford University,CA,243744
+University of California - Berkeley,CA,110635
+University of California - Davis,CA,110644
+University of California - Irvine,CA,110653
+University of California - Los Angeles,CA,110662
+University of California - Merced,CA,445188
+University of California - Riverside,CA,110671
+University of California - San Diego,CA,110680
+University of California - Santa Barbara,CA,110705
+University of California - Santa Cruz,CA,110714
+University of Redlands,CA,121691
+University of San Diego,CA,122436
+University of San Francisco,CA,122612
+University of Southern California,CA,123961
+University of the Pacific,CA,120883
+Westmont College,CA,125727
+Colorado College,CO,126678
+Colorado School of Mines,CO,126775
+Colorado State University - Fort Collins,CO,126818
+Regis University,CO,127918
+University of Colorado - Boulder,CO,126614
+University of Colorado - Colorado Springs,CO,126580
+University of Colorado - Denver,CO,126562
+University of Denver,CO,127060
+Connecticut College,CT,128902
+Fairfield University,CT,129242
+Quinnipiac University,CT,130226
+Sacred Heart University,CT,130253
+Trinity College,CT,130590
+University of Connecticut,CT,129020
+University of New Haven,CT,129941
+University of Saint Joseph,CT,130314
+Wesleyan University,CT,130697
+Yale University,CT,130794
+American University,DC,131159
+Catholic University,DC,131283
+Gallaudet University,DC,131450
+George Washington University,DC,131469
+Georgetown University,DC,131496
+Howard University,DC,131520
+University of Delaware,DE,130943
+Barry University,FL,132471
+Eckerd College,FL,133492
+Embry Riddle Aeronautical U. - Daytona,FL,133553
+Flagler College,FL,133711
+Florida Institute of Technology,FL,133881
+Florida Southern University,FL,134079
+Florida State University,FL,134097
+Lynn University,FL,132657
+New College of Florida,FL,262129
+Nova Southeastern University,FL,136215
+Rollins College,FL,136950
+Stetson University,FL,137546
+University of Central Florida,FL,132903
+University of Florida,FL,134130
+University of Miami,FL,135726
+University of North Florida,FL,136172
+University of South Florida,FL,137351
+University of Tampa,FL,137847
+Agnes Scott College,GA,138600
+Emory University/Oxford College,GA,487092
+Georgia Institute of Technology,GA,139755
+Georgia State University,GA,139940
+Mercer University,GA,140447
+Morehouse University,GA,140553
+Oglethorpe University,GA,140696
+Spelman College,GA,141060
+University of Georgia,GA,139959
+University of Hawaii - Manoa,HI,141574
+Coe College,IA,153144
+Cornell College,IA,153162
+Drake University,IA,153269
+Grinnell College,IA,153384
+Iowa State University,IA,153603
+University of Iowa,IA,153658
+University of Northern Iowa,IA,154095
+Wartburg College,IA,154527
+Boise State University,ID,142115
+Augustana College,IL,143084
+Bradley University,IL,143358
+DePaul University,IL,144740
+Illinois Institute of Technology,IL,145725
+Illinois Wesleyan University,IL,145646
+Knox College,IL,146427
+Lake Forest College,IL,146481
+Loyola University Chicago,IL,146719
+Northeastern Illinois University,IL,147776
+Northern Illinois University,IL,147703
+Northwestern University,IL,147767
+Principia College,IL,148016
+University of Chicago,IL,144050
+University of Illinois - Chicago,IL,145600
+University of Illinois - Urbana Champaign,IL,145637
+Wheaton College (IL),IL,149781
+Butler University,IN,150163
+DePauw University,IN,150400
+Earlham College,IN,150455
+Goshen College,IN,150668
+Hanover College,IN,150756
+Indiana University - Bloomington,IN,151351
+Indiana University - Indianapolis,IN,151111
+Purdue University - West Lafayette,IN,243780
+Rose-Hulman Inst. of Technology,IN,152318
+Saint Mary's College - Indiana,IN,152390
+University of Notre Dame,IN,152080
+Valparaiso University,IN,152600
+Wabash College,IN,152673
+Kansas State University,KS,155399
+University of Kansas,KS,155317
+Centre College,KY,156408
+University of Kentucky,KY,157085
+University of Louisville,KY,157289
+Louisiana State University,LA,159391
+Loyola University New Orleans,LA,159656
+Southeastern Louisiana University,LA,160612
+Tulane University,LA,160755
+Xavier University of Louisiana,LA,160904
+Amherst College,MA,164465
+Assumption University,MA,164562
+Babson College,MA,164580
+Bentley University,MA,164739
+Boston College,MA,164924
+Boston University,MA,164988
+Brandeis University,MA,165015
+Bridgewater State University,MA,165024
+Clark University,MA,165334
+College of the Holy Cross,MA,166124
+Emerson College,MA,165662
+Emmanuel College,MA,165671
+Gordon College,MA,165936
+Hampshire College,MA,166018
+Harvard University,MA,166027
+Massachusetts Institute of Technology,MA,166683
+Merrimack College,MA,166850
+Mount Holyoke College,MA,166939
+Northeastern University,MA,167358
+Olin College of Engineering,MA,441982
+Smith College,MA,167835
+Springfield College,MA,167899
+Stonehill College,MA,167996
+Suffolk University,MA,168005
+Tufts University,MA,168148
+University of Massachusetts - Amherst,MA,166629
+University of Massachusetts - Boston,MA,166638
+University of Massachusetts - Dartmouth,MA,167987
+University of Massachusetts - Lowell,MA,166513
+Wellesley College,MA,168218
+Wentworth Institute of Technology,MA,168227
+Wheaton College (MA),MA,168281
+Williams College,MA,168342
+Worcester Polytechnic Institute,MA,168421
+Goucher College,MD,162654
+Hood College,MD,162760
+Johns Hopkins University,MD,162928
+Loyola University Maryland,MD,163046
+McDaniel College,MD,164270
+Salisbury University,MD,163851
+St. John's College - Annapolis,MD,163976
+St. Mary's College of Maryland,MD,163912
+Towson University,MD,164076
+University of Maryland - Baltimore County,MD,163268
+University of Maryland - College Park,MD,163286
+Washington College,MD,164216
+Bates College,ME,160977
+Bowdoin College,ME,161004
+Colby College,ME,161086
+College of the Atlantic,ME,160959
+University of Maine - Orono,ME,161253
+Albion College,MI,168546
+Alma College,MI,168591
+Calvin University,MI,169080
+Eastern Michigan University,MI,169798
+Grand Valley State University,MI,170082
+Hillsdale College,MI,170286
+Hope College,MI,170301
+Kalamazoo College,MI,170532
+Lawrence Technological University,MI,170675
+Michigan State University,MI,171100
+Michigan Technological University,MI,171128
+Northern Michigan University,MI,171456
+University of Detroit Mercy,MI,169716
+University of Michigan - Ann Arbor,MI,170976
+University of Michigan - Dearborn,MI,171137
+Carleton College,MN,173258
+Gustavus Adolphus College,MN,173647
+Macalester College,MN,173902
+St. Cloud State University,MN,174783
+St. John Fisher University,MN,195720
+St. Olaf College,MN,174844
+University of Minnesota - Duluth,MN,174233
+University of Minnesota - Twin Cities,MN,174066
+Winona State University,MN,175272
+Columbia College (MO),MO,177065
+Lindenwood University,MO,177968
+Missouri U. of Science and Technology,MO,178411
+Saint Louis University,MO,179159
+University of Missouri - Columbia,MO,178396
+Washington University in St. Louis,MO,179867
+Mississippi State University,MS,176080
+University of Mississippi,MS,176017
+Montana State University,MT,180461
+Catawba College,NC,198215
+Davidson College,NC,198385
+Duke University,NC,198419
+East Carolina University,NC,198464
+Elon University,NC,198516
+Guilford College,NC,198613
+High Point University,NC,198695
+Meredith College,NC,198950
+North Carolina State University - Raleigh,NC,199193
+Queens University of Charlotte,NC,199412
+University of North Carolina - Asheville,NC,199111
+University of North Carolina - Chapel Hill,NC,199120
+University of North Carolina - Charlotte,NC,199139
+University of North Carolina - Wilmington,NC,199218
+University of North Carolina Sch. of the Arts,NC,199184
+Wake Forest University,NC,199847
+Warren Wilson College,NC,199865
+University of North Dakota,ND,200280
+Creighton University,NE,181002
+University of Nebraska - Lincoln,NE,181464
+Dartmouth College,NH,182670
+Saint Anselm College,NH,183239
+University of New Hampshire,NH,183044
+Drew University,NJ,184348
+Monmouth University,NJ,185572
+New Jersey Institute of Technology,NJ,185828
+Princeton University,NJ,186131
+Ramapo College of New Jersey,NJ,186201
+Rowan University,NJ,184782
+Stevens Institute of Technology,NJ,186867
+The College of New Jersey,NJ,187134
+New Mexico Tech,NM,187967
+University of New Mexico,NM,187985
+University of Nevada - Las Vegas,NV,182281
+University of Nevada - Reno,NV,182290
+Adelphi University,NY,188429
+Alfred University,NY,188641
+Bard College,NY,189088
+Barnard College,NY,189097
+Clarkson University,NY,190044
+Colgate University,NY,190099
+Columbia University,NY,190150
+Cornell University,NY,190415
+Daemen University,NY,190725
+Fashion Institute of Technology,NY,191126
+Fordham University,NY,191241
+Hamilton College,NY,191515
+Hobart and William Smith Colleges,NY,191630
+Hofstra University,NY,191649
+Iona University,NY,191931
+Ithaca College,NY,191968
+Keuka College,NY,192192
+Long Island University,NY,192448
+Manhattan College,NY,192703
+Marist College,NY,192819
+Nazareth College,NY,193584
+New York University,NY,193900
+Pace University,NY,194310
+Pratt Institute,NY,194578
+Rensselaer Polytechnic Institute,NY,194824
+Rochester Institute of Technology,NY,195003
+SUNY Binghamton,NY,196079
+SUNY Buffalo,NY,196088
+SUNY Geneseo,NY,196167
+SUNY Maritime,NY,196291
+SUNY Purchase,NY,196219
+SUNY Stony Brook,NY,196097
+Sarah Lawrence College,NY,195304
+Siena College,NY,195474
+Skidmore College,NY,195526
+St. John's University - New York,NY,195809
+St. Lawrence University,NY,195216
+Syracuse University,NY,196413
+The Jewish Theological Seminary,NY,192040
+Union College,NY,196866
+University of Rochester,NY,195030
+Utica College,NY,197045
+Vassar College,NY,197133
+Yeshiva University,NY,197708
+Antioch College,OH,483018
+Case Western Reserve University,OH,201645
+College of Wooster,OH,206589
+Denison University,OH,202523
+Kenyon College,OH,203535
+Malone University,OH,203775
+Miami University (Ohio),OH,204024
+Oberlin College and Conservatory,OH,204501
+Ohio Northern University,OH,204635
+Ohio State University - Columbus,OH,204796
+Ohio University,OH,204857
+Ohio Wesleyan University,OH,204909
+University of Cincinnati,OH,201885
+University of Dayton,OH,202480
+University of Toledo,OH,206084
+Wittenberg University,OH,206525
+Oklahoma State University,OK,207388
+University of Oklahoma,OK,207500
+University of Tulsa,OK,207971
+Lewis & Clark College,OR,209056
+Linfield College,OR,209065
+Reed College,OR,209922
+University of Oregon,OR,209551
+University of Portland,OR,209825
+Willamette University,OR,210401
+Allegheny College,PA,210669
+Bryn Mawr College,PA,211273
+Bucknell University,PA,211291
+Carnegie Mellon University,PA,211440
+Dickinson College,PA,212009
+Drexel University,PA,212054
+Duquesne University,PA,212106
+Franklin & Marshall College,PA,212577
+Gannon University,PA,212601
+Gettysburg College,PA,212674
+Haverford College,PA,212911
+Juniata College,PA,213251
+King's College,PA,213321
+La Salle University,PA,213367
+Lafayette College,PA,213385
+Lehigh University,PA,213543
+Lycoming College,PA,213668
+Moravian University,PA,214157
+Muhlenberg College,PA,214175
+"Penn State U - Erie, Behrend College",PA,214591
+Penn State U - University Park,PA,214777
+Robert Morris University,PA,215655
+Rosemont College,PA,215691
+Saint Joseph's University,PA,215770
+Seton Hill University,PA,215947
+Slippery Rock University,PA,216038
+Susquehanna College,PA,216278
+Swarthmore College,PA,216287
+Temple University,PA,216339
+University of Pennsylvania,PA,215062
+University of Pittsburgh,PA,215293
+University of Scranton,PA,215929
+Ursinus College,PA,216524
+Villanova University,PA,216597
+Washington & Jefferson College,PA,216667
+Westminster College (PA),PA,216807
+Widener University,PA,216852
+Wilkes University,PA,216931
+York College of Pennsylvania,PA,217059
+Brown University,RI,217156
+Bryant University,RI,217165
+Providence College,RI,217402
+Rhode Island School of Design,RI,217493
+Salve Regina University,RI,217536
+University of Rhode Island,RI,217484
+Clemson University,SC,217882
+Coastal Carolina University,SC,218724
+College of Charleston,SC,217819
+Furman University,SC,218070
+The Citadel,SC,217864
+University of South Carolina,SC,218663
+Wofford College,SC,218973
+Belmont University,TN,219709
+Bethel University (TN),TN,219718
+Rhodes College,TN,221351
+Sewanee - University of the South,TN,221519
+University of Memphis,TN,220862
+University of Tennesee - Knoxville,TN,221759
+Vanderbilt University,TN,221999
+Austin College,TX,222983
+Baylor University,TX,223232
+Rice University,TX,227757
+Southern Methodist University,TX,228246
+Southwestern University,TX,228343
+St. Mary's University (TX),TX,228149
+Texas A & M University,TX,228723
+Texas Christian University,TX,228875
+Texas Tech University,TX,229115
+Trinity University,TX,229267
+University of Dallas,TX,224323
+University of Houston,TX,225511
+University of North Texas,TX,227216
+University of Texas - Austin,TX,228778
+University of Texas - Dallas,TX,228787
+University of Texas - El Paso,TX,228796
+University of Texas - San Antonio,TX,229027
+Brigham Young University(2),UT,230038
+University of Utah,UT,230764
+Westminster University (UT),UT,230807
+Christopher Newport University,VA,231712
+College of William & Mary,VA,231624
+George Mason University,VA,232186
+Hampden-Sydney College,VA,232256
+Hollins University,VA,232308
+James Madison University,VA,232423
+Longwood University,VA,232566
+Old Dominion University,VA,232982
+Randolph College,VA,233301
+Randolph-Macon College,VA,233295
+Roanoke College,VA,233426
+Sweet Briar College,VA,233718
+University of Lynchburg,VA,232609
+University of Mary Washington,VA,232681
+University of Richmond,VA,233374
+University of Virginia,VA,234076
+Virginia Commonwealth University,VA,234030
+Virginia Military Institute,VA,234085
+Virginia Tech,VA,233921
+Washington and Lee University,VA,234207
+Bennington College,VT,230816
+Champlain College,VT,230852
+Middlebury College,VT,230959
+Saint Michael's College,VT,231059
+University of Vermont,VT,231174
+Evergreen State College,WA,235167
+Gonzaga University,WA,235316
+Seattle University,WA,236595
+University of Puget Sound,WA,236328
+University of Washington - Seattle,WA,236948
+Washington State University,WA,236939
+Western Washington University,WA,237011
+Whitman College,WA,237057
+Whitworth College,WA,237066
+Beloit College,WI,238333
+Lawrence University,WI,239017
+Marquette University,WI,239105
+Milwaukee School of Engineering,WI,239318
+St. Norbert College,WI,239716
+University of Wisconsin - Madison,WI,240444
+University of Wisconsin - Milwaukee,WI,240453
