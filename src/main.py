@@ -24,6 +24,7 @@ import src.guest_contacts.models  # noqa: F401
 import src.paul_booking.models  # noqa: F401
 import src.storage.models  # noqa: F401
 import src.pages.models  # noqa: F401
+import src.colleges.models  # noqa: F401
 import src.calculators.models  # noqa: F401
 import src.app_config.models  # noqa: F401
 import src.surveys.models  # noqa: F401
@@ -57,6 +58,9 @@ from src.storage.router import router as storage_router
 from src.pages.router import router as pages_router
 from src.calculators.router import router as calculators_router
 from src.app_config.router import router as app_config_router
+from src.colleges.public_router import router as colleges_public_router
+from src.colleges.admin_router import router as colleges_admin_router
+from src.colleges.admin_edit_router import router as colleges_admin_edit_router
 from src.analytics.router import router as analytics_router
 from src.analytics.admin_router import router as analytics_admin_router
 from src.communications.router import router as communications_router
@@ -135,6 +139,9 @@ app.include_router(search_router)
 app.include_router(pages_router)
 app.include_router(calculators_router)
 app.include_router(app_config_router)
+app.include_router(colleges_public_router)
+app.include_router(colleges_admin_router)
+app.include_router(colleges_admin_edit_router)
 app.include_router(analytics_router)
 app.include_router(analytics_admin_router)
 app.include_router(communications_router)
