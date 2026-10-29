@@ -27,6 +27,7 @@ from src.content.models import (
     Topic,
 )
 from src.content.video_caption_models import VideoCaptionRecord
+from src.colleges.models import College, CollegeAidRecord
 from src.cycles.models import Cohort, Cycle
 from src.meetings.models import OneOnOneMeeting
 from src.sales.models import Invoice, Sale
@@ -58,6 +59,8 @@ __all__ = [
     "Calculator",
     "AssetType",
     "Cohort",
+    "College",
+    "CollegeAidRecord",
     "Contact",
     "GuestContact",
     "ContentAsset",
