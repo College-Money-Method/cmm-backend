@@ -72,6 +72,12 @@ def _secret() -> str:
     return _DEV_SECRET
 
 
+def signing_secret() -> str:
+    """Public handle on the shared signing secret, for other gated tools that
+    sign their own audience-scoped tokens."""
+    return _secret()
+
+
 def check_src_session_secret() -> None:
     """Startup check: log loudly when a deployed environment has no secret.
     Logs instead of raising so the rest of the API stays up; SRC sessions fail

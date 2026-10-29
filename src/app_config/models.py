@@ -76,5 +76,10 @@ class AppConfig(Base):
     # Null = Paul's own address (rules.DEFAULT_NOTIFY_EMAIL).
     paul_booking_notify_email: Mapped[str | None] = mapped_column(Text)
 
+    # College Aid Explorer (see src/colleges): one shared password. scrypt
+    # "salt$hash", never plaintext. Null = the tool is closed to everyone.
+    college_aid_password_hash: Mapped[str | None] = mapped_column(Text)
+    college_aid_password_updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)

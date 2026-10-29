@@ -7,7 +7,16 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, EmailStr, TypeAdapter, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from src.paul_booking.hours import validate_weekly_hours
 from src.schools.display_timezone import DisplayTimezoneField
@@ -90,7 +99,15 @@ class AppConfigUpdate(BaseModel):
         return value
 
 
+class CollegeAidPasswordIn(BaseModel):
+    """PUT body for the College Aid Explorer shared password (never echoed back)."""
+
+    password: str = Field(min_length=8, max_length=200, repr=False)
+
+
 class AppConfigOut(BaseModel):
+    # This API is public: the password hash is deliberately not a field here,
+    # only whether one is set. Keep it that way.
     id: uuid.UUID
     welcome_video_embed_code: str | None
     welcome_video_title: str | None
@@ -106,6 +123,21 @@ class AppConfigOut(BaseModel):
     paul_booking_timezone: str | None
     paul_booking_weekly_hours: dict | None
     paul_booking_notify_email: str | None
+    college_aid_password_updated_at: datetime | None = None
     updated_at: datetime | None
 
-    model_config = {"from_attributes": True}
+    # Derived from the ORM hash column in the before-validator below; the hash
+    # itself is never a field of this schema.
+    college_aid_password_set: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_password_flag(cls, data):
+        if isinstance(data, dict):
+            return data
+        return {
+            **{name: getattr(data, name, None) for name in cls.model_fields if name != "college_aid_password_set"},
+            "college_aid_password_set": bool(getattr(data, "college_aid_password_hash", None)),
+        }
