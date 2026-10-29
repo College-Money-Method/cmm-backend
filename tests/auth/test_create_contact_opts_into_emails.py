@@ -21,6 +21,7 @@ from sqlalchemy.pool import StaticPool
 
 import src.auth.models  # noqa: F401 — register UserRole for FK metadata
 import src.schools.models  # noqa: F401
+from src.auth import hub_welcome_email
 from src.auth.deps import get_current_user
 from src.auth.schemas import CurrentUser
 from src.db.base import Base
@@ -53,6 +54,12 @@ class _FakeAdmin:
 class _FakeSupabase:
     def __init__(self) -> None:
         self.auth = type("_Auth", (), {"admin": _FakeAdmin()})()
+
+
+@pytest.fixture(autouse=True)
+def _no_welcome_email(monkeypatch):
+    # The welcome email has its own tests; keep it out of these.
+    monkeypatch.setattr(hub_welcome_email, "send_email", lambda *a, **k: None)
 
 
 @pytest.fixture

@@ -38,6 +38,9 @@ TOPIC_SEGMENT = "topic_segment"
 FRAME_CLASSIFY = "frame_classify"
 TRAILER_SELECT = "trailer_select"
 TRAILER_REVISE = "trailer_revise"
+# AI assistant: family-wording questions per chunk (sync) and chat answers.
+ASSISTANT_ENRICH = "assistant_enrich"
+ASSISTANT_ANSWER = "assistant_answer"
 
 
 def cost_usd(input_tokens: int, output_tokens: int, model_id: str | None = None) -> Decimal:

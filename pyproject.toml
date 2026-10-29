@@ -22,6 +22,7 @@ dependencies = [
     "cryptography>=43.0.0",
     "apscheduler>=3.10.0",
     "pyjwt>=2.11.0",
+    "pgvector>=0.3.6",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +42,7 @@ dev-dependencies = [
     "markdown>=3.7",
     "beautifulsoup4>=4.12.0",
     "lxml>=5.0.0",
+    "openpyxl>=3.1.5",
 ]
 [build-system]
 requires = ["hatchling"]

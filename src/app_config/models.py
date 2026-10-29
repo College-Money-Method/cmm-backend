@@ -76,5 +76,18 @@ class AppConfig(Base):
     # Null = Paul's own address (rules.DEFAULT_NOTIFY_EMAIL).
     paul_booking_notify_email: Mapped[str | None] = mapped_column(Text)
 
+    # College Aid Explorer (see src/colleges): one shared password. scrypt
+    # "salt$hash", never plaintext. Null = the tool is closed to everyone.
+    college_aid_password_hash: Mapped[str | None] = mapped_column(Text)
+    college_aid_password_updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # Where the explorer's "Find your SAI" link points (an outside SAI/FAFSA
+    # calculator). Null = no link is shown.
+    college_aid_sai_calculator_url: Mapped[str | None] = mapped_column(Text)
+
+    # AI assistant chat site (see src/assistant): same shared-password model as
+    # the College Aid Explorer. Null = the assistant is closed to everyone.
+    assistant_password_hash: Mapped[str | None] = mapped_column(Text)
+    assistant_password_updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)

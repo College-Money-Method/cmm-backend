@@ -8,6 +8,7 @@ Import all feature models here so that:
 from src.db.enums import CycleStatus, ProposalType, RegistrationStatus, SalesStatus
 
 from src.app_config.models import AppConfig
+from src.assistant.models import AssistantChunk, AssistantConversation, AssistantMessage
 from src.auth.models import Profile, UserRole
 from src.assets.models import Asset
 from src.guest_contacts.models import GuestContact
@@ -27,6 +28,7 @@ from src.content.models import (
     Topic,
 )
 from src.content.video_caption_models import VideoCaptionRecord
+from src.colleges.models import College, CollegeAidRecord
 from src.cycles.models import Cohort, Cycle
 from src.meetings.models import OneOnOneMeeting
 from src.sales.models import Invoice, Sale
@@ -51,6 +53,9 @@ __all__ = [
     "SalesStatus",
     # Models
     "AppConfig",
+    "AssistantChunk",
+    "AssistantConversation",
+    "AssistantMessage",
     "BedrockUsage",
     "Profile",
     "UserRole",
@@ -58,6 +63,8 @@ __all__ = [
     "Calculator",
     "AssetType",
     "Cohort",
+    "College",
+    "CollegeAidRecord",
     "Contact",
     "GuestContact",
     "ContentAsset",
