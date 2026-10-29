@@ -14,7 +14,12 @@ from sqlalchemy import select
 
 from src.app_config.models import AppConfig
 from src.app_config.operator_settings import reset_vimeo_folder_cache
-from src.app_config.schemas import AppConfigOut, AppConfigUpdate, CollegeAidPasswordIn
+from src.app_config.schemas import (
+    AppConfigOut,
+    AppConfigUpdate,
+    AssistantPasswordIn,
+    CollegeAidPasswordIn,
+)
 from src.auth.deps import AdminDep
 from src.colleges.access_password import hash_password
 from src.db.deps import DbDep
@@ -89,4 +94,30 @@ def clear_college_aid_password(admin: AdminDep, db: DbDep) -> Response:
     cfg.updated_at = now
     db.commit()
     logger.info("college aid password cleared by admin %s", admin.user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/assistant-password", status_code=status.HTTP_204_NO_CONTENT)
+def set_assistant_password(body: AssistantPasswordIn, admin: AdminDep, db: DbDep) -> Response:
+    """Admin: set or rotate the AI assistant password. Rotating voids every issued token."""
+    cfg = _get_or_create(db)
+    now = datetime.now(timezone.utc)
+    cfg.assistant_password_hash = hash_password(body.password)
+    cfg.assistant_password_updated_at = now
+    cfg.updated_at = now
+    db.commit()
+    logger.info("assistant password set by admin %s", admin.user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/assistant-password", status_code=status.HTTP_204_NO_CONTENT)
+def clear_assistant_password(admin: AdminDep, db: DbDep) -> Response:
+    """Admin: clear the password, closing the AI assistant to everyone."""
+    cfg = _get_or_create(db)
+    now = datetime.now(timezone.utc)
+    cfg.assistant_password_hash = None
+    cfg.assistant_password_updated_at = now
+    cfg.updated_at = now
+    db.commit()
+    logger.info("assistant password cleared by admin %s", admin.user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

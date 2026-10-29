@@ -84,5 +84,10 @@ class AppConfig(Base):
     # calculator). Null = no link is shown.
     college_aid_sai_calculator_url: Mapped[str | None] = mapped_column(Text)
 
+    # AI assistant chat site (see src/assistant): same shared-password model as
+    # the College Aid Explorer. Null = the assistant is closed to everyone.
+    assistant_password_hash: Mapped[str | None] = mapped_column(Text)
+    assistant_password_updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)

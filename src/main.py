@@ -38,6 +38,7 @@ import src.emails.automation_models  # noqa: F401
 import src.emails.email_template_models  # noqa: F401
 import src.emails.automation_ledger_models  # noqa: F401
 import src.video_pipeline.models  # noqa: F401
+import src.assistant.models  # noqa: F401
 
 from src.auth.router import router as auth_router
 from src.config import settings
@@ -59,6 +60,8 @@ from src.pages.router import router as pages_router
 from src.calculators.router import router as calculators_router
 from src.app_config.router import router as app_config_router
 from src.colleges.public_router import router as colleges_public_router
+from src.assistant.router import router as assistant_router
+from src.assistant.sync import register_assistant_sync_job
 from src.colleges.admin_router import router as colleges_admin_router
 from src.colleges.admin_edit_router import router as colleges_admin_edit_router
 from src.analytics.router import router as analytics_router
@@ -101,6 +104,7 @@ async def lifespan(app: FastAPI):
     register_video_pipeline_jobs(scheduler)
     register_survey_digest_job(scheduler)
     register_host_digest_job(scheduler)
+    register_assistant_sync_job(scheduler)
     yield
     shutdown_scheduler()
 
@@ -142,6 +146,7 @@ app.include_router(app_config_router)
 app.include_router(colleges_public_router)
 app.include_router(colleges_admin_router)
 app.include_router(colleges_admin_edit_router)
+app.include_router(assistant_router)
 app.include_router(analytics_router)
 app.include_router(analytics_admin_router)
 app.include_router(communications_router)

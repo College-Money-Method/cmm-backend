@@ -129,6 +129,14 @@ class CollegeAidPasswordIn(BaseModel):
     password: str = Field(min_length=8, max_length=200, repr=False)
 
 
+class AssistantPasswordIn(CollegeAidPasswordIn):
+    """PUT body for the AI assistant shared password (same rules, never echoed back)."""
+
+
+# Password flags derived from hash columns; the hashes are never schema fields.
+_DERIVED_FLAGS = {"college_aid_password_set", "assistant_password_set"}
+
+
 class AppConfigOut(BaseModel):
     # This API is public: the password hash is deliberately not a field here,
     # only whether one is set. Keep it that way.
@@ -149,11 +157,13 @@ class AppConfigOut(BaseModel):
     paul_booking_notify_email: str | None
     college_aid_password_updated_at: datetime | None = None
     college_aid_sai_calculator_url: str | None = None
+    assistant_password_updated_at: datetime | None = None
     updated_at: datetime | None
 
     # Derived from the ORM hash column in the before-validator below; the hash
     # itself is never a field of this schema.
     college_aid_password_set: bool = False
+    assistant_password_set: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -163,6 +173,7 @@ class AppConfigOut(BaseModel):
         if isinstance(data, dict):
             return data
         return {
-            **{name: getattr(data, name, None) for name in cls.model_fields if name != "college_aid_password_set"},
+            **{name: getattr(data, name, None) for name in cls.model_fields if name not in _DERIVED_FLAGS},
             "college_aid_password_set": bool(getattr(data, "college_aid_password_hash", None)),
+            "assistant_password_set": bool(getattr(data, "assistant_password_hash", None)),
         }

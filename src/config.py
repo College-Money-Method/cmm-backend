@@ -76,6 +76,19 @@ class Settings(BaseSettings):
     bedrock_sonnet_model_id: str = "us.anthropic.claude-sonnet-4-6"
     bedrock_sonnet_input_usd_per_mtok: float = 3.0
     bedrock_sonnet_output_usd_per_mtok: float = 15.0
+
+    # AI assistant (src/assistant). Its own model ids, so moving the assistant to
+    # a newer Haiku never changes the video/Q&A pipelines tuned on the shared one.
+    # Haiku 5.5 is cheaper, but must be enabled on the AWS account before
+    # ASSISTANT_ANSWER_MODEL_ID / ASSISTANT_ENRICH_MODEL_ID can point at it.
+    assistant_answer_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    assistant_enrich_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # Cohere Embed v4 at 1024 dims; changing model or size means re-embedding
+    # every chunk (the column is vector(1024)).
+    assistant_embed_model_id: str = "cohere.embed-v4:0"
+    # Background re-sync of changed content into assistant_chunks. Off by
+    # default: each changed source costs Bedrock calls.
+    assistant_sync_enabled: bool = False
     # Trailer reels keep only this speaker's sentences, matched against the
     # "Name, Company:" label Zoom puts on each transcript turn.
     trailer_presenter_name: str = "Paul Martin"

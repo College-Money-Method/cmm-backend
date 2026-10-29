@@ -8,6 +8,7 @@ Import all feature models here so that:
 from src.db.enums import CycleStatus, ProposalType, RegistrationStatus, SalesStatus
 
 from src.app_config.models import AppConfig
+from src.assistant.models import AssistantChunk, AssistantConversation, AssistantMessage
 from src.auth.models import Profile, UserRole
 from src.assets.models import Asset
 from src.guest_contacts.models import GuestContact
@@ -52,6 +53,9 @@ __all__ = [
     "SalesStatus",
     # Models
     "AppConfig",
+    "AssistantChunk",
+    "AssistantConversation",
+    "AssistantMessage",
     "BedrockUsage",
     "Profile",
     "UserRole",
