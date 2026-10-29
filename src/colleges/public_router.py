@@ -12,7 +12,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Response
+from sqlalchemy import select
 
+from src.app_config.models import AppConfig
 from src.colleges.access_password import verify_password
 from src.colleges.access_token import (
     CollegeAidAccessDep,
@@ -70,6 +72,7 @@ def list_public(db: DbDep, response: Response) -> CollegeAidListOut:
         generated_at=datetime.now(UTC),
         latest_release_label=max(releases, default=None),
         max_cds_year=max(years, default=None),
+        sai_calculator_url=db.scalar(select(AppConfig.college_aid_sai_calculator_url).limit(1)),
     )
 
 

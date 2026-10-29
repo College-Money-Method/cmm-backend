@@ -172,3 +172,11 @@ def test_public_payload_shape_and_rules(app, client, db):
     assert a["merit_pct_of_coa_in_state"] is None
     assert items["JTS"]["cds_year"] is None
     assert items["JTS"]["pct_need_unmet"] is None
+
+
+def test_public_payload_carries_sai_calculator_url(app, client, db):
+    _admin(app)
+    assert client.get(f"{BASE}/public").json()["sai_calculator_url"] is None
+    db.add(AppConfig(college_aid_sai_calculator_url="https://example.org/sai"))
+    db.commit()
+    assert client.get(f"{BASE}/public").json()["sai_calculator_url"] == "https://example.org/sai"

@@ -57,3 +57,5 @@ class CollegeAidListOut(BaseModel):
     generated_at: datetime
     latest_release_label: str | None
     max_cds_year: str | None
+    # Admin-set "Find your SAI" link (Global Settings); None = no link.
+    sai_calculator_url: str | None = None

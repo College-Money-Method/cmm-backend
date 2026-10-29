@@ -6,6 +6,7 @@ import re
 import uuid
 from datetime import datetime
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -20,7 +21,6 @@ from pydantic import (
 
 from src.paul_booking.hours import validate_weekly_hours
 from src.schools.display_timezone import DisplayTimezoneField
-
 
 # The address of the page an admin is looking at when they pick a folder. The
 # API wants /users/<user>/projects/<folder>, which shares the two ids and
@@ -66,6 +66,28 @@ def validate_optional_email(value: str | None) -> str | None:
 OptionalEmailField = Annotated[str | None, AfterValidator(validate_optional_email)]
 
 
+def validate_optional_web_url(value: str | None) -> str | None:
+    """Blank clears the value; anything else must be an absolute http(s) URL."""
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return None
+    parsed = urlsplit(cleaned)
+    bad = (
+        parsed.scheme.lower() not in ("http", "https")
+        or not parsed.hostname
+        or parsed.username is not None  # no embedded credentials
+        or any(ch.isspace() for ch in cleaned)
+        or len(cleaned) > 2000
+    )
+    if bad:
+        raise ValueError("Enter a full web address starting with https://")
+    return cleaned
+
+
+# Rendered as a link on public pages, so only web schemes (never javascript:).
+OptionalWebUrlField = Annotated[str | None, AfterValidator(validate_optional_web_url)]
+
+
 class AppConfigUpdate(BaseModel):
     """PATCH payload — all fields optional. Pass null to clear a value."""
 
@@ -89,6 +111,8 @@ class AppConfigUpdate(BaseModel):
     paul_booking_weekly_hours: Annotated[dict | None, AfterValidator(validate_weekly_hours)] = None
     # Who gets the review and confirmation emails; blank = Paul's own address.
     paul_booking_notify_email: OptionalEmailField = None
+    # College Aid Explorer "Find your SAI" link; blank hides the link.
+    college_aid_sai_calculator_url: OptionalWebUrlField = None
 
     @field_validator("paul_booking_enabled")
     @classmethod
@@ -124,6 +148,7 @@ class AppConfigOut(BaseModel):
     paul_booking_weekly_hours: dict | None
     paul_booking_notify_email: str | None
     college_aid_password_updated_at: datetime | None = None
+    college_aid_sai_calculator_url: str | None = None
     updated_at: datetime | None
 
     # Derived from the ORM hash column in the before-validator below; the hash
