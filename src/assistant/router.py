@@ -29,7 +29,7 @@ from src.assistant.schemas import (
     AssistantConversationListOut,
     AssistantConversationOut,
 )
-from src.assistant.search import hybrid_search
+from src.assistant.search import hybrid_search, retrieval_query
 from src.colleges.access_password import verify_password
 from src.db.deps import DbDep
 
@@ -102,10 +102,7 @@ def chat(body: AssistantChatIn, user_id: AssistantUserDep, db: DbDep) -> Streami
     if history and history[-1]["role"] == "user":
         history.pop()
 
-    # A follow-up ("what about for divorced parents?") retrieves poorly on its
-    # own; the previous question supplies the subject.
-    previous_question = next((m["content"] for m in reversed(history) if m["role"] == "user"), None)
-    retrieval_text = f"{previous_question}\n{body.message}" if previous_question else body.message
+    retrieval_text = retrieval_query(history, body.message)
     profile = body.profile.model_dump()
     try:
         query_vector = embed_query(retrieval_text)
