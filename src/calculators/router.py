@@ -41,15 +41,15 @@ def list_calculators(_admin: AdminDep, db: DbDep):
 # never parsed as a UUID path parameter.
 @router.get("/public", response_model=list[CalculatorSlugOut])
 def list_published_calculator_slugs(db: DbDep):
-    """Public: published slugs, for sitemap generation and the embed picker."""
+    """Public: published slugs, for sitemap generation, the embed picker and the assistant."""
     rows = db.execute(
-        select(Calculator.slug, Calculator.title, Calculator.updated_at)
+        select(Calculator.slug, Calculator.title, Calculator.type, Calculator.updated_at)
         .where(Calculator.status == "published")
         .order_by(Calculator.slug)
     ).all()
     return [
-        CalculatorSlugOut(slug=slug, title=title, updated_at=updated_at)
-        for slug, title, updated_at in rows
+        CalculatorSlugOut(slug=slug, title=title, type=calc_type, updated_at=updated_at)
+        for slug, title, calc_type, updated_at in rows
     ]
 
 

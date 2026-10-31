@@ -122,6 +122,7 @@ def chat(body: AssistantChatIn, user_id: AssistantUserDep, db: DbDep) -> Streami
             question=body.message,
             chunks=chunks,
             profile=profile,
+            calculator_result=body.calculator_result.model_dump() if body.calculator_result else None,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
