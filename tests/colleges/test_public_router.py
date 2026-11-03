@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.app_config.models import AppConfig
+from src.assistant import access_token as assistant_access
 from src.auth.schemas import CurrentUser
 from src.colleges import public_router
 from src.colleges.access_password import hash_password
@@ -148,6 +149,58 @@ def test_admin_bearer_without_token_200_even_when_closed(app, client, db):
 def test_non_admin_bearer_still_needs_token(app, client, stored):
     _admin(app, role="viewer")
     assert client.get(f"{BASE}/public").status_code == 401
+
+
+# ── assistant access (the explorer in the assistant's side sheet) ────────────
+
+ASSISTANT = assistant_access.TOKEN_HEADER
+
+
+@pytest.fixture
+def assistant_stored(db) -> str:
+    """Assistant and College Aid both open; returns the assistant's password hash."""
+    value = hash_password("assistant-pass-1")
+    db.add(AppConfig(assistant_password_hash=value, college_aid_password_hash=hash_password(PASSWORD)))
+    db.commit()
+    return value
+
+
+def test_assistant_token_unlocks_the_explorer(client, assistant_stored):
+    token, _ = assistant_access.issue_access_token(assistant_stored)
+    assert client.get(f"{BASE}/public", headers={ASSISTANT: token}).status_code == 200
+    resp = client.post(f"{BASE}/public/estimates", json={"sai": 0}, headers={ASSISTANT: token})
+    assert resp.status_code == 200
+
+
+def test_assistant_token_when_college_aid_is_closed_403(client, db, assistant_stored):
+    token, _ = assistant_access.issue_access_token(assistant_stored)
+    db.query(AppConfig).update({"college_aid_password_hash": None})
+    db.commit()
+    resp = client.get(f"{BASE}/public", headers={ASSISTANT: token})
+    assert (resp.status_code, resp.json()["detail"]) == (403, "college_aid_disabled")
+
+
+def test_assistant_token_after_its_password_rotates_401(client, db, assistant_stored):
+    token, _ = assistant_access.issue_access_token(assistant_stored)
+    db.query(AppConfig).update({"assistant_password_hash": hash_password("rotated-pass-9")})
+    db.commit()
+    resp = client.get(f"{BASE}/public", headers={ASSISTANT: token})
+    assert (resp.status_code, resp.json()["detail"]) == (401, "college_aid_token_invalid")
+
+
+def test_tokens_only_work_in_their_own_header(client, db, stored):
+    """A college-aid token is not an assistant token, and the reverse."""
+    db.query(AppConfig).update({"assistant_password_hash": stored})
+    db.commit()
+    college_aid_token, _ = issue_access_token(stored)
+    assistant_token, _ = assistant_access.issue_access_token(stored)
+    assert client.get(f"{BASE}/public", headers={ASSISTANT: college_aid_token}).status_code == 401
+    assert client.get(f"{BASE}/public", headers={TOKEN_HEADER: assistant_token}).status_code == 401
+
+
+def test_assistant_token_when_the_assistant_is_closed_401(client, stored):
+    token, _ = assistant_access.issue_access_token("some-old-hash")
+    assert client.get(f"{BASE}/public", headers={ASSISTANT: token}).status_code == 401
 
 
 # ── read payload ─────────────────────────────────────────────────────────────
