@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from src.assistant.answer import build_system_prompt, source_list, sse
+from src.assistant.answer import CALCULATOR_MARKER, build_system_prompt, calculator_section, source_list, sse
 from src.assistant.search import RRF_K, keyword_query, reciprocal_rank_fusion, retrieval_query
 from src.assistant.sync import embedding_input
 from tests.assistant.conftest import make_chunk
@@ -43,6 +43,22 @@ def test_prompt_asks_one_follow_up_without_personal_data():
     prompt = build_system_prompt([], {"role": "family", "grade": None, "state": None})
     assert "end with one brief follow-up question" in prompt
     assert "Never ask for names, contact details, income or asset figures" in prompt
+
+
+def test_prompt_offers_calculator_marker_and_trusts_results():
+    prompt = build_system_prompt([], {"role": "family", "grade": None, "state": None})
+    assert f"end the answer with this exact line: {CALCULATOR_MARKER}" in prompt
+    assert "only when they ask to update, change or redo their numbers" in prompt
+    assert "never recalculate" in prompt
+    assert "Calculator results:\n(none)" in prompt
+
+
+def test_calculator_section_formats_values():
+    assert calculator_section(None) == "(none)"
+    section = calculator_section(
+        {"type": "fafsa_sai", "values": {"award_year": "2027-28", "sai": -1500.0, "pell_status": "max", "mfs": True}}
+    )
+    assert section == "FAFSA SAI calculator, award year 2027-28:\n- sai: -1500\n- pell_status: max\n- mfs: yes"
 
 
 def test_prompt_carries_profile_and_numbered_sources():

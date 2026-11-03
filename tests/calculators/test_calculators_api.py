@@ -112,6 +112,7 @@ def test_public_slug_list_excludes_drafts(client):
     r = client.get(f"{BASE}/public")
     assert r.status_code == 200
     assert [c["slug"] for c in r.json()] == [PUBLISHED_SLUG]
+    assert set(r.json()[0]) == {"slug", "title", "type", "updated_at"}
 
 
 def test_public_route_not_parsed_as_uuid(client):

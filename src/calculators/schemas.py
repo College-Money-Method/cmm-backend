@@ -96,10 +96,11 @@ class CalculatorOut(BaseModel):
 
 
 class CalculatorSlugOut(BaseModel):
-    """Minimal public shape for sitemap generation and the admin embed picker."""
+    """Minimal public shape for sitemap generation, the admin embed picker and the assistant."""
 
     slug: str
     title: str
+    type: str
     updated_at: datetime | None
 
 

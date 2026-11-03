@@ -72,7 +72,8 @@ class FakeStream:
     def text_stream(self):
         yield from self._parts
 
-    def get_final_message(self):
+    @property
+    def current_message_snapshot(self):
         return SimpleNamespace(usage=SimpleNamespace(input_tokens=900, output_tokens=40))
 
 

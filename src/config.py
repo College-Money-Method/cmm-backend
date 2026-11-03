@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     # Cohere Embed v4 at 1024 dims; changing model or size means re-embedding
     # every chunk (the column is vector(1024)).
     assistant_embed_model_id: str = "cohere.embed-v4:0"
+    # Bedrock on-demand price of Cohere Embed v4 text input; embeddings bill no output.
+    assistant_embed_input_usd_per_mtok: float = 0.12
     # Background re-sync of changed content into assistant_chunks. Off by
     # default: each changed source costs Bedrock calls.
     assistant_sync_enabled: bool = False

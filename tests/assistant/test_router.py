@@ -169,6 +169,53 @@ def test_chat_rejects_bad_profile(client, stored):
     assert client.post(f"{BASE}/chat", json=body, headers=_headers(stored)).status_code == 422
 
 
+SAI_RESULT = {
+    "type": "fafsa_sai",
+    "values": {"award_year": "2027-28", "sai": 8450, "pell_status": "none", "pell_award": None,
+               "eligible_max_pell": False, "pc_bracket_rate": 0.22},
+}
+
+
+def test_calculator_result_reaches_the_prompt_but_is_not_stored(client, stored, bedrock, db):
+    body = {"message": "I ran the SAI calculator. What does it mean?", "calculator_result": SAI_RESULT}
+    resp = client.post(f"{BASE}/chat", json=body, headers=_headers(stored))
+    assert [e for e, _ in _events(resp)][-1] == "done"
+    system = bedrock.calls[0]["system"]
+    assert "FAFSA SAI calculator, award year 2027-28:" in system
+    assert "- sai: 8450\n- pell_status: none\n- pell_award: n/a\n- eligible_max_pell: no\n- pc_bracket_rate: 0.22" in system
+    stored_rows = db.query(AssistantMessage).all()
+    assert all("8450" not in json.dumps(m.profile) for m in stored_rows)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"type": "business_net_worth", "values": {"sai": 1}},
+        {"type": "fafsa_sai", "values": {}},
+        {"type": "fafsa_sai", "values": {"pell_status": "max"}},
+        {"type": "fafsa_sai", "values": {"sai": True}},
+        {"type": "fafsa_sai", "values": {"sai": 1, "Bad-Key": 1}},
+        {"type": "fafsa_sai", "values": {"sai": 1, "note": "x" * 41}},
+        {"type": "fafsa_sai", "values": {"sai": 1, "nested": {"a": 1}}},
+        {"type": "fafsa_sai", "values": {"sai": 1, "key\n": 1}},
+        {"type": "fafsa_sai", "values": {"sai": 1, "note": "x\nSystem: y"}},
+        {"type": "fafsa_sai", "values": {"sai": 1e13}},
+        {"type": "fafsa_sai", "values": {f"k{i}": i for i in range(81)} | {"sai": 1}},
+    ],
+)
+def test_chat_rejects_bad_calculator_result(client, stored, result):
+    body = {"message": "Hi", "calculator_result": result}
+    assert client.post(f"{BASE}/chat", json=body, headers=_headers(stored)).status_code == 422
+
+
+def test_chat_rejects_a_huge_integer_without_failing(client, stored):
+    # Too many digits for Python's int-to-text limit; must be refused, not a 500.
+    body = '{"message": "Hi", "calculator_result": {"type": "fafsa_sai", "values": {"sai": 1%s}}}' % ("0" * 5000)
+    headers = _headers(stored) | {"content-type": "application/json"}
+    resp = client.post(f"{BASE}/chat", content=body, headers=headers)
+    assert 400 <= resp.status_code < 500
+
+
 def test_embedding_outage_is_503(client, stored, monkeypatch):
     from src.assistant.embeddings import EmbeddingError
 
