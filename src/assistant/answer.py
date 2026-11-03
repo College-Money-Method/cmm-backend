@@ -4,15 +4,17 @@ The model sees only the retrieved chunks, numbered, and must cite them as
 ``[n]``; the same numbers go to the browser in the ``meta`` event so citations
 link to the right page. The answer is saved when the stream ends — from a
 session of its own, because the request's session is closed by the time a
-streaming body runs.
+streaming body runs — even when the family has left by then.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import queue
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from src.assistant.models import AssistantConversation, AssistantMessage
@@ -28,6 +30,11 @@ MAX_ANSWER_TOKENS = 1200
 # Prior turns sent with a question: enough for "what about for juniors?" to
 # make sense, small enough to keep the prompt cheap.
 HISTORY_MESSAGES = 6
+# Answers being written at once; more wait their turn. Python lets these finish
+# before the process exits, so a deploy does not cut an answer short.
+_ANSWER_WORKERS = ThreadPoolExecutor(max_workers=16, thread_name_prefix="assistant-answer")
+# Marks the end of an answer's events.
+_END = object()
 
 _GRADE_NAMES = {9: "freshman (9th grade)", 10: "sophomore (10th grade)", 11: "junior (11th grade)", 12: "senior (12th grade)"}
 
@@ -134,9 +141,9 @@ def _save_answer(
 def _reported_tokens(stream) -> tuple[int, int]:
     """(input, output) tokens the model has reported on this stream so far.
 
-    After a full answer this is the bill. After a stop mid-answer (the family
-    pressed stop or closed the tab) input is exact but output is short, since
-    the final output count only arrives with the last event.
+    After a full answer this is the bill. After a Bedrock failure mid-answer
+    input is exact but output is short, since the final output count only
+    arrives with the last event.
     """
     try:
         usage = stream.current_message_snapshot.usage
@@ -154,7 +161,45 @@ def stream_answer(
     profile: dict,
     calculator_result: dict | None = None,
 ) -> Iterator[str]:
-    """Yield ``meta``, then ``delta``s, then ``done`` (or ``error``)."""
+    """Yield ``meta``, then ``delta``s, then ``done`` (or ``error``).
+
+    A worker writes and saves the answer; this only relays its events.
+    The server drops a response when the family leaves (reload, closed tab), so
+    an answer tied to it would be lost from their history but still billed.
+    """
+    events: queue.SimpleQueue = queue.SimpleQueue()
+    _ANSWER_WORKERS.submit(_answer_into, events, conversation_id, history, question, chunks, profile, calculator_result)
+    while (event := events.get()) is not _END:
+        yield event
+
+
+def _answer_into(
+    events: queue.SimpleQueue,
+    conversation_id: uuid.UUID,
+    history: list[dict],
+    question: str,
+    chunks: list[RetrievedChunk],
+    profile: dict,
+    calculator_result: dict | None,
+) -> None:
+    try:
+        for event in _answer_events(conversation_id, history, question, chunks, profile, calculator_result):
+            events.put(event)
+    except Exception:  # noqa: BLE001 - the relay must still end
+        logger.exception("Assistant answer crashed for conversation %s", conversation_id)
+        events.put(sse("error", {"code": "assistant_upstream_error"}))
+    finally:
+        events.put(_END)
+
+
+def _answer_events(
+    conversation_id: uuid.UUID,
+    history: list[dict],
+    question: str,
+    chunks: list[RetrievedChunk],
+    profile: dict,
+    calculator_result: dict | None,
+) -> Iterator[str]:
     sources = source_list(chunks)
     yield sse("meta", {"conversation_id": str(conversation_id), "sources": sources})
 
@@ -173,8 +218,7 @@ def stream_answer(
                     parts.append(text)
                     yield sse("delta", {"text": text})
             finally:
-                # Also runs when the stream fails midway or the response is
-                # closed at a yield: Bedrock bills those answers too.
+                # Also runs when the stream fails midway: Bedrock bills those answers too.
                 tokens = _reported_tokens(stream)
                 bedrock_usage.record(bedrock_usage.ASSISTANT_ANSWER, model, *tokens)
     except Exception as exc:  # noqa: BLE001 - any failure must reach the browser as an event

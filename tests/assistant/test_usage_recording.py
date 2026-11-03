@@ -1,12 +1,14 @@
 """The assistant's Bedrock spend lands in the shared ``bedrock_usage`` ledger,
-which the admin Bedrock spend tab reads: answers (also when stopped midway)
+which the admin Bedrock spend tab reads: answers (also when the family leaves midway)
 and both kinds of embedding."""
 
 from __future__ import annotations
 
 import io
 import json
+import threading
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -37,12 +39,39 @@ def test_a_full_answer_records_its_tokens(bedrock, recorded, monkeypatch):
     assert recorded == [(bedrock_usage.ASSISTANT_ANSWER, settings.assistant_answer_model_id, 900, 40)]
 
 
-def test_a_stopped_answer_is_still_recorded(bedrock, recorded):
+@pytest.fixture
+def saved(monkeypatch):
+    rows: list[tuple] = []
+    done = threading.Event()
+
+    def save(*args):
+        rows.append(args)
+        done.set()
+        return uuid.uuid4()
+
+    monkeypatch.setattr(answer, "_save_answer", save)
+    return SimpleNamespace(rows=rows, done=done)
+
+
+def test_an_answer_left_midway_is_still_finished_saved_and_billed(bedrock, recorded, saved):
     stream = _stream()
     assert next(stream).startswith("event: meta")
     assert next(stream).startswith("event: delta")
-    stream.close()  # what the server does when the family stops or leaves
+    stream.close()  # what the server does when the family reloads or closes the tab
+    assert saved.done.wait(2)
+    assert saved.rows[0][1] == "Usually the parent the student lived with files [1]."
+    assert saved.rows[0][4] == (900, 40)
     assert recorded == [(bedrock_usage.ASSISTANT_ANSWER, settings.assistant_answer_model_id, 900, 40)]
+
+
+def test_a_crashed_answer_still_ends_the_stream_with_an_error(monkeypatch):
+    def crash(*_):
+        raise RuntimeError("boom")
+        yield  # pragma: no cover - makes this a generator
+
+    monkeypatch.setattr(answer, "_answer_events", crash)
+    events = list(_stream())
+    assert len(events) == 1 and events[0].startswith("event: error")
 
 
 def test_an_answer_that_never_started_records_nothing(bedrock, recorded):
