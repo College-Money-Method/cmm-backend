@@ -131,6 +131,20 @@ def _save_answer(
         return message.id
 
 
+def _reported_tokens(stream) -> tuple[int, int]:
+    """(input, output) tokens the model has reported on this stream so far.
+
+    After a full answer this is the bill. After a stop mid-answer (the family
+    pressed stop or closed the tab) input is exact but output is short, since
+    the final output count only arrives with the last event.
+    """
+    try:
+        usage = stream.current_message_snapshot.usage
+    except Exception:  # noqa: BLE001 - no message has started, so nothing is reported
+        return (0, 0)
+    return (usage.input_tokens or 0, usage.output_tokens or 0)
+
+
 def stream_answer(
     *,
     conversation_id: uuid.UUID,
@@ -146,6 +160,7 @@ def stream_answer(
 
     model = settings.assistant_answer_model_id
     parts: list[str] = []
+    tokens = (0, 0)
     try:
         with get_client().messages.stream(
             model=model,
@@ -153,17 +168,20 @@ def stream_answer(
             system=build_system_prompt(chunks, profile, calculator_result),
             messages=[*history, {"role": "user", "content": question}],
         ) as stream:
-            for text in stream.text_stream:
-                parts.append(text)
-                yield sse("delta", {"text": text})
-            usage = stream.get_final_message().usage
+            try:
+                for text in stream.text_stream:
+                    parts.append(text)
+                    yield sse("delta", {"text": text})
+            finally:
+                # Also runs when the stream fails midway or the response is
+                # closed at a yield: Bedrock bills those answers too.
+                tokens = _reported_tokens(stream)
+                bedrock_usage.record(bedrock_usage.ASSISTANT_ANSWER, model, *tokens)
     except Exception as exc:  # noqa: BLE001 - any failure must reach the browser as an event
         logger.warning("Assistant answer failed: %s", exc)
         yield sse("error", {"code": "assistant_upstream_error"})
         return
 
-    tokens = (usage.input_tokens or 0, usage.output_tokens or 0)
-    bedrock_usage.record(bedrock_usage.ASSISTANT_ANSWER, model, *tokens)
     answer = "".join(parts).strip()
     if not answer:
         yield sse("error", {"code": "assistant_empty_answer"})

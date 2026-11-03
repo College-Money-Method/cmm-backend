@@ -38,18 +38,25 @@ TOPIC_SEGMENT = "topic_segment"
 FRAME_CLASSIFY = "frame_classify"
 TRAILER_SELECT = "trailer_select"
 TRAILER_REVISE = "trailer_revise"
-# AI assistant: family-wording questions per chunk (sync) and chat answers.
+# AI assistant. Per chat question: one question embedding and one answer.
+# Per content sync: family-wording questions and one embedding per chunk.
 ASSISTANT_ENRICH = "assistant_enrich"
 ASSISTANT_ANSWER = "assistant_answer"
+ASSISTANT_QUESTION_EMBED = "assistant_question_embed"
+ASSISTANT_CONTENT_EMBED = "assistant_content_embed"
 
 
 def cost_usd(input_tokens: int, output_tokens: int, model_id: str | None = None) -> Decimal:
     """USD for one invocation, from the configured per-1M-token rates.
 
     Priced at the Sonnet rates when `model_id` is the configured Sonnet model,
-    and at the Haiku rates otherwise.
+    at the embedding rate for the assistant's embedding model, and at the Haiku
+    rates otherwise.
     """
-    if model_id == settings.bedrock_sonnet_model_id:
+    if model_id == settings.assistant_embed_model_id:
+        rate_in = settings.assistant_embed_input_usd_per_mtok
+        rate_out = 0.0
+    elif model_id == settings.bedrock_sonnet_model_id:
         rate_in = settings.bedrock_sonnet_input_usd_per_mtok
         rate_out = settings.bedrock_sonnet_output_usd_per_mtok
     else:
