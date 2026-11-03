@@ -187,6 +187,19 @@ def test_calculator_result_reaches_the_prompt_but_is_not_stored(client, stored, 
     assert all("8450" not in json.dumps(m.profile) for m in stored_rows)
 
 
+def test_college_comparison_reaches_the_prompt_but_is_not_stored(client, stored, bedrock, db):
+    college = {"name": "Rice University", "state": "TX", "control": "private", "coa": 87000,
+               "net_low": 21000, "net_high": 24000, "pct_need_met": 1.0}
+    body = {"message": "I compared colleges.", "calculator_result": SAI_RESULT,
+            "college_aid_result": {"colleges": [college]}}
+    resp = client.post(f"{BASE}/chat", json=body, headers=_headers(stored))
+    assert [e for e, _ in _events(resp)][-1] == "done"
+    system = bedrock.calls[0]["system"]
+    assert "- Rice University (TX, private): cost of attendance $87,000; net price after grants $21,000-$24,000/yr" in system
+    assert "- sai: 8450" in system  # both results go together
+    assert all("Rice" not in json.dumps(m.profile) for m in db.query(AssistantMessage).all())
+
+
 @pytest.mark.parametrize(
     "result",
     [

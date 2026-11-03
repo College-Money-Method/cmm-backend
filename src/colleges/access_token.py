@@ -4,6 +4,11 @@ The JWT carries ``aud="college-aid"`` and verification requires it, so SRC
 school tokens (same signing secret, no audience) are never accepted here and
 vice versa. ``pwv`` is a keyed digest of the stored password hash: rotating or
 clearing the password voids every outstanding token on the next request.
+
+A valid assistant token is also let in: the assistant opens the explorer in a
+side sheet, and a family already inside the assistant is not asked for a second
+password. It is checked against the assistant's own audience and password, and
+only while College Aid is open: clearing its password closes the sheet too.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 
 from src.app_config.models import AppConfig
+from src.assistant import access_token as assistant_access
 from src.db.deps import DbDep
 from src.schools.src_session import OptionalUserDep, signing_secret
 
@@ -70,9 +76,16 @@ def require_college_aid_access(
     db: DbDep,
     user: OptionalUserDep,
     token: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
+    assistant_token: Annotated[str | None, Header(alias=assistant_access.TOKEN_HEADER)] = None,
 ) -> None:
-    """Allow a valid access token, or a super_admin bearer (admin preview)."""
+    """Allow a valid access token, an assistant token, or a super_admin bearer (admin preview)."""
     if user is not None and user.role == "super_admin":
+        return
+    if not token and assistant_token:
+        if not assistant_access.verify_access_token(assistant_token, assistant_access.current_password_hash(db)):
+            raise HTTPException(status_code=401, detail="college_aid_token_invalid")
+        if current_password_hash(db) is None:
+            raise HTTPException(status_code=403, detail="college_aid_disabled")
         return
     if not token:
         raise HTTPException(status_code=401, detail="college_aid_token_required")

@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Bounds on a calculator result the browser sends back. The SAI calculator
 # returns about 50 flat fields today; the caps only stop abuse of the prompt.
@@ -15,7 +15,7 @@ CALCULATOR_RESULT_MAX_FIELDS = 80
 CALCULATOR_RESULT_MAX_TEXT = 40
 CALCULATOR_RESULT_MAX_ABS = 1e12
 _CALCULATOR_KEY = re.compile(r"[a-z][a-z0-9_]{0,47}")
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 class AssistantAccessIn(BaseModel):
@@ -73,11 +73,53 @@ class AssistantCalculatorResultIn(BaseModel):
         return values
 
 
+# Dollars a College Aid figure may hold; far above any real cost of attendance.
+_MONEY = {"ge": 0, "le": 1_000_000}
+COLLEGE_AID_RESULT_MAX_COLLEGES = 4
+
+
+class AssistantCollegeAidCollegeIn(BaseModel):
+    """One compared college with the explorer's estimate; null = not enough data."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    state: str = Field(pattern=r"^[A-Z]{2}$")
+    control: Literal["public", "private"]
+    coa: int | None = Field(default=None, **_MONEY)
+    coa_basis: Literal["in_state", "out_of_state"] | None = None
+    net_low: int | None = Field(default=None, **_MONEY)
+    net_high: int | None = Field(default=None, **_MONEY)
+    family_low: int | None = Field(default=None, **_MONEY)
+    family_high: int | None = Field(default=None, **_MONEY)
+    pct_need_met: float | None = Field(default=None, ge=0, le=1)
+
+    @field_validator("name")
+    @classmethod
+    def _one_line(cls, value: str) -> str:
+        if _CONTROL_CHARS.search(value):
+            raise ValueError("college name is not one line")
+        return value.strip()
+
+
+class AssistantCollegeAidResultIn(BaseModel):
+    """Colleges the family compared in the College Aid Explorer, for their own numbers.
+
+    Kept on the device with its conversation and sent with each question, like
+    the calculator result; it is put in the prompt and never stored here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    colleges: list[AssistantCollegeAidCollegeIn] = Field(min_length=1, max_length=COLLEGE_AID_RESULT_MAX_COLLEGES)
+
+
 class AssistantChatIn(BaseModel):
     conversation_id: uuid.UUID | None = None
     message: str = Field(min_length=1, max_length=2000)
     profile: AssistantProfileIn = Field(default_factory=AssistantProfileIn)
     calculator_result: AssistantCalculatorResultIn | None = None
+    college_aid_result: AssistantCollegeAidResultIn | None = None
 
     @field_validator("message")
     @classmethod
