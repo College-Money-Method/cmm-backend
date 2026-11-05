@@ -504,3 +504,27 @@ def test_an_unknown_webinar_is_a_404_on_both_levers(client):
     missing = uuid.uuid4()
     assert client.post(f"{BASE}/webinars/{missing}/resync").status_code == 404
     assert client.post(f"{BASE}/webinars/{missing}/re-extract").status_code == 404
+
+
+# ── assistant knowledge ──────────────────────────────────────────────────────
+
+
+def test_each_row_says_whether_the_assistant_uses_it(client):
+    rows = _by_id(client.get(f"{BASE}/questions", params={"include_noise": True}))
+    # Zoom never said whether this typed reply was public, so it stays out.
+    assert rows[str(TYPED_ID)]["assistant_skip_reason"] == "unknown_visibility"
+    assert rows[str(NOISE_ID)]["assistant_skip_reason"] == "not_a_question"
+    assert rows[str(OTHER_ID)]["assistant_skip_reason"] == "unanswered"
+
+
+def test_an_admin_can_keep_a_question_out_of_the_assistant_and_back(client):
+    url = f"{BASE}/questions/{OVERRIDDEN_ID}"
+    long_answer = "File the FAFSA as early as October 1; state deadlines can come well before the federal one."
+    client.patch(url, json={"answer_text_override": long_answer})
+
+    excluded = client.patch(url, json={"exclude_from_assistant": True}).json()
+    assert (excluded["exclude_from_assistant"], excluded["assistant_skip_reason"]) == (True, "excluded")
+
+    restored = client.patch(url, json={"exclude_from_assistant": False}).json()
+    assert restored["exclude_from_assistant"] is False
+    assert restored["assistant_skip_reason"] != "excluded"

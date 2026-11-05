@@ -202,7 +202,7 @@ def get_question(question_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> QaQuest
 def update_question(
     question_id: uuid.UUID, payload: QaQuestionUpdate, admin: AdminDep, db: DbDep
 ) -> QaQuestionDetail:
-    """Correct an answer, relabel a question, or hide it.
+    """Correct an answer, relabel a question, or keep it out of the assistant.
 
     Writes only the override columns. Zoom's own answer text and the model's
     verdicts stay exactly as they were recorded, so the correction can always be
@@ -222,6 +222,9 @@ def update_question(
                 detail=f"Unknown classification '{label}'",
             )
         question.classification_override = label
+    if changed.get("exclude_from_assistant") is not None:
+        # Reaches the assistant at its next content sync.
+        question.exclude_from_assistant = changed["exclude_from_assistant"]
 
     if changed:
         question.edited_by_user_id = admin.user_id

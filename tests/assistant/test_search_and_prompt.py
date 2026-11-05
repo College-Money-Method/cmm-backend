@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
@@ -18,7 +19,13 @@ from src.assistant.answer import (
     sse,
 )
 from src.assistant.schemas import AssistantCollegeAidResultIn
-from src.assistant.search import RRF_K, keyword_query, reciprocal_rank_fusion, retrieval_query
+from src.assistant.search import (
+    RRF_K,
+    keyword_query,
+    pick_chunks,
+    reciprocal_rank_fusion,
+    retrieval_query,
+)
 from src.assistant.sync import embedding_input
 from tests.assistant.conftest import make_chunk
 
@@ -33,6 +40,25 @@ def test_rrf_rewards_items_on_both_lists():
 
 def test_rrf_empty():
     assert reciprocal_rank_fusion([], []) == {}
+
+
+def _ranked(source_type: str, source_id: uuid.UUID):
+    return replace(make_chunk(), source_type=source_type, source_id=source_id)
+
+
+def test_webinar_answers_leave_room_for_curated_sources():
+    # Six top-ranked webinar answers from three sessions, then curated pages.
+    webinar = [_ranked("webinar_qa", sid) for sid in (uuid.uuid4(), uuid.uuid4(), uuid.uuid4()) for _ in range(2)]
+    curated = [_ranked("topic", uuid.uuid4()) for _ in range(5)]
+    picked = pick_chunks(webinar + curated, 6)
+    assert [c.source_type for c in picked] == ["webinar_qa"] * 2 + ["topic"] * 4
+
+
+def test_one_source_fills_at_most_two_slots():
+    same = uuid.uuid4()
+    ranked = [_ranked("topic", same) for _ in range(3)]
+    other = _ranked("resource", uuid.uuid4())
+    assert pick_chunks([*ranked, other], 6) == [ranked[0], ranked[1], other]
 
 
 def test_keyword_query_ors_words_and_drops_punctuation():

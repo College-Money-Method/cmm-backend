@@ -158,6 +158,11 @@ class WebinarQaQuestion(Base):
     is_hidden: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # An admin's veto on feeding this question to the assistant's knowledge
+    # base. Answered questions go in automatically; this keeps one out.
+    exclude_from_assistant: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     # Supabase ``auth.users(id)``. Not a FK — the rest of the codebase avoids
     # cross-schema foreign keys into the auth schema (see ``UserRole.user_id``).
     edited_by_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)

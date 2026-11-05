@@ -8,7 +8,10 @@ Only content any family could already open goes in:
   restriction rows (restricted resources are school-specific and the chat
   site has no school context yet);
 * workshops (no draft state; their descriptions are already public);
-* FAQs.
+* FAQs;
+* answered live-webinar Q&A that passes ``webinar_qa_eligibility`` — one
+  document per webinar, so the per-source cap in search keeps one busy session
+  from filling every slot. Askers' names never go in.
 
 Each document carries a ``content_hash`` over everything that ends up in its
 chunks, so the sync job re-chunks a source only when something it says changed.
@@ -21,11 +24,19 @@ import json
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import exists, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.assistant.chunking import Section, plain_text, rich_text_sections
+from src.assistant.webinar_qa_eligibility import (
+    MAX_AGE,
+    asked_on,
+    scrub_contact_details,
+    skip_reason,
+)
 from src.content.models import (
     ContentAsset,
     ContentAssetCohort,
@@ -34,12 +45,18 @@ from src.content.models import (
     Faq,
     Topic,
 )
-from src.workshops.models import Workshop
+from src.workshops.models import Webinar, Workshop
+from src.workshops.qa_answer import resolve_answer
+from src.workshops.qa_models import WebinarQaQuestion
+
+# Webinar dates in titles are US dates. Pacific keeps an evening Eastern session
+# on its own day, where UTC would move it to the next one.
+_WEBINAR_TIMEZONE = ZoneInfo("America/Los_Angeles")
 
 
 @dataclass
 class SourceDocument:
-    source_type: str  # "topic" | "resource" | "workshop" | "faq"
+    source_type: str  # "topic" | "resource" | "workshop" | "faq" | "webinar_qa"
     source_id: uuid.UUID
     title: str
     url_path: str | None
@@ -140,7 +157,45 @@ def _faq_documents(db: Session) -> Iterator[SourceDocument]:
             yield SourceDocument("faq", faq.id, question, None, _text_section(None, faq.answer))
 
 
+def _webinar_qa_documents(db: Session) -> Iterator[SourceDocument]:
+    now = datetime.now(UTC)
+    query = (
+        select(WebinarQaQuestion)
+        .where(
+            WebinarQaQuestion.exclude_from_assistant.is_(False),
+            or_(WebinarQaQuestion.asked_at.is_(None), WebinarQaQuestion.asked_at >= now - MAX_AGE),
+        )
+        .options(
+            selectinload(WebinarQaQuestion.extractions),
+            joinedload(WebinarQaQuestion.webinar).joinedload(Webinar.workshop),
+        )
+        .order_by(WebinarQaQuestion.asked_at, WebinarQaQuestion.id)
+    )
+    by_webinar: dict[uuid.UUID, list[WebinarQaQuestion]] = {}
+    for question in db.scalars(query).unique():
+        if skip_reason(question, now) is None:
+            by_webinar.setdefault(question.webinar_id, []).append(question)
+
+    for webinar_id, questions in by_webinar.items():
+        webinar = questions[0].webinar
+        # The workshop topic, not the session name, which lists every host school.
+        name = webinar.workshop.name or webinar.webinar_name
+        held = (webinar.start_datetime or asked_on(questions[0])).astimezone(_WEBINAR_TIMEZONE)
+        sections = [
+            Section(
+                None,
+                scrub_contact_details(
+                    f"Q: {' '.join(q.question_text.split())}\nA: {resolve_answer(q).text.strip()}", q.asker_name
+                ),
+            )
+            for q in questions
+        ]
+        # No link: replays live inside each school's hub.
+        title = f"Webinar Q&A: {name} ({held:%b} {held.day}, {held.year})"
+        yield SourceDocument("webinar_qa", webinar_id, title, None, sections)
+
+
 def load_source_documents(db: Session) -> list[SourceDocument]:
     """Every answerable document, skipping ones with no text at all."""
-    loaders = (_topic_documents, _resource_documents, _workshop_documents, _faq_documents)
+    loaders = (_topic_documents, _resource_documents, _workshop_documents, _faq_documents, _webinar_qa_documents)
     return [doc for load in loaders for doc in load(db) if doc.sections]

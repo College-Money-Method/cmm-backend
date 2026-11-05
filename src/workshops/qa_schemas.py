@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
+from src.assistant.webinar_qa_eligibility import skip_reason
 from src.workshops.qa_answer import resolve_answer, resolve_classification
 from src.workshops.qa_models import WebinarQaAnswerExtraction, WebinarQaQuestion
 
@@ -73,6 +74,10 @@ class QaQuestionSummary(BaseModel):
     # list uses it to decide which answers are worth reading closely.
     resolved_confidence: float | None = None
     extraction_count: int = 0
+    exclude_from_assistant: bool = False
+    # None when the assistant's knowledge base uses this question, else why not
+    # (see ``src.assistant.webinar_qa_eligibility``).
+    assistant_skip_reason: str | None = None
 
 
 class QaQuestionDetail(QaQuestionSummary):
@@ -108,6 +113,7 @@ class QaQuestionUpdate(BaseModel):
 
     answer_text_override: str | None = None
     classification_override: str | None = None
+    exclude_from_assistant: bool | None = None
 
 
 class QaSyncResult(BaseModel):
@@ -137,6 +143,7 @@ def _summary_fields(question: WebinarQaQuestion) -> dict:
         "resolved_end_seconds": answer.end_seconds,
         "resolved_confidence": answer.confidence,
         "extraction_count": len(question.extractions),
+        "assistant_skip_reason": skip_reason(question),
     }
 
 
