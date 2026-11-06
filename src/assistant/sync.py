@@ -6,6 +6,12 @@ source that is gone (unpublished, deleted, newly restricted) has its chunks
 removed. Each source commits on its own, so an interrupted run keeps its
 progress and the next run picks up the rest.
 
+An admin's edit to a webinar's Q&A reindexes that one source straight away
+(``webinar_qa_reindex``), so this run can meet a source that changed after it
+read it. Both paths write a source only under ``lock_source``, and this run
+writes or removes one only if its stored hash is still the one the run started
+from — otherwise the admin's newer copy stands.
+
 Run by hand:   uv run python -m src.assistant.sync [--no-enrich] [--rebuild]
 Scheduled:     nightly when ``ASSISTANT_SYNC_ENABLED`` is true.
 """
@@ -19,7 +25,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
 from src.assistant.chunking import MAX_CHUNK_CHARS, MIN_CHUNK_CHARS, chunk_sections
@@ -29,10 +35,13 @@ from src.assistant.models import AssistantChunk
 from src.assistant.sources import SourceDocument, load_source_documents
 from src.config import settings
 from src.db.base import get_session_factory
+from src.utils import single_writer
 
 logger = logging.getLogger(__name__)
 
 _SYNC_JOB_ID = "assistant_content_sync"
+# Every uvicorn worker runs its own scheduler; one of them does the nightly run.
+_LEADER_LOCK = "assistant-sync"
 # Bedrock Haiku tolerates a few concurrent calls per account comfortably.
 _ENRICH_WORKERS = 4
 
@@ -44,6 +53,8 @@ class SyncResult:
     removed: int = 0
     chunks_written: int = 0
     failed: int = 0
+    # Changed by an admin's reindex while this run was building it; theirs stands.
+    superseded: int = 0
 
 
 def embedding_input(title: str, heading: str | None, text: str, enrichment: str | None) -> str:
@@ -71,7 +82,31 @@ def _stored_hashes(db: Session) -> dict[tuple[str, uuid.UUID], str]:
     return {(t, sid): h for t, sid, h in rows}
 
 
-def _delete_source(db: Session, source_type: str, source_id: uuid.UUID) -> None:
+def stored_hash(db: Session, source_type: str, source_id: uuid.UUID) -> str | None:
+    return db.scalar(
+        select(AssistantChunk.content_hash)
+        .where(AssistantChunk.source_type == source_type, AssistantChunk.source_id == source_id)
+        .limit(1)
+    )
+
+
+def lock_source(db: Session, source_type: str, source_id: uuid.UUID) -> None:
+    """Hold one source's chunks until this transaction ends.
+
+    Two writers replacing the same source at once could both delete and then
+    both insert, leaving every chunk twice, or the one that read older content
+    could commit last. A transaction-scoped advisory lock serialises them and
+    works through a transaction pooler too. SQLite (tests) has no such lock and
+    no concurrent writers, so it is skipped there.
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"assistant_source:{source_type}:{source_id}"},
+        )
+
+
+def delete_source(db: Session, source_type: str, source_id: uuid.UUID) -> None:
     db.execute(
         delete(AssistantChunk).where(
             AssistantChunk.source_type == source_type, AssistantChunk.source_id == source_id
@@ -109,10 +144,23 @@ def _build_chunks(doc: SourceDocument, enrich: bool) -> list[AssistantChunk]:
     ]
 
 
+def _write_chunks(db: Session, doc: SourceDocument, rows: list[AssistantChunk]) -> int:
+    delete_source(db, doc.source_type, doc.source_id)
+    db.add_all(rows)
+    db.commit()
+    return len(rows)
+
+
+def replace_source(db: Session, doc: SourceDocument, enrich: bool) -> int:
+    """Swap a source's chunks for freshly built ones in one commit; returns how many."""
+    return _write_chunks(db, doc, _build_chunks(doc, enrich))
+
+
 def sync_assistant_chunks(db: Session, *, enrich: bool = True, rebuild: bool = False) -> SyncResult:
     """Bring the chunk index in line with published content."""
     result = SyncResult()
-    stored = {} if rebuild else _stored_hashes(db)
+    started_with = _stored_hashes(db)
+    stored = {} if rebuild else started_with
     docs = load_source_documents(db)
     live_keys = {(d.source_type, d.source_id) for d in docs}
 
@@ -122,28 +170,44 @@ def sync_assistant_chunks(db: Session, *, enrich: bool = True, rebuild: bool = F
             result.unchanged += 1
             continue
         try:
+            # Built before taking the lock: enrichment and embedding take seconds
+            # per source, and an admin's reindex should not wait on them.
             rows = _build_chunks(doc, enrich)
+            lock_source(db, *key)
+            if stored_hash(db, *key) != started_with.get(key):
+                db.rollback()
+                result.superseded += 1
+                continue
+            written = _write_chunks(db, doc, rows)
         except Exception:  # noqa: BLE001 - one bad source must not stop the run
             logger.exception("Assistant sync failed for %s %s", doc.source_type, doc.source_id)
+            db.rollback()
             result.failed += 1
             continue
-        _delete_source(db, *key)
-        db.add_all(rows)
-        db.commit()
         result.updated += 1
-        result.chunks_written += len(rows)
+        result.chunks_written += written
 
-    stale = set(_stored_hashes(db)) - live_keys
-    for key in stale:
-        _delete_source(db, *key)
-    db.commit()
-    result.removed = len(stale)
+    # Stale means indexed when the run started and gone from the content it read.
+    # A source indexed since then is not judged against content read before it.
+    for key in set(started_with) - live_keys:
+        lock_source(db, *key)
+        if stored_hash(db, *key) == started_with[key]:
+            delete_source(db, *key)
+            result.removed += 1
+        db.commit()
     logger.info("Assistant sync done: %s", result)
     return result
 
 
 def run_assistant_sync() -> None:
-    """Scheduler entry point: own session, never raises."""
+    """Scheduler entry point: own session, never raises.
+
+    Only one worker per container runs it. Several backend tasks can still run
+    it at once; that only spends their Bedrock calls twice, since every write
+    goes through ``lock_source`` and the hash check above.
+    """
+    if not single_writer.is_leader(_LEADER_LOCK):
+        return
     try:
         with get_session_factory()() as db:
             sync_assistant_chunks(db)

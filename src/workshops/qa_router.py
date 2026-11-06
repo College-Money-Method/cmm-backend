@@ -16,10 +16,11 @@ import logging
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from src.assistant.webinar_qa_reindex import reindex_webinar_qa
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
 from src.workshops.models import Webinar
@@ -200,9 +201,13 @@ def get_question(question_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> QaQuest
 
 @router.patch("/questions/{question_id}", response_model=QaQuestionDetail)
 def update_question(
-    question_id: uuid.UUID, payload: QaQuestionUpdate, admin: AdminDep, db: DbDep
+    question_id: uuid.UUID,
+    payload: QaQuestionUpdate,
+    admin: AdminDep,
+    db: DbDep,
+    background_tasks: BackgroundTasks,
 ) -> QaQuestionDetail:
-    """Correct an answer, relabel a question, or hide it.
+    """Correct an answer, relabel a question, or keep it out of the assistant.
 
     Writes only the override columns. Zoom's own answer text and the model's
     verdicts stay exactly as they were recorded, so the correction can always be
@@ -222,17 +227,25 @@ def update_question(
                 detail=f"Unknown classification '{label}'",
             )
         question.classification_override = label
+    if changed.get("exclude_from_assistant") is not None:
+        question.exclude_from_assistant = changed["exclude_from_assistant"]
 
     if changed:
         question.edited_by_user_id = admin.user_id
         question.edited_at = datetime.now(tz=timezone.utc)
     db.commit()
     db.refresh(question)
+    if changed:
+        # Any of these can change what the assistant says, so its copy of the
+        # webinar is rebuilt now rather than at the next content sync.
+        background_tasks.add_task(reindex_webinar_qa, question.webinar_id)
     return to_detail(question)
 
 
 @router.post("/webinars/{webinar_id}/resync", response_model=QaSyncResult)
-def resync_webinar(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> QaSyncResult:
+def resync_webinar(
+    webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep, background_tasks: BackgroundTasks
+) -> QaSyncResult:
     """Pull the Zoom Q&A report again for one webinar.
 
     Returns ``ok=false`` rather than an error when Zoom has not produced the
@@ -246,6 +259,8 @@ def resync_webinar(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> QaSync
         )
 
     ok = sync_webinar_qa(webinar.zoom_webinar_id, db)
+    if ok:
+        background_tasks.add_task(reindex_webinar_qa, webinar_id)
     count = int(
         db.execute(
             select(func.count())
@@ -262,7 +277,9 @@ def resync_webinar(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> QaSync
 
 
 @router.post("/webinars/{webinar_id}/re-extract", response_model=QaSyncResult)
-def re_extract_webinar(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> QaSyncResult:
+def re_extract_webinar(
+    webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep, background_tasks: BackgroundTasks
+) -> QaSyncResult:
     """Run transcript answer extraction again for one webinar.
 
     Appends a fresh set of verdicts; it never overwrites the old ones or an
@@ -271,6 +288,8 @@ def re_extract_webinar(webinar_id: uuid.UUID, _admin: AdminDep, db: DbDep) -> Qa
     """
     _webinar(db, webinar_id)
     written = extract_answers(db, webinar_id)
+    if written:
+        background_tasks.add_task(reindex_webinar_qa, webinar_id)
     return QaSyncResult(
         webinar_id=webinar_id,
         ok=written > 0,

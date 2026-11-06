@@ -22,6 +22,10 @@ from src.assistant.models import AssistantChunk
 RRF_K = 60
 CANDIDATES_PER_SIDE = 30
 MAX_CHUNKS_PER_SOURCE = 2
+# Source types capped across the whole answer. Webinar Q&A outnumbers the
+# curated content and answers the same questions in many sessions, so uncapped
+# it fills every slot even when a curated page covers the question.
+MAX_CHUNKS_PER_TYPE = {"webinar_qa": 2}
 DEFAULT_TOP_K = 6
 
 _WORD_RE = re.compile(r"[A-Za-z0-9]+")
@@ -106,19 +110,27 @@ def hybrid_search(
         return []
     rows = {c.id: c for c in db.scalars(select(AssistantChunk).where(AssistantChunk.id.in_(scores)))}
 
-    picked: list[RetrievedChunk] = []
+    ranked = [rows[i] for i in sorted(scores, key=scores.get, reverse=True) if i in rows]
+    return [
+        RetrievedChunk(
+            row.id, row.source_type, row.source_id, row.title, row.heading, row.url_path, row.text, scores[row.id]
+        )
+        for row in pick_chunks(ranked, top_k)
+    ]
+
+
+def pick_chunks(ranked: list[AssistantChunk], top_k: int) -> list[AssistantChunk]:
+    """The best ``top_k`` chunks, within the per-source and per-type caps."""
+    picked: list[AssistantChunk] = []
     per_source: dict[uuid.UUID, int] = defaultdict(int)
-    for chunk_id in sorted(scores, key=scores.get, reverse=True):
-        row = rows.get(chunk_id)
-        if row is None or per_source[row.source_id] >= MAX_CHUNKS_PER_SOURCE:
+    per_type: dict[str, int] = defaultdict(int)
+    for row in ranked:
+        type_cap = MAX_CHUNKS_PER_TYPE.get(row.source_type, top_k)
+        if per_source[row.source_id] >= MAX_CHUNKS_PER_SOURCE or per_type[row.source_type] >= type_cap:
             continue
         per_source[row.source_id] += 1
-        picked.append(
-            RetrievedChunk(
-                row.id, row.source_type, row.source_id, row.title, row.heading, row.url_path, row.text,
-                scores[chunk_id],
-            )
-        )
+        per_type[row.source_type] += 1
+        picked.append(row)
         if len(picked) == top_k:
             break
     return picked

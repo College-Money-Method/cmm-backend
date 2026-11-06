@@ -155,6 +155,18 @@ def seeded(qa_sessionmaker):
     return qa_sessionmaker
 
 
+@pytest.fixture(autouse=True)
+def reindexed(monkeypatch) -> list[uuid.UUID]:
+    """Webinars whose assistant chunks a request asked to rebuild.
+
+    The real reindex reaches Bedrock and the app's own database; TestClient
+    runs background tasks before returning, so it is recorded instead.
+    """
+    calls: list[uuid.UUID] = []
+    monkeypatch.setattr(qa_router, "reindex_webinar_qa", calls.append)
+    return calls
+
+
 @pytest.fixture
 def client(seeded):
     def override_get_db():
@@ -504,3 +516,51 @@ def test_an_unknown_webinar_is_a_404_on_both_levers(client):
     missing = uuid.uuid4()
     assert client.post(f"{BASE}/webinars/{missing}/resync").status_code == 404
     assert client.post(f"{BASE}/webinars/{missing}/re-extract").status_code == 404
+
+
+# ── assistant knowledge ──────────────────────────────────────────────────────
+
+
+def test_each_row_says_whether_the_assistant_uses_it(client):
+    rows = _by_id(client.get(f"{BASE}/questions", params={"include_noise": True}))
+    # Zoom never said whether this typed reply was public, so it stays out.
+    assert rows[str(TYPED_ID)]["assistant_skip_reason"] == "unknown_visibility"
+    assert rows[str(NOISE_ID)]["assistant_skip_reason"] == "not_a_question"
+    assert rows[str(OTHER_ID)]["assistant_skip_reason"] == "unanswered"
+
+
+def test_an_admin_can_keep_a_question_out_of_the_assistant_and_back(client):
+    url = f"{BASE}/questions/{OVERRIDDEN_ID}"
+    long_answer = "File the FAFSA as early as October 1; state deadlines can come well before the federal one."
+    client.patch(url, json={"answer_text_override": long_answer})
+
+    excluded = client.patch(url, json={"exclude_from_assistant": True}).json()
+    assert (excluded["exclude_from_assistant"], excluded["assistant_skip_reason"]) == (True, "excluded")
+
+    restored = client.patch(url, json={"exclude_from_assistant": False}).json()
+    assert restored["exclude_from_assistant"] is False
+    assert restored["assistant_skip_reason"] != "excluded"
+
+
+def test_an_edit_rebuilds_the_webinars_assistant_copy(client, reindexed):
+    client.patch(f"{BASE}/questions/{LIVE_ID}", json={"exclude_from_assistant": True})
+    assert reindexed == [WEBINAR_ID]
+
+
+def test_an_empty_edit_rebuilds_nothing(client, reindexed):
+    assert client.patch(f"{BASE}/questions/{LIVE_ID}", json={}).status_code == 200
+    assert reindexed == []
+
+
+def test_re_pulled_or_re_extracted_answers_are_rebuilt_only_when_something_came_in(client, monkeypatch, reindexed):
+    monkeypatch.setattr(qa_router, "sync_webinar_qa", lambda zoom_id, db: False)
+    monkeypatch.setattr(qa_router, "extract_answers", lambda db, webinar_id: 0)
+    client.post(f"{BASE}/webinars/{WEBINAR_ID}/resync")
+    client.post(f"{BASE}/webinars/{WEBINAR_ID}/re-extract")
+    assert reindexed == []
+
+    monkeypatch.setattr(qa_router, "sync_webinar_qa", lambda zoom_id, db: True)
+    monkeypatch.setattr(qa_router, "extract_answers", lambda db, webinar_id: 3)
+    client.post(f"{BASE}/webinars/{WEBINAR_ID}/resync")
+    client.post(f"{BASE}/webinars/{WEBINAR_ID}/re-extract")
+    assert reindexed == [WEBINAR_ID, WEBINAR_ID]
