@@ -155,6 +155,18 @@ def seeded(qa_sessionmaker):
     return qa_sessionmaker
 
 
+@pytest.fixture(autouse=True)
+def reindexed(monkeypatch) -> list[uuid.UUID]:
+    """Webinars whose assistant chunks a request asked to rebuild.
+
+    The real reindex reaches Bedrock and the app's own database; TestClient
+    runs background tasks before returning, so it is recorded instead.
+    """
+    calls: list[uuid.UUID] = []
+    monkeypatch.setattr(qa_router, "reindex_webinar_qa", calls.append)
+    return calls
+
+
 @pytest.fixture
 def client(seeded):
     def override_get_db():
@@ -528,3 +540,27 @@ def test_an_admin_can_keep_a_question_out_of_the_assistant_and_back(client):
     restored = client.patch(url, json={"exclude_from_assistant": False}).json()
     assert restored["exclude_from_assistant"] is False
     assert restored["assistant_skip_reason"] != "excluded"
+
+
+def test_an_edit_rebuilds_the_webinars_assistant_copy(client, reindexed):
+    client.patch(f"{BASE}/questions/{LIVE_ID}", json={"exclude_from_assistant": True})
+    assert reindexed == [WEBINAR_ID]
+
+
+def test_an_empty_edit_rebuilds_nothing(client, reindexed):
+    assert client.patch(f"{BASE}/questions/{LIVE_ID}", json={}).status_code == 200
+    assert reindexed == []
+
+
+def test_re_pulled_or_re_extracted_answers_are_rebuilt_only_when_something_came_in(client, monkeypatch, reindexed):
+    monkeypatch.setattr(qa_router, "sync_webinar_qa", lambda zoom_id, db: False)
+    monkeypatch.setattr(qa_router, "extract_answers", lambda db, webinar_id: 0)
+    client.post(f"{BASE}/webinars/{WEBINAR_ID}/resync")
+    client.post(f"{BASE}/webinars/{WEBINAR_ID}/re-extract")
+    assert reindexed == []
+
+    monkeypatch.setattr(qa_router, "sync_webinar_qa", lambda zoom_id, db: True)
+    monkeypatch.setattr(qa_router, "extract_answers", lambda db, webinar_id: 3)
+    client.post(f"{BASE}/webinars/{WEBINAR_ID}/resync")
+    client.post(f"{BASE}/webinars/{WEBINAR_ID}/re-extract")
+    assert reindexed == [WEBINAR_ID, WEBINAR_ID]

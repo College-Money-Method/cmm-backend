@@ -71,7 +71,7 @@ def _stored_hashes(db: Session) -> dict[tuple[str, uuid.UUID], str]:
     return {(t, sid): h for t, sid, h in rows}
 
 
-def _delete_source(db: Session, source_type: str, source_id: uuid.UUID) -> None:
+def delete_source(db: Session, source_type: str, source_id: uuid.UUID) -> None:
     db.execute(
         delete(AssistantChunk).where(
             AssistantChunk.source_type == source_type, AssistantChunk.source_id == source_id
@@ -109,6 +109,15 @@ def _build_chunks(doc: SourceDocument, enrich: bool) -> list[AssistantChunk]:
     ]
 
 
+def replace_source(db: Session, doc: SourceDocument, enrich: bool) -> int:
+    """Swap a source's chunks for freshly built ones in one commit; returns how many."""
+    rows = _build_chunks(doc, enrich)
+    delete_source(db, doc.source_type, doc.source_id)
+    db.add_all(rows)
+    db.commit()
+    return len(rows)
+
+
 def sync_assistant_chunks(db: Session, *, enrich: bool = True, rebuild: bool = False) -> SyncResult:
     """Bring the chunk index in line with published content."""
     result = SyncResult()
@@ -122,20 +131,18 @@ def sync_assistant_chunks(db: Session, *, enrich: bool = True, rebuild: bool = F
             result.unchanged += 1
             continue
         try:
-            rows = _build_chunks(doc, enrich)
+            written = replace_source(db, doc, enrich)
         except Exception:  # noqa: BLE001 - one bad source must not stop the run
             logger.exception("Assistant sync failed for %s %s", doc.source_type, doc.source_id)
+            db.rollback()
             result.failed += 1
             continue
-        _delete_source(db, *key)
-        db.add_all(rows)
-        db.commit()
         result.updated += 1
-        result.chunks_written += len(rows)
+        result.chunks_written += written
 
     stale = set(_stored_hashes(db)) - live_keys
     for key in stale:
-        _delete_source(db, *key)
+        delete_source(db, *key)
     db.commit()
     result.removed = len(stale)
     logger.info("Assistant sync done: %s", result)

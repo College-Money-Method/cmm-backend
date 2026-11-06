@@ -157,14 +157,17 @@ def _faq_documents(db: Session) -> Iterator[SourceDocument]:
             yield SourceDocument("faq", faq.id, question, None, _text_section(None, faq.answer))
 
 
-def _webinar_qa_documents(db: Session) -> Iterator[SourceDocument]:
+def _webinar_qa_documents(db: Session, webinar_id: uuid.UUID | None = None) -> Iterator[SourceDocument]:
     now = datetime.now(UTC)
+    filters = [
+        WebinarQaQuestion.exclude_from_assistant.is_(False),
+        or_(WebinarQaQuestion.asked_at.is_(None), WebinarQaQuestion.asked_at >= now - MAX_AGE),
+    ]
+    if webinar_id is not None:
+        filters.append(WebinarQaQuestion.webinar_id == webinar_id)
     query = (
         select(WebinarQaQuestion)
-        .where(
-            WebinarQaQuestion.exclude_from_assistant.is_(False),
-            or_(WebinarQaQuestion.asked_at.is_(None), WebinarQaQuestion.asked_at >= now - MAX_AGE),
-        )
+        .where(*filters)
         .options(
             selectinload(WebinarQaQuestion.extractions),
             joinedload(WebinarQaQuestion.webinar).joinedload(Webinar.workshop),
@@ -176,7 +179,7 @@ def _webinar_qa_documents(db: Session) -> Iterator[SourceDocument]:
         if skip_reason(question, now) is None:
             by_webinar.setdefault(question.webinar_id, []).append(question)
 
-    for webinar_id, questions in by_webinar.items():
+    for source_id, questions in by_webinar.items():
         webinar = questions[0].webinar
         # The workshop topic, not the session name, which lists every host school.
         name = webinar.workshop.name or webinar.webinar_name
@@ -192,7 +195,12 @@ def _webinar_qa_documents(db: Session) -> Iterator[SourceDocument]:
         ]
         # No link: replays live inside each school's hub.
         title = f"Webinar Q&A: {name} ({held:%b} {held.day}, {held.year})"
-        yield SourceDocument("webinar_qa", webinar_id, title, None, sections)
+        yield SourceDocument("webinar_qa", source_id, title, None, sections)
+
+
+def webinar_qa_document(db: Session, webinar_id: uuid.UUID) -> SourceDocument | None:
+    """One webinar's Q&A document, or None when none of its answers are usable."""
+    return next((doc for doc in _webinar_qa_documents(db, webinar_id) if doc.sections), None)
 
 
 def load_source_documents(db: Session) -> list[SourceDocument]:
