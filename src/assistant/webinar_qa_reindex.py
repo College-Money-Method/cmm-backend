@@ -12,12 +12,16 @@ from __future__ import annotations
 import logging
 import uuid
 
-from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from src.assistant.models import AssistantChunk
 from src.assistant.sources import webinar_qa_document
-from src.assistant.sync import delete_source, index_hash, replace_source
+from src.assistant.sync import (
+    delete_source,
+    index_hash,
+    lock_source,
+    replace_source,
+    stored_hash,
+)
 from src.db.base import get_session_factory
 
 logger = logging.getLogger(__name__)
@@ -32,11 +36,7 @@ def sync_webinar_qa_chunks(db: Session, webinar_id: uuid.UUID, *, enrich: bool =
     nightly sync, so neither redoes the other's work.
     """
     doc = webinar_qa_document(db, webinar_id)
-    stored = db.scalar(
-        select(AssistantChunk.content_hash)
-        .where(AssistantChunk.source_type == SOURCE_TYPE, AssistantChunk.source_id == webinar_id)
-        .limit(1)
-    )
+    stored = stored_hash(db, SOURCE_TYPE, webinar_id)
     if doc is None:
         # Nothing usable left (say the last answer was excluded): drop what is indexed.
         if stored is None:
@@ -50,25 +50,15 @@ def sync_webinar_qa_chunks(db: Session, webinar_id: uuid.UUID, *, enrich: bool =
     return "updated"
 
 
-def _lock_webinar(db: Session, webinar_id: uuid.UUID) -> None:
-    """Run one reindex per webinar at a time, until this transaction ends.
-
-    Two quick edits start two reindexes. Without the lock both could delete and
-    then insert, leaving every chunk twice, or the slower one could write the
-    older text last. Waiting here means the second run reads the first's result.
-    """
-    if db.get_bind().dialect.name == "postgresql":
-        db.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-            {"key": f"assistant_reindex:{SOURCE_TYPE}:{webinar_id}"},
-        )
-
-
 def reindex_webinar_qa(webinar_id: uuid.UUID) -> None:
-    """Background-task entry point: own session, never raises."""
+    """Background-task entry point: own session, never raises.
+
+    Locks before reading, so two quick edits reindex one after the other and the
+    second reads the first's result; the nightly sync waits on the same lock.
+    """
     try:
         with get_session_factory()() as db:
-            _lock_webinar(db, webinar_id)
+            lock_source(db, SOURCE_TYPE, webinar_id)
             outcome = sync_webinar_qa_chunks(db, webinar_id)
         logger.info("Assistant reindex of webinar %s Q&A: %s", webinar_id, outcome)
     except Exception:  # noqa: BLE001 - the admin's edit is saved; the nightly sync can retry

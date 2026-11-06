@@ -17,6 +17,7 @@ from sqlalchemy.ext.compiler import compiles
 
 from src.assistant import sync
 from src.assistant.models import AssistantChunk
+from src.assistant.sources import webinar_qa_document
 from src.assistant.webinar_qa_reindex import sync_webinar_qa_chunks
 from src.db.base import Base
 from src.workshops.models import Webinar, Workshop
@@ -97,3 +98,68 @@ def test_excluding_the_last_usable_answer_removes_the_webinar(db, question):
     assert sync_webinar_qa_chunks(db, question.webinar_id) == "removed"
     assert _chunk_texts(db, question.webinar_id) == []
     assert sync_webinar_qa_chunks(db, question.webinar_id) == "unchanged"
+
+
+# The nightly sync against the same webinar. Only Q&A tables exist here, so it
+# reads just the webinar Q&A loader's output.
+
+
+def _nightly_reads_only(monkeypatch, webinar_id, reads=None):
+    def load(db):
+        docs = [d for d in [webinar_qa_document(db, webinar_id)] if d is not None]
+        if reads:
+            reads()
+        return docs
+
+    monkeypatch.setattr(sync, "load_source_documents", load)
+
+
+def test_the_nightly_sync_leaves_an_admin_reindex_made_while_it_was_building(db, question, monkeypatch):
+    sync_webinar_qa_chunks(db, question.webinar_id)
+    question.answer_text_override = "Most CSS Profile schools count home equity, read by the nightly sync."
+    db.commit()
+    _nightly_reads_only(monkeypatch, question.webinar_id)
+
+    embed = sync.embed_documents
+    edited = []
+
+    def embed_while_an_admin_edits(texts):
+        if not edited:
+            edited.append(True)
+            question.answer_text_override = "Some schools cap home equity at a multiple of income, saved by the admin mid-run."
+            db.commit()
+            sync_webinar_qa_chunks(db, question.webinar_id)
+        return embed(texts)
+
+    monkeypatch.setattr(sync, "embed_documents", embed_while_an_admin_edits)
+    result = sync.sync_assistant_chunks(db, enrich=False)
+
+    assert result.superseded == 1
+    [text] = _chunk_texts(db, question.webinar_id)
+    assert "Some schools cap home equity at a multiple of income, saved by the admin mid-run." in text
+
+
+def test_the_nightly_sync_keeps_a_webinar_indexed_after_it_read_the_content(db, question, monkeypatch):
+    question.exclude_from_assistant = True
+    db.commit()
+
+    def admin_includes_it_again():
+        question.exclude_from_assistant = False
+        db.commit()
+        sync_webinar_qa_chunks(db, question.webinar_id)
+
+    _nightly_reads_only(monkeypatch, question.webinar_id, reads=admin_includes_it_again)
+    result = sync.sync_assistant_chunks(db)
+
+    assert result.removed == 0
+    assert len(_chunk_texts(db, question.webinar_id)) == 1
+
+
+def test_the_nightly_sync_still_removes_a_webinar_with_nothing_left(db, question, monkeypatch):
+    sync_webinar_qa_chunks(db, question.webinar_id)
+    question.exclude_from_assistant = True
+    db.commit()
+    _nightly_reads_only(monkeypatch, question.webinar_id)
+
+    assert sync.sync_assistant_chunks(db).removed == 1
+    assert _chunk_texts(db, question.webinar_id) == []
