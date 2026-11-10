@@ -37,7 +37,7 @@ def db(qa_db, monkeypatch):
     table = Base.metadata.tables["assistant_chunks"].to_metadata(metadata)
     table.c.search_vector.computed = None
     metadata.create_all(qa_db.get_bind())
-    monkeypatch.setattr(sync, "enrich_chunk", lambda title, heading, text: None)
+    monkeypatch.setattr(sync, "enrich_chunk", lambda title, heading, text, audience: None)
     monkeypatch.setattr(sync, "embed_documents", lambda texts: [[0.0] * 1024 for _ in texts])
     return qa_db
 

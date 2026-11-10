@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import src.main  # noqa: F401  (registers every model so relationship strings resolve)
-from src.assistant import answer, router
+from src.assistant import answer, chat_turn, router
 from src.assistant.search import RetrievedChunk
 from src.db.base import Base
 from src.video_pipeline import bedrock_usage
@@ -97,7 +97,7 @@ def bedrock(monkeypatch, factory):
     monkeypatch.setattr(answer, "get_client", lambda: fake)
     monkeypatch.setattr(answer, "get_session_factory", lambda: factory)
     monkeypatch.setattr(bedrock_usage, "record", lambda *a, **k: None)
-    monkeypatch.setattr(router, "embed_query", lambda text: [0.0] * 1024)
-    monkeypatch.setattr(router, "hybrid_search", lambda db, text, vector, role="family": [make_chunk()])
+    monkeypatch.setattr(chat_turn, "embed_query", lambda text: [0.0] * 1024)
+    monkeypatch.setattr(chat_turn, "hybrid_search", lambda db, text, vector, scope: [make_chunk()])
     monkeypatch.setattr(router, "BAD_PASSWORD_DELAY_SECONDS", 0)
     return fake

@@ -13,6 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, statu
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from src.assistant.resource_chunk_refresh import refresh_resource_chunks
 from src.auth.deps import CurrentUserDep
 from src.config import settings
 from src.content.models import ContentAsset
@@ -143,6 +144,8 @@ def update_submission(
     if obj.review_status == "approved":
         obj.review_status = "draft"
 
+    # An approved submission may already be indexed; out of review, out of the index.
+    refresh_resource_chunks(db, submission_id)
     db.commit()
     return _load_submission(db, submission_id)
 
@@ -161,6 +164,7 @@ def delete_submission(submission_id: uuid.UUID, user: CurrentUserDep, db: DbDep)
         )
 
     db.delete(obj)
+    refresh_resource_chunks(db, submission_id)
     db.commit()
 
 

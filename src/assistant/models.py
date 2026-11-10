@@ -13,7 +13,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, Boolean, Computed, ForeignKey, Index, Integer, Text, Uuid
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, TSVECTOR
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -27,6 +27,9 @@ _SEARCH_VECTOR_SQL = (
     "to_tsvector('english', coalesce(title, '') || ' ' || coalesce(heading, '') || ' ' "
     "|| text || ' ' || coalesce(enrichment, ''))"
 )
+
+# text[] in Postgres; SQLite (tests) has no arrays, so it holds a JSON list.
+_TEXT_LIST = ARRAY(Text).with_variant(JSON(), "sqlite")
 
 
 class AssistantChunk(Base):
@@ -46,6 +49,12 @@ class AssistantChunk(Base):
     enrichment: Mapped[str | None] = mapped_column(Text)
     for_family: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     for_counselor: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Who may see the chunk (ids stored as text). All three empty = everyone;
+    # otherwise a school matching any one of them sees it. Kept out of
+    # ``content_hash`` so a scope edit never re-embeds.
+    scope_school_ids: Mapped[list[str]] = mapped_column(_TEXT_LIST, nullable=False, default=list, server_default="{}")
+    scope_cohort_ids: Mapped[list[str]] = mapped_column(_TEXT_LIST, nullable=False, default=list, server_default="{}")
+    scope_states: Mapped[list[str]] = mapped_column(_TEXT_LIST, nullable=False, default=list, server_default="{}")
     # Hash of the whole source document; a change re-chunks the source.
     content_hash: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSIONS), nullable=False)
@@ -71,7 +80,10 @@ class AssistantConversation(Base):
     __tablename__ = "assistant_conversations"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    # Random UUID the browser keeps in a cookie; the only link to a person.
+    # Which assistant this chat belongs to; each endpoint reads and writes only its own.
+    audience: Mapped[str] = mapped_column(Text, nullable=False, default="family", server_default="family")
+    # Device id (family): a random UUID the browser keeps in a cookie, the only
+    # link to a person. Supabase user id (counselor).
     local_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
@@ -84,7 +96,9 @@ class AssistantConversation(Base):
         passive_deletes=True,
     )
 
-    __table_args__ = (Index("idx_assistant_conversations_user", "local_user_id", "updated_at"),)
+    __table_args__ = (
+        Index("idx_assistant_conversations_owner", "audience", "local_user_id", "updated_at"),
+    )
 
 
 class AssistantMessage(Base):

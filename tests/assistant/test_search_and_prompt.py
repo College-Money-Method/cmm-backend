@@ -8,15 +8,14 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
-from src.assistant.answer import (
+from src.assistant.answer import source_list, sse
+from src.assistant.family_prompt import build_family_prompt
+from src.assistant.prompt_tool_sections import (
     CALCULATOR_MARKER,
     COLLEGE_AID_ANYWHERE_MARKER,
     COLLEGE_AID_MARKER,
-    build_system_prompt,
     calculator_section,
     college_aid_section,
-    source_list,
-    sse,
 )
 from src.assistant.schemas import AssistantCollegeAidResultIn
 from src.assistant.search import (
@@ -79,13 +78,13 @@ def test_retrieval_query_keeps_subject_through_a_clarifying_round():
 
 
 def test_prompt_asks_one_follow_up_without_personal_data():
-    prompt = build_system_prompt([], {"role": "family", "grade": None, "state": None})
+    prompt = build_family_prompt([], {"grade": None, "state": None})
     assert "end with one brief follow-up question" in prompt
     assert "Never ask for names, contact details, income or asset figures" in prompt
 
 
 def test_prompt_offers_calculator_marker_and_trusts_results():
-    prompt = build_system_prompt([], {"role": "family", "grade": None, "state": None})
+    prompt = build_family_prompt([], {"grade": None, "state": None})
     assert f"end the answer with this exact line: {CALCULATOR_MARKER}" in prompt
     assert "only when they ask to update, change or redo their numbers" in prompt
     assert "never recalculate" in prompt
@@ -101,7 +100,7 @@ def test_calculator_section_formats_values():
 
 
 def test_prompt_asks_where_they_apply_then_offers_the_explorer():
-    prompt = build_system_prompt([], {"role": "family", "grade": None, "state": "CA"})
+    prompt = build_family_prompt([], {"grade": None, "state": "CA"})
     assert "is where they live (it decides in-state tuition), not where they will apply" in prompt
     assert "which states or part of the country they are planning to apply to (anywhere is fine too)" in prompt
     assert COLLEGE_AID_MARKER in prompt and f"If any state is fine, use {COLLEGE_AID_ANYWHERE_MARKER}" in prompt
@@ -145,15 +144,16 @@ def test_college_aid_result_is_strictly_bounded(bad):
 
 def test_prompt_carries_profile_and_numbered_sources():
     chunks = [make_chunk(), make_chunk(title="CSS Profile", heading=None, url=None)]
-    prompt = build_system_prompt(chunks, {"role": "family", "grade": 11, "state": "TX"})
+    prompt = build_family_prompt(chunks, {"grade": 11, "state": "TX"})
     assert "a parent or student of a junior (11th grade), in TX." in prompt
     assert "[1] Divorced and Separated Parents — Who files" in prompt
     assert "[2] CSS Profile\n" in prompt
 
 
-def test_prompt_for_counselor_and_no_sources():
-    prompt = build_system_prompt([], {"role": "counselor", "grade": None, "state": None})
-    assert "high school counselors" in prompt and "a high school counselor." in prompt
+def test_prompt_is_family_only_and_handles_no_sources():
+    prompt = build_family_prompt([], {"grade": None, "state": None})
+    assert "help families understand" in prompt and "a parent or student." in prompt
+    assert "high school counselor" not in prompt
     assert "(no sources matched this question)" in prompt
 
 

@@ -338,6 +338,8 @@ class ContentAssetDetail(BaseModel):
     file_url: CdnUrl
     is_featured: bool
     is_public: bool = False
+    for_family: bool = True
+    for_counselor: bool = True
     status: str
     wp_post_id: str | None
     wp_synced_at: datetime | None
@@ -403,6 +405,9 @@ class ContentAssetCreate(BaseModel):
     image_url: CdnUrl = None
     is_featured: bool = False
     is_public: bool = False
+    # Who may see it: families (public pages, family assistant) and/or counselors.
+    for_family: bool = True
+    for_counselor: bool = True
     status: str = "draft"
     wp_post_id: str | None = None
     why_important: str | None = None
@@ -435,6 +440,8 @@ class ContentAssetUpdate(BaseModel):
     image_url: CdnUrl = None
     is_featured: bool | None = None
     is_public: bool | None = None
+    for_family: bool | None = None
+    for_counselor: bool | None = None
     status: str | None = None
     wp_post_id: str | None = None
     video_duration_seconds: int | None = None
@@ -448,6 +455,14 @@ class ContentAssetUpdate(BaseModel):
     @classmethod
     def normalize_grades(cls, v: str | None) -> str | None:
         return _normalize_suggested_grades(v)
+
+    @field_validator("for_family", "for_counselor")
+    @classmethod
+    def audience_flag_not_null(cls, v: bool | None) -> bool | None:
+        # The columns are NOT NULL; omit the field to leave it unchanged.
+        if v is None:
+            raise ValueError("must be true or false")
+        return v
 
     @field_validator("status")
     @classmethod

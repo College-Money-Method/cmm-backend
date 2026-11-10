@@ -30,7 +30,6 @@ class AssistantAccessOut(BaseModel):
 class AssistantProfileIn(BaseModel):
     """Who is asking — kept in the browser, sent per question, never tied to a name."""
 
-    role: Literal["family", "counselor"] = "family"
     grade: int | None = Field(default=None, ge=9, le=12)
     state: str | None = Field(default=None, pattern=r"^[A-Za-z]{2}$")
 
@@ -120,6 +119,9 @@ class AssistantChatIn(BaseModel):
     profile: AssistantProfileIn = Field(default_factory=AssistantProfileIn)
     calculator_result: AssistantCalculatorResultIn | None = None
     college_aid_result: AssistantCollegeAidResultIn | None = None
+    # Only honoured with staff credentials or a valid resource-center session
+    # for that school; see ``family_school_scope``.
+    school_id: uuid.UUID | None = None
 
     @field_validator("message")
     @classmethod

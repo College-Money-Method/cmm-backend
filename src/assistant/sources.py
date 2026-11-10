@@ -4,11 +4,12 @@ Only content any family could already open goes in:
 
 * topics with ``status='published'``;
 * resources (``content_assets``) that are published, either CMM-authored or
-  counselor submissions an admin approved, and carry no cohort/state/school
-  restriction rows (restricted resources are school-specific and the chat
-  site has no school context yet);
+  counselor submissions an admin approved. Restricted ones are indexed too,
+  carrying their school/cohort/state scope so retrieval shows them only to a
+  matching school;
 * workshops (no draft state; their descriptions are already public);
 * FAQs;
+* counselor email templates (``counselor_sources``), counselor-only;
 * answered live-webinar Q&A that passes ``webinar_qa_eligibility`` — one
   document per webinar, so the per-source cap in search keeps one busy session
   from filling every slot. Askers' names never go in.
@@ -27,10 +28,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.assistant.chunking import Section, plain_text, rich_text_sections
+from src.assistant.retrieval_scope import ChunkScope
 from src.assistant.webinar_qa_eligibility import (
     MAX_AGE,
     asked_on,
@@ -39,9 +41,6 @@ from src.assistant.webinar_qa_eligibility import (
 )
 from src.content.models import (
     ContentAsset,
-    ContentAssetCohort,
-    ContentAssetSchool,
-    ContentAssetState,
     Faq,
     Topic,
 )
@@ -56,13 +55,16 @@ _WEBINAR_TIMEZONE = ZoneInfo("America/Los_Angeles")
 
 @dataclass
 class SourceDocument:
-    source_type: str  # "topic" | "resource" | "workshop" | "faq" | "webinar_qa"
+    source_type: str  # "topic" | "resource" | "workshop" | "faq" | "webinar_qa" | "template"
     source_id: uuid.UUID
     title: str
     url_path: str | None
     sections: list[Section] = field(default_factory=list)
     for_family: bool = True
     for_counselor: bool = True
+    # Who may see the chunks. Deliberately not in ``content_hash``: a scope
+    # change is patched onto the stored chunks without re-embedding them.
+    scope: ChunkScope = field(default_factory=ChunkScope)
 
     @property
     def content_hash(self) -> str:
@@ -102,39 +104,50 @@ def _topic_documents(db: Session) -> Iterator[SourceDocument]:
         yield SourceDocument("topic", topic.id, topic.title, f"/topic/{topic.slug}", sections)
 
 
-def _resource_documents(db: Session) -> Iterator[SourceDocument]:
-    restricted = or_(
-        exists().where(ContentAssetCohort.content_asset_id == ContentAsset.id),
-        exists().where(ContentAssetState.content_asset_id == ContentAsset.id),
-        exists().where(ContentAssetSchool.content_asset_id == ContentAsset.id),
+def indexable_resource():
+    """SQL predicate: a resource the assistant may quote (published and, for
+    counselor submissions, admin-approved). Shared with the instant refresh so
+    both agree on what belongs in the index."""
+    return (ContentAsset.status == "published") & or_(
+        ContentAsset.source == "cmm", ContentAsset.review_status == "approved"
     )
+
+
+def resource_document(asset: ContentAsset) -> SourceDocument:
+    sections = [
+        *_text_section(None, asset.description),
+        *_text_section("What you'll learn", asset.summary),
+        *_text_section("Why it matters", asset.why_important),
+        *_text_section("How to use it", asset.how_to_use),
+        *rich_text_sections(asset.content),
+        *_list_section("What to do next", asset.action_items),
+    ]
+    return SourceDocument(
+        "resource",
+        asset.id,
+        asset.name,
+        # Counselor-only resources have no public page to link to.
+        f"/resources/{asset.id}" if asset.for_family else None,
+        sections,
+        for_family=asset.for_family,
+        for_counselor=asset.for_counselor,
+        scope=ChunkScope.from_asset(asset),
+    )
+
+
+def _resource_documents(db: Session) -> Iterator[SourceDocument]:
     query = (
         select(ContentAsset)
-        .where(
-            ContentAsset.status == "published",
-            or_(ContentAsset.source == "cmm", ContentAsset.review_status == "approved"),
-            ~restricted,
+        .where(indexable_resource())
+        .options(
+            selectinload(ContentAsset.schools),
+            selectinload(ContentAsset.cohorts),
+            selectinload(ContentAsset.state_rows),
         )
         .order_by(ContentAsset.name)
     )
     for asset in db.scalars(query):
-        sections = [
-            *_text_section(None, asset.description),
-            *_text_section("What you'll learn", asset.summary),
-            *_text_section("Why it matters", asset.why_important),
-            *_text_section("How to use it", asset.how_to_use),
-            *rich_text_sections(asset.content),
-            *_list_section("What to do next", asset.action_items),
-        ]
-        yield SourceDocument(
-            "resource",
-            asset.id,
-            asset.name,
-            f"/resources/{asset.id}",
-            sections,
-            for_family=asset.for_family,
-            for_counselor=asset.for_counselor,
-        )
+        yield resource_document(asset)
 
 
 def _workshop_documents(db: Session) -> Iterator[SourceDocument]:
@@ -205,5 +218,19 @@ def webinar_qa_document(db: Session, webinar_id: uuid.UUID) -> SourceDocument | 
 
 def load_source_documents(db: Session) -> list[SourceDocument]:
     """Every answerable document, skipping ones with no text at all."""
-    loaders = (_topic_documents, _resource_documents, _workshop_documents, _faq_documents, _webinar_qa_documents)
+    # Imported here: counselor_sources builds on this module's SourceDocument.
+    from src.assistant.counselor_sources import (
+        communication_template_documents,
+        workshop_email_template_documents,
+    )
+
+    loaders = (
+        _topic_documents,
+        _resource_documents,
+        _workshop_documents,
+        _faq_documents,
+        _webinar_qa_documents,
+        communication_template_documents,
+        workshop_email_template_documents,
+    )
     return [doc for load in loaders for doc in load(db) if doc.sections]
