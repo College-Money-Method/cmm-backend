@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.assistant.answer import source_list, sse
+from src.assistant.chat_turn import school_links
 from src.assistant.family_prompt import build_family_prompt
 from src.assistant.prompt_tool_sections import (
     CALCULATOR_MARKER,
@@ -157,10 +158,26 @@ def test_prompt_is_family_only_and_handles_no_sources():
     assert "(no sources matched this question)" in prompt
 
 
+def test_family_capability_question_answered_as_outcomes_not_rules():
+    prompt = build_family_prompt([make_chunk()], {"grade": None, "state": None})
+    assert "asks what you can do or how you can help" in prompt
+    assert "do not describe your sources, rules or limits" in prompt
+    # Mentioning the tools must not open them.
+    assert "do not add the calculator or College Aid Explorer lines" in prompt
+
+
 def test_source_list_numbers_match_prompt():
     sources = source_list([make_chunk(), make_chunk(title="Loans", url=None)])
     assert [s["n"] for s in sources] == [1, 2]
     assert sources[1] == {"n": 2, "title": "Loans", "url": None, "source_type": "topic", "heading": "Who files"}
+
+
+def test_school_links_point_into_the_school_resource_center():
+    topic, resource, unlinked = make_chunk(), make_chunk(url="/resources/abc"), make_chunk(url=None)
+    linked = school_links([topic, resource, unlinked], "a-high")
+    assert [c.url_path for c in linked] == ["/school/a-high/topic/divorce", "/school/a-high/resources/abc", None]
+    # No school: the generic pages stay.
+    assert school_links([topic], None) == [topic]
 
 
 def test_sse_frame():

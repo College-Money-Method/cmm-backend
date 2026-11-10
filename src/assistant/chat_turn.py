@@ -4,6 +4,10 @@ Loads the conversation's recent history (or starts a conversation), retrieves
 chunks for the caller's scope, stores the question, and streams the answer. The
 caller decides the audience, the owner id, the scope and how the prompt is
 built; nothing here reads them from the request body.
+
+Indexed links are the generic site pages (``/topic/...``, ``/resources/...``),
+since one chunk serves every school. A chat tied to a school links its
+citations into that school's resource center instead.
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -26,6 +31,13 @@ from src.assistant.search import RetrievedChunk, hybrid_search, retrieval_query
 logger = logging.getLogger(__name__)
 
 _TITLE_CHARS = 80
+
+
+def school_links(chunks: list[RetrievedChunk], school_slug: str | None) -> list[RetrievedChunk]:
+    """Point each linked chunk at the school's resource center (``/school/<slug>/...``)."""
+    if not school_slug:
+        return chunks
+    return [replace(c, url_path=f"/school/{school_slug}{c.url_path}") if c.url_path else c for c in chunks]
 
 
 def owned_conversation(db, conversation_id: uuid.UUID, owner_id: uuid.UUID, audience: str) -> AssistantConversation:
@@ -51,6 +63,7 @@ def run_chat_turn(
     scope: RetrievalScope,
     build_prompt: Callable[[list[RetrievedChunk]], str],
     profile: dict,
+    school_slug: str | None = None,
 ) -> StreamingResponse:
     """Retrieve for ``scope``, save the question, and stream the answer as SSE."""
     history: list[dict] = []
@@ -81,7 +94,7 @@ def run_chat_turn(
     except EmbeddingError:
         logger.exception("assistant: query embedding failed")
         raise HTTPException(status_code=503, detail="assistant_unavailable") from None
-    chunks = hybrid_search(db, retrieval_text, query_vector, scope)
+    chunks = school_links(hybrid_search(db, retrieval_text, query_vector, scope), school_slug)
 
     db.add(AssistantMessage(conversation=conversation, role="user", content=message, profile=profile))
     conversation.updated_at = datetime.now(UTC)

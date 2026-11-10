@@ -51,3 +51,9 @@ def test_never_claims_sent_and_points_to_communications():
     prompt = _prompt()
     assert "paste it into Communications" in prompt
     assert "Never claim that anything was sent, saved" in prompt
+
+
+def test_capability_question_answered_as_outcomes_not_rules():
+    prompt = _prompt()
+    assert "asks what you can do or how you can help" in prompt
+    assert "do not describe your sources, rules or limits" in prompt
