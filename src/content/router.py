@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.orm import contains_eager, selectinload
 
+from src.assistant.resource_chunk_refresh import refresh_resource_chunks
 from src.auth.deps import AdminDep
 from src.content.models import (
     AssetType,
@@ -1298,6 +1299,7 @@ def update_asset(asset_id: uuid.UUID, body: ContentAssetUpdate, _admin: AdminDep
     ]))
     obj.read_time_minutes = _calculate_read_time(obj.content, obj.summary)
     obj.video_duration_seconds = _extract_video_duration(obj.embed_code)
+    refresh_resource_chunks(db, asset_id)
     db.commit()
     return _load_asset_detail(db, asset_id)
 
@@ -1308,6 +1310,7 @@ def delete_asset(asset_id: uuid.UUID, _admin: AdminDep, db: DbDep):
     if not obj:
         raise HTTPException(status_code=404, detail="Content asset not found")
     db.delete(obj)
+    refresh_resource_chunks(db, asset_id)
     db.commit()
 
 
@@ -1317,6 +1320,7 @@ def publish_asset(asset_id: uuid.UUID, _admin: AdminDep, db: DbDep):
     if not obj:
         raise HTTPException(status_code=404, detail="Content asset not found")
     obj.status = "published"
+    refresh_resource_chunks(db, asset_id)
     db.commit()
     return _load_asset_detail(db, asset_id)
 
@@ -1327,6 +1331,7 @@ def unpublish_asset(asset_id: uuid.UUID, _admin: AdminDep, db: DbDep):
     if not obj:
         raise HTTPException(status_code=404, detail="Content asset not found")
     obj.status = "draft"
+    refresh_resource_chunks(db, asset_id)
     db.commit()
     return _load_asset_detail(db, asset_id)
 
@@ -1463,6 +1468,7 @@ def update_asset_cohorts(asset_id: uuid.UUID, body: RelationshipsUpdate, _admin:
     db.query(ContentAssetCohort).filter_by(content_asset_id=asset_id).delete()
     for cid in body.ids:
         db.add(ContentAssetCohort(content_asset_id=asset_id, cohort_id=cid))
+    refresh_resource_chunks(db, asset_id)
     db.commit()
     return _load_asset_detail(db, asset_id)
 
@@ -1479,6 +1485,7 @@ def update_asset_states(asset_id: uuid.UUID, body: StateListUpdate, _admin: Admi
         if code and code not in seen:
             seen.add(code)
             db.add(ContentAssetState(content_asset_id=asset_id, state=code))
+    refresh_resource_chunks(db, asset_id)
     db.commit()
     return _load_asset_detail(db, asset_id)
 
@@ -1491,6 +1498,7 @@ def update_asset_schools(asset_id: uuid.UUID, body: RelationshipsUpdate, _admin:
     db.query(ContentAssetSchool).filter_by(content_asset_id=asset_id).delete()
     for sid in body.ids:
         db.add(ContentAssetSchool(content_asset_id=asset_id, school_id=sid))
+    refresh_resource_chunks(db, asset_id)
     db.commit()
     return _load_asset_detail(db, asset_id)
 
@@ -1970,6 +1978,7 @@ def approve_submission(
     obj.for_counselor = body.for_counselor
     if body.review_notes is not None:
         obj.review_notes = body.review_notes
+    refresh_resource_chunks(db, submission_id)
     db.commit()
 
     stmt = (
@@ -1991,6 +2000,7 @@ def reject_submission(
 
     obj.review_status = "rejected"
     obj.review_notes = body.review_notes
+    refresh_resource_chunks(db, submission_id)
     db.commit()
 
     stmt = (

@@ -28,7 +28,7 @@ def recorded(monkeypatch):
 def _stream(**overrides):
     return answer.stream_answer(
         conversation_id=uuid.uuid4(), history=[], question="Who files?", chunks=[make_chunk()], profile={},
-        **overrides,
+        system_prompt="prompt", **overrides,
     )
 
 

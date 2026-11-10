@@ -1,10 +1,11 @@
-"""Family-wording questions per chunk, written once at sync time by Haiku.
+"""Questions per chunk in the reader's own wording, written once at sync time by Haiku.
 
 Content is written in financial-aid vocabulary ("noncustodial parent",
 "Student Aid Index"); families ask in their own ("we're divorced", "what will
 we have to pay"). Storing a few such questions next to each chunk puts both
 vocabularies into the keyword index and the embedding, so either wording finds
-the chunk. A failed call leaves the chunk unenriched rather than failing sync.
+the chunk. Counselor-only content gets questions in a counselor's wording
+instead. A failed call leaves the chunk unenriched rather than failing sync.
 """
 
 from __future__ import annotations
@@ -27,13 +28,27 @@ passage. Questions only; no answers.
 
 Reply with JSON only: {"questions": ["...", "..."]}"""
 
+_COUNSELOR_SYSTEM = """You help a college-financing education site match high school counselor requests to its content.
 
-def enrich_chunk(title: str, heading: str | None, text: str) -> str | None:
+Given one passage (a resource, a note or an email template for counselors), write
+4-6 short questions or requests that a high school counselor might type into a
+chat box, which this passage answers. Think of what a counselor needs to do:
+what to send families and when, how to explain something to a parent, what to
+announce before a workshop, what to say after one. Use plain, everyday wording
+(e.g. "email to send families before the FAFSA night"). Do not copy sentences
+from the passage. Questions only; no answers.
+
+Reply with JSON only: {"questions": ["...", "..."]}"""
+
+_SYSTEM_BY_AUDIENCE = {"family": _SYSTEM, "counselor": _COUNSELOR_SYSTEM}
+
+
+def enrich_chunk(title: str, heading: str | None, text: str, audience: str = "family") -> str | None:
     """Newline-joined questions this chunk answers, or None if the call failed."""
     passage = f"Page: {title}\nSection: {heading or '(intro)'}\n\n{text}"
     try:
         parsed, _, _ = call_json(
-            system=_SYSTEM,
+            system=_SYSTEM_BY_AUDIENCE[audience],
             content=passage,
             invoke_type=bedrock_usage.ASSISTANT_ENRICH,
             max_tokens=400,

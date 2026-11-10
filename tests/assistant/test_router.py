@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.app_config.models import AppConfig
-from src.assistant import router
+from src.assistant import chat_turn, router
 from src.assistant.access_token import TOKEN_HEADER, USER_ID_HEADER, issue_access_token, verify_access_token
 from src.assistant.models import AssistantConversation, AssistantMessage
 from src.colleges import access_token as college_token
@@ -60,7 +60,7 @@ def _events(resp) -> list[tuple[str, dict]]:
 
 
 def _ask(client, headers, message="We're divorced. Who fills out the FAFSA?", conversation_id=None):
-    body = {"message": message, "profile": {"role": "family", "grade": 11, "state": "tx"}}
+    body = {"message": message, "profile": {"grade": 11, "state": "tx"}}
     if conversation_id:
         body["conversation_id"] = conversation_id
     return client.post(f"{BASE}/chat", json=body, headers=headers)
@@ -129,7 +129,7 @@ def test_chat_streams_and_saves_both_turns(client, stored, db, bedrock):
     assert convo.title == "We're divorced. Who fills out the FAFSA?"
     messages = db.query(AssistantMessage).order_by(AssistantMessage.created_at).all()
     assert [m.role for m in messages] == ["user", "assistant"]
-    assert messages[0].profile == {"role": "family", "grade": 11, "state": "TX"}
+    assert messages[0].profile == {"grade": 11, "state": "TX", "school_id": None}
     assert messages[1].content == "Usually the parent the student lived with files [1]."
     assert str(messages[1].id) == events[-1][1]["message_id"]
     assert (messages[1].input_tokens, messages[1].output_tokens) == (900, 40)
@@ -165,7 +165,7 @@ def test_chat_rejects_blank_and_overlong_messages(client, stored):
 
 
 def test_chat_rejects_bad_profile(client, stored):
-    body = {"message": "Hi", "profile": {"role": "family", "grade": 8}}
+    body = {"message": "Hi", "profile": {"grade": 8}}
     assert client.post(f"{BASE}/chat", json=body, headers=_headers(stored)).status_code == 422
 
 
@@ -235,7 +235,7 @@ def test_embedding_outage_is_503(client, stored, monkeypatch):
     def boom(text):
         raise EmbeddingError("down")
 
-    monkeypatch.setattr(router, "embed_query", boom)
+    monkeypatch.setattr(chat_turn, "embed_query", boom)
     resp = _ask(client, _headers(stored))
     assert resp.status_code == 503 and resp.json()["detail"] == "assistant_unavailable"
 

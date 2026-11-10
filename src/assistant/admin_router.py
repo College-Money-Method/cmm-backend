@@ -10,17 +10,27 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 
+from src.assistant.admin_chunk_scope import (
+    ChunkScopeOut,
+    Visibility,
+    scope_filters,
+    scope_labels,
+)
 from src.assistant.embeddings import EmbeddingError, embed_query
+from src.assistant.family_school_scope import scope_for_school
 from src.assistant.models import AssistantChunk
-from src.assistant.search import _audience_filter, hybrid_search
+from src.assistant.retrieval_scope import RetrievalScope, audience_clause
+from src.assistant.search import hybrid_search
 from src.auth.deps import AdminDep
 from src.db.deps import DbDep
+from src.schools.models import School
+from src.schools.src_session import school_mode
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +53,8 @@ class ChunkOut(BaseModel):
     for_family: bool
     for_counselor: bool
     created_at: datetime
+    # Filled by the list endpoint; search-test hits leave it unset.
+    scope: ChunkScopeOut | None = None
 
 
 class ChunkListOut(BaseModel):
@@ -57,7 +69,9 @@ class ChunkListOut(BaseModel):
 
 class SearchTestIn(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
-    role: Literal["family", "counselor"] = "family"
+    audience: Literal["family", "counselor"] = "family"
+    # Run as this school's chat would (a preview school sees public chunks only).
+    school_id: uuid.UUID | None = None
 
 
 class SearchTestHit(ChunkOut):
@@ -78,6 +92,8 @@ def list_chunks(
     db: DbDep,
     source_type: str | None = Query(None, description="topic, resource, workshop, faq, webinar_qa"),
     audience: Literal["family", "counselor"] | None = Query(None),
+    visibility: Annotated[Visibility | None, Query(description="public = no scope, restricted = scoped")] = None,
+    school_id: Annotated[uuid.UUID | None, Query(description="Chunks this school's members would retrieve")] = None,
     search: str | None = Query(None, description="Substring of title, heading, text or generated questions"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -87,7 +103,8 @@ def list_chunks(
     if source_type:
         filters.append(AssistantChunk.source_type == source_type)
     if audience:
-        filters.append(_audience_filter(audience))
+        filters.append(audience_clause(audience))
+    filters.extend(scope_filters(db, visibility, school_id))
     if search and search.strip():
         term = search.strip()
         filters.append(
@@ -113,8 +130,9 @@ def list_chunks(
         .offset(offset)
     ).all()
     counts = dict(db.execute(select(AssistantChunk.source_type, func.count()).group_by(AssistantChunk.source_type)).all())
+    scopes = scope_labels(db, rows)
     return ChunkListOut(
-        items=[ChunkOut.model_validate(r) for r in rows],
+        items=[ChunkOut.model_validate(r).model_copy(update={"scope": scopes[r.id]}) for r in rows],
         total=total,
         limit=limit,
         offset=offset,
@@ -127,15 +145,23 @@ def list_chunks(
 def search_test(body: SearchTestIn, _admin: AdminDep, db: DbDep) -> SearchTestOut:
     """What the chat would hand the model for this question, best first.
 
-    Runs the same embedding and hybrid search as a family's first question in a
-    new chat (no earlier turns), so it costs one query embedding.
+    Runs the same embedding and hybrid search as the first question in a new
+    chat for that audience and school (no earlier turns), so it costs one query
+    embedding. A preview school gets the public scope, as it would in chat.
     """
+    if body.school_id is None:
+        scope = RetrievalScope.public(body.audience)
+    else:
+        school = db.get(School, body.school_id)
+        if school is None:
+            raise HTTPException(status_code=404, detail="assistant_school_not_found")
+        scope = scope_for_school(school, body.audience, school_mode(school))
     try:
         vector = embed_query(body.question)
     except EmbeddingError:
         logger.exception("assistant admin: query embedding failed")
         raise HTTPException(status_code=503, detail="assistant_unavailable") from None
-    hits = hybrid_search(db, body.question, vector, role=body.role)
+    hits = hybrid_search(db, body.question, vector, scope)
     if not hits:
         return SearchTestOut(items=[])
 

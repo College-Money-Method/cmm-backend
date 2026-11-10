@@ -17,6 +17,7 @@ from sqlalchemy import func, literal_column, select
 from sqlalchemy.orm import Session
 
 from src.assistant.models import AssistantChunk
+from src.assistant.retrieval_scope import RetrievalScope, visible_chunks
 
 # Standard RRF constant: damps the gap between rank 1 and rank 2.
 RRF_K = 60
@@ -74,14 +75,15 @@ def retrieval_query(history: list[dict], message: str, prior_questions: int = 2)
     return "\n".join([*asked, message])
 
 
-def _audience_filter(role: str):
-    return AssistantChunk.for_counselor.is_(True) if role == "counselor" else AssistantChunk.for_family.is_(True)
-
-
 def hybrid_search(
-    db: Session, question: str, query_vector: list[float], role: str = "family", top_k: int = DEFAULT_TOP_K
+    db: Session, question: str, query_vector: list[float], scope: RetrievalScope, top_k: int = DEFAULT_TOP_K
 ) -> list[RetrievedChunk]:
-    audience = _audience_filter(role)
+    """Best chunks for the question among those ``scope`` may see.
+
+    ``scope`` has no default on purpose: a caller must say who is asking, so no
+    retrieval can quietly ignore school restrictions.
+    """
+    audience = visible_chunks(scope)
 
     vector_ids = list(
         db.scalars(
