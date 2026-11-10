@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -109,6 +110,22 @@ def harness(factory, bedrock, seen):
 def _src_token(factory, school_id) -> str:
     with factory() as db:
         return issue_token(db.get(School, school_id))[0]
+
+
+def _source_urls(resp) -> list[str | None]:
+    lines = resp.text.splitlines()
+    meta = json.loads(lines[lines.index("event: meta") + 1].removeprefix("data: "))
+    return [s["url"] for s in meta["sources"]]
+
+
+def test_school_chat_links_into_that_school_resource_center(harness, factory):
+    resp = harness.chat(school_id=SCHOOL_A, src_token=_src_token(factory, SCHOOL_A))
+    assert resp.status_code == 200
+    assert _source_urls(resp) == ["/school/a-high/topic/divorce"]
+
+
+def test_public_chat_keeps_generic_links(harness):
+    assert _source_urls(harness.chat()) == ["/topic/divorce"]
 
 
 def test_old_client_role_cannot_change_audience(harness, seen):

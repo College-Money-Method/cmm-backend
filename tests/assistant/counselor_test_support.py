@@ -22,6 +22,7 @@ from src.workshops.models import PortalMapping, Webinar, Workshop
 TABLES = (
     "app_config", "assistant_conversations", "assistant_messages",
     "schools", "cohorts", "grade_sets", "cycles", "workshops", "webinars", "portal_mapping",
+    "workshop_registrations",
 )
 
 

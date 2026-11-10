@@ -13,6 +13,7 @@ from src.assistant.counselor_workshop_section import (
     school_workshop_section,
 )
 from src.schools.models import School
+from src.workshops.models import WorkshopRegistration
 from tests.assistant.counselor_test_support import add_webinar, make_counselor_factory
 
 NOW = datetime(2026, 11, 10, 15, 0, tzinfo=UTC)
@@ -103,3 +104,46 @@ def test_upcoming_workshop_survives_a_full_past_month(db, school):
     text = school_workshop_section(db, school, NOW)
     assert text.count("\n- ") == MAX_WORKSHOPS
     assert "Next Up" in text and "Past 00" in text and f"Past {MAX_WORKSHOPS + 1:02d}" not in text
+
+
+def _register(db, webinar, school_id, *, attended=False, n=1):
+    db.add_all(
+        WorkshopRegistration(
+            webinar_id=webinar.id, school_id=school_id, email=f"p{uuid.uuid4().hex[:8]}@example.com",
+            first_name="Pat", last_name="Parent", attended=attended,
+        )
+        for _ in range(n)
+    )
+    db.commit()
+
+
+def test_upcoming_workshop_shows_total_and_school_registrations(db, school):
+    other = School(id=uuid.uuid4(), name="B High", slug="b-high")
+    db.add(other)
+    db.commit()
+    webinar = add_webinar(db, school.id, NOW + timedelta(days=3), name="Shared Night")
+    db.add(section.PortalMapping(school_id=other.id, webinar_id=webinar.id))
+    _register(db, webinar, school.id, n=2)
+    _register(db, webinar, other.id, n=3)
+    _register(db, webinar, None)  # no school on record still counts toward the total
+    text = school_workshop_section(db, school, NOW)
+    assert "registered: 6 total, 2 from your school" in text
+    assert "attended" not in text
+    # Counts only: never who registered, never the other school.
+    assert "Pat" not in text and "Parent" not in text and "@example.com" not in text and "B High" not in text
+
+
+def test_held_workshop_adds_attendance(db, school):
+    other = School(id=uuid.uuid4(), name="B High", slug="b-high")
+    db.add(other)
+    webinar = add_webinar(db, school.id, NOW - timedelta(days=3))
+    _register(db, webinar, school.id, attended=True, n=2)
+    _register(db, webinar, school.id)
+    _register(db, webinar, other.id, attended=True)
+    text = school_workshop_section(db, school, NOW)
+    assert "registered: 4 total, 3 from your school; attended: 3 total, 2 from your school" in text
+
+
+def test_workshop_with_no_registrations_shows_zeros(db, school):
+    add_webinar(db, school.id, NOW + timedelta(days=3))
+    assert "registered: 0 total, 0 from your school" in school_workshop_section(db, school, NOW)

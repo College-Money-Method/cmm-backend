@@ -64,6 +64,7 @@ def chat(body: CounselorChatIn, user: CounselorAssistantUser, db: DbDep) -> Stre
         scope=scope,
         build_prompt=lambda chunks: build_counselor_prompt(chunks, school, workshops),
         profile={"school_id": str(school.id)},
+        school_slug=school.slug,
     )
 
 

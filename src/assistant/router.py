@@ -17,7 +17,11 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
-from src.assistant.access_token import AssistantUserDep, current_password_hash, issue_access_token
+from src.assistant.access_token import (
+    AssistantUserDep,
+    current_password_hash,
+    issue_access_token,
+)
 from src.assistant.chat_turn import owned_conversation, run_chat_turn
 from src.assistant.family_prompt import build_family_prompt
 from src.assistant.family_school_scope import family_school_scope
@@ -31,6 +35,7 @@ from src.assistant.schemas import (
 )
 from src.colleges.access_password import verify_password
 from src.db.deps import DbDep
+from src.schools.models import School
 from src.schools.src_session import OptionalUserDep, SrcSessionHeader
 
 logger = logging.getLogger(__name__)
@@ -77,6 +82,8 @@ def chat(
     # Resolved first so a refused school costs no embedding call. The audience
     # is fixed by this endpoint; the profile only words the prompt.
     scope = family_school_scope(db, body.school_id, src_session, user)
+    # Already loaded and checked above; citations then open in that school's resource center.
+    school = db.get(School, body.school_id) if body.school_id else None
     profile = body.profile.model_dump()
     profile["school_id"] = str(body.school_id) if body.school_id else None
     return run_chat_turn(
@@ -93,6 +100,7 @@ def chat(
             body.college_aid_result.model_dump() if body.college_aid_result else None,
         ),
         profile=profile,
+        school_slug=school.slug if school else None,
     )
 
 

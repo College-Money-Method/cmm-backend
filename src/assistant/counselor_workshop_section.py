@@ -2,8 +2,9 @@
 
 The school's mapped webinars around today, upcoming ones first. Values come from the
 same builder the emails use, so a drafted date, time and link match what
-families would receive. The resource-center password and contact emails are
-never read into the section.
+families would receive. Each line also carries registration (and, once held,
+attendance) counts: the session total and this school's share. The
+resource-center password, contact emails and registrants are never read in.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from src.assistant.counselor_workshop_counts import WorkshopCounts, workshop_counts
 from src.emails.school_links import email_origin
 from src.emails.workshop_merge_tags import build_workshop_merge_replacements
 from src.schools.models import School
@@ -55,12 +57,20 @@ def school_workshop_section(db, school: School, now: datetime) -> str:
         return f"{SECTION_HEADER}\n{EMPTY_SECTION}"
 
     origin = email_origin() or None
-    lines = [_line(school, w, m, origin, is_past=False) for w, m in upcoming]
-    lines += [_line(school, w, m, origin, is_past=True) for w, m in past]
+    counts = workshop_counts(db, [w.id for w, _ in upcoming + past], school.id)
+    lines = [_line(school, w, m, origin, counts[w.id], is_past=False) for w, m in upcoming]
+    lines += [_line(school, w, m, origin, counts[w.id], is_past=True) for w, m in past]
     return "\n".join([SECTION_HEADER, *lines])
 
 
-def _line(school: School, webinar: Webinar, mapping: PortalMapping, origin: str | None, is_past: bool) -> str:
+def _line(
+    school: School,
+    webinar: Webinar,
+    mapping: PortalMapping,
+    origin: str | None,
+    counts: WorkshopCounts,
+    is_past: bool,
+) -> str:
     override = (mapping.school_override or {}).get("suggested_grades")
     values = build_workshop_merge_replacements(
         school_name=school.name,
@@ -82,4 +92,5 @@ def _line(school: School, webinar: Webinar, mapping: PortalMapping, origin: str 
         f"- {values['workshop_name']}: {values['date']} at {values['time']} "
         f"({values['grade_label']}); register: {values['registration_link']}"
     )
+    line += f"; {counts.describe(held=is_past)}"
     return line + " (already held)" if is_past else line

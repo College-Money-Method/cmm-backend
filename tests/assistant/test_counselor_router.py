@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -112,6 +113,17 @@ def test_workshop_section_and_school_reach_the_prompt(harness, seen):
     system = seen["bedrock"].calls[0]["system"]
     system = system if isinstance(system, str) else str(system)
     assert "A High" in system and "Your school's workshops" in system
+
+
+def _source_urls(resp) -> list[str | None]:
+    lines = resp.text.splitlines()
+    meta = json.loads(lines[lines.index("event: meta") + 1].removeprefix("data: "))
+    return [s["url"] for s in meta["sources"]]
+
+
+def test_citations_link_into_the_school_resource_center(harness):
+    harness.as_user("hub_user", SCHOOL_A)
+    assert _source_urls(harness.chat()) == ["/school/a-high/topic/divorce"]
 
 
 @pytest.mark.parametrize("role,school,status", [
