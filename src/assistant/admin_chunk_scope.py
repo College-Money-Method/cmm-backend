@@ -12,10 +12,11 @@ from typing import Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import not_, select
+from sqlalchemy import func, not_, select
 from sqlalchemy.orm import Session
 
-from src.assistant.retrieval_scope import scope_clause
+from src.assistant.models import AssistantChunk
+from src.assistant.retrieval_scope import Audience, audience_clause, scope_clause
 from src.cycles.models import Cohort
 from src.schools.models import School
 
@@ -34,6 +35,13 @@ class ChunkScopeOut(BaseModel):
     cohorts: list[ScopeRef] = []
     states: list[str] = []
     public: bool = True
+
+
+class ScopeOptionsOut(BaseModel):
+    """The cohorts and states some chunk is limited to: what the restricted filters can pick."""
+
+    cohorts: list[ScopeRef]
+    states: list[str]
 
 
 def _names(db: Session, model, ids: set[str]) -> dict[str, str]:
@@ -75,8 +83,19 @@ def scope_labels(db: Session, rows) -> dict[uuid.UUID, ChunkScopeOut]:
     return out
 
 
-def scope_filters(db: Session, visibility: Visibility | None, school_id: uuid.UUID | None) -> list:
-    """WHERE clauses for the list's visibility and school filters."""
+def scope_filters(
+    db: Session,
+    visibility: Visibility | None,
+    school_id: uuid.UUID | None,
+    cohort_id: uuid.UUID | None = None,
+    state: str | None = None,
+) -> list:
+    """WHERE clauses for the list's visibility, school, cohort and state filters.
+
+    The school filter is what that school's members would retrieve (public chunks
+    included); the cohort and state filters are the chunks limited to that cohort
+    or state, so they only ever match restricted chunks.
+    """
     filters = []
     if visibility == "public":
         filters.append(scope_clause())
@@ -87,4 +106,21 @@ def scope_filters(db: Session, visibility: Visibility | None, school_id: uuid.UU
         if school is None:
             raise HTTPException(status_code=404, detail="assistant_school_not_found")
         filters.append(scope_clause(school.id, school.cohort_id, school.state))
+    if cohort_id is not None:
+        filters.append(AssistantChunk.scope_cohort_ids.any(str(cohort_id)))
+    if state:
+        filters.append(AssistantChunk.scope_states.any(state.upper()))
     return filters
+
+
+def _distinct_values(db: Session, column, audience: Audience | None) -> list[str]:
+    where = [audience_clause(audience)] if audience else []
+    return sorted(db.scalars(select(func.unnest(column)).where(*where).distinct()))
+
+
+def scope_options(db: Session, audience: Audience | None) -> ScopeOptionsOut:
+    """Cohorts (by name) and states that chunks for this audience are limited to."""
+    cohort_ids = _distinct_values(db, AssistantChunk.scope_cohort_ids, audience)
+    names = {str(k): v for k, v in _names(db, Cohort, set(cohort_ids)).items()}
+    cohorts = sorted(_refs(cohort_ids, names, "(removed cohort)"), key=lambda r: r.name.lower())
+    return ScopeOptionsOut(cohorts=cohorts, states=_distinct_values(db, AssistantChunk.scope_states, audience))

@@ -104,10 +104,11 @@ def test_admin_list_filters_match_what_chat_retrieves(session, ids):
     session.add(School(id=SCHOOL, name=f"school-{SCHOOL}", slug=f"s-{SCHOOL}", cohort_id=COHORT, state="CA"))
     session.flush()
 
-    def listed(visibility, school_id) -> set[str]:
+    def listed(visibility, school_id, cohort_id=None, state=None) -> set[str]:
         rows = session.scalars(
             select(AssistantChunk.source_id).where(
-                AssistantChunk.source_id.in_(ids.values()), *scope_filters(session, visibility, school_id)
+                AssistantChunk.source_id.in_(ids.values()),
+                *scope_filters(session, visibility, school_id, cohort_id, state),
             )
         )
         by_id = {v: k for k, v in ids.items()}
@@ -117,3 +118,15 @@ def test_admin_list_filters_match_what_chat_retrieves(session, ids):
     assert listed("restricted", None) == {"school", "cohort", "state"}
     assert listed(None, SCHOOL) == {"public", "school", "cohort", "state", "counselor_only"}
     assert listed("restricted", SCHOOL) == {"school", "cohort", "state"}
+    assert listed("restricted", None, cohort_id=COHORT) == {"cohort"}
+    assert listed("restricted", None, state="ca") == {"state"}
+    assert listed(None, None, cohort_id=uuid.uuid4()) == set()
+
+
+def test_scope_options_list_values_chunks_are_limited_to(session, ids):
+    from src.assistant.admin_chunk_scope import scope_options
+
+    got = scope_options(session, "family")
+    assert str(COHORT) in {c.id for c in got.cohorts}
+    assert "CA" in got.states
+    assert got.states == sorted(got.states)

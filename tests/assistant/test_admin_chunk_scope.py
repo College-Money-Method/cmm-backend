@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
 from src.assistant import admin_router
-from src.assistant.admin_chunk_scope import scope_filters, scope_labels
+from src.assistant.admin_chunk_scope import scope_filters, scope_labels, scope_options
 from src.assistant.retrieval_scope import RetrievalScope
 from src.auth.deps import require_admin
 from src.auth.schemas import CurrentUser
@@ -82,6 +82,31 @@ def test_school_filter_uses_the_schools_cohort_and_state(factory):
         with pytest.raises(HTTPException) as exc:
             scope_filters(db, None, uuid.uuid4())
         assert exc.value.status_code == 404
+
+
+def test_cohort_and_state_filters_match_chunks_limited_to_them(factory):
+    with factory() as db:
+        sql = _sql(scope_filters(db, "restricted", None, COHORT, "tx"))
+    assert sql.startswith("NOT")
+    assert "scope_cohort_ids" in sql.split("AND")[-2]
+    assert "scope_states" in sql.split("AND")[-1]
+    assert sql.count("= ANY") == 2
+
+
+def test_scope_options_list_distinct_cohorts_and_states(factory, monkeypatch):
+    values = {"scope_cohort_ids": [str(COHORT), "gone"], "scope_states": ["CA", "TX"]}
+    seen = []
+
+    def fake_distinct(db, column, audience):
+        seen.append(audience)
+        return values[column.key]
+
+    monkeypatch.setattr("src.assistant.admin_chunk_scope._distinct_values", fake_distinct)
+    with factory() as db:
+        got = scope_options(db, "counselor")
+    assert [(c.id, c.name) for c in got.cohorts] == [("gone", "(removed cohort)"), (str(COHORT), "2026 West")]
+    assert got.states == ["CA", "TX"]
+    assert seen == ["counselor", "counselor"]
 
 
 @pytest.fixture
