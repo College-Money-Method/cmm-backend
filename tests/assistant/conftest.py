@@ -22,7 +22,7 @@ from src.assistant.search import RetrievedChunk
 from src.db.base import Base
 from src.video_pipeline import bedrock_usage
 
-TABLES = ("app_config", "assistant_conversations", "assistant_messages")
+TABLES = ("app_config", "assistant_conversations", "assistant_messages", "assistant_prompt_sections")
 
 
 @pytest.fixture

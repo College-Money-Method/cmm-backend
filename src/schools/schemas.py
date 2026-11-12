@@ -60,6 +60,8 @@ class SchoolListItem(BaseModel):
     enrollment_range: str | None = None
     is_current_customer: bool = False
     is_cmm_website_activated: bool = False
+    # The counselor assistant is on in this school's Counselor Hub.
+    counselor_assistant_enabled: bool = False
     # Self-serve SRC preview (see src/schools/preview_shaping.py)
     is_src_preview: bool = False
     src_preview_expires_at: datetime | None = None

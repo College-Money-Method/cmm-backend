@@ -70,6 +70,11 @@ class School(Base):
     # preview link before becoming a customer. Effective public access is
     # is_current_customer OR is_cmm_website_activated (see _find_public_school).
     is_cmm_website_activated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # Shows the counselor assistant in this school's Counselor Hub, and lets its
+    # counselors use it (see src/assistant/counselor_router.py). Off by default.
+    counselor_assistant_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     # Self-serve SRC preview: a prospect who used the landing-page fit check gets
     # limited access (see src/schools/preview_shaping.py) until they convert to a
     # customer or the preview expires. Preview mode is only in effect while
