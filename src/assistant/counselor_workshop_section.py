@@ -92,5 +92,7 @@ def _line(
         f"- {values['workshop_name']}: {values['date']} at {values['time']} "
         f"({values['grade_label']}); register: {values['registration_link']}"
     )
+    if values["cycle_name"]:
+        line += f"; cycle: {values['cycle_name']}"
     line += f"; {counts.describe(held=is_past)}"
     return line + " (already held)" if is_past else line

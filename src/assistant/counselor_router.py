@@ -19,6 +19,12 @@ from sqlalchemy import select
 from src.assistant.chat_turn import owned_conversation, run_chat_turn
 from src.assistant.counselor_prompt import build_counselor_prompt
 from src.assistant.counselor_schemas import CounselorChatIn
+from src.assistant.counselor_template_values import (
+    fill_template_chunks,
+    own_name,
+    template_values,
+    template_values_section,
+)
 from src.assistant.counselor_workshop_section import school_workshop_section
 from src.assistant.family_school_scope import scope_for_school
 from src.assistant.models import AssistantConversation
@@ -28,6 +34,7 @@ from src.auth.deps import get_current_user
 from src.auth.hub_school import resolve_hub_school_id
 from src.auth.schemas import CurrentUser
 from src.db.deps import DbDep
+from src.emails.counselor_resolver import resolve_counselor_name
 from src.schools.models import School
 
 router = APIRouter(prefix="/api/v1/assistant/counselor", tags=["assistant-counselor"])
@@ -60,6 +67,11 @@ def chat(body: CounselorChatIn, user: CounselorAssistantUser, db: DbDep) -> Stre
     scope = scope_for_school(school, COUNSELOR_AUDIENCE, "full")
     workshops = school_workshop_section(db, school, datetime.now(UTC))
     guidance = prompt_guidance(db, COUNSELOR_AUDIENCE)
+    # The asker's name and school fill the drafts' merge tags, also when a super admin tests a school.
+    own = own_name(db, user.user_id)
+    values = template_values(school, own or resolve_counselor_name(db, school.id))
+    values_section = template_values_section(values)
+    asker_name = own[2] if own else ""
     return run_chat_turn(
         db,
         audience=COUNSELOR_AUDIENCE,
@@ -67,7 +79,9 @@ def chat(body: CounselorChatIn, user: CounselorAssistantUser, db: DbDep) -> Stre
         conversation_id=body.conversation_id,
         message=body.message,
         scope=scope,
-        build_prompt=lambda chunks: build_counselor_prompt(chunks, school, workshops, guidance),
+        build_prompt=lambda chunks: build_counselor_prompt(
+            fill_template_chunks(chunks, values), school, workshops, guidance, values_section, asker_name
+        ),
         profile={"school_id": str(school.id)},
         school_slug=school.slug,
     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 
 import pytest
 from fastapi import FastAPI
@@ -13,9 +14,10 @@ from src.assistant import answer, chat_turn, counselor_router
 from src.assistant.models import AssistantConversation, AssistantPromptSection
 from src.assistant.retrieval_scope import RetrievalScope
 from src.auth.deps import get_current_user
+from src.auth.models import UserRole
 from src.auth.schemas import CurrentUser
 from src.db.deps import get_db
-from src.schools.models import School
+from src.schools.models import Contact, School
 from src.video_pipeline import bedrock_usage
 from tests.assistant.conftest import FakeBedrock, make_chunk
 from tests.assistant.counselor_test_support import make_counselor_factory
@@ -114,6 +116,42 @@ def test_workshop_section_and_school_reach_the_prompt(harness, seen):
     system = seen["bedrock"].calls[0]["system"]
     system = system if isinstance(system, str) else str(system)
     assert "A High" in system and "Your school's workshops" in system
+
+
+def _system(seen) -> str:
+    system = seen["bedrock"].calls[0]["system"]
+    return system if isinstance(system, str) else str(system)
+
+
+def test_counselor_name_and_school_fill_the_templates(harness, seen, factory, monkeypatch):
+    template = replace(make_chunk("Workshop invite"), source_type="template", text="From {{counselor_name}} at {{school_name}}")
+    monkeypatch.setattr(chat_turn, "hybrid_search", lambda *a: [template])
+    user_id = uuid.uuid4()
+    with factory() as db:
+        db.add(Contact(user_id=user_id, school_id=SCHOOL_A, first_name="Jane", last_name="Doe"))
+        db.commit()
+    harness.as_user("hub_user", SCHOOL_A, user_id=user_id)
+    assert harness.chat().status_code == 200
+    system = _system(seen)
+    assert "Who is asking: Jane Doe, a high school counselor at A High (TX)." in system
+    assert "- {{counselor_first_name}}: Jane" in system
+    assert "- {{school_name}}: A High" in system
+    assert "{{resource_center_password}}:" not in system
+    assert "From Jane Doe at A High" in system
+
+
+def test_super_admin_without_contact_drafts_as_the_school_counselor(harness, seen, factory):
+    director = uuid.uuid4()
+    with factory() as db:
+        db.add(Contact(user_id=director, school_id=SCHOOL_B, first_name="Dana", last_name="Lee"))
+        db.add(UserRole(user_id=director, role="hub_admin", school_id=SCHOOL_B))
+        db.commit()
+    harness.as_user("super_admin")
+    assert harness.chat(school_id=str(SCHOOL_B)).status_code == 200
+    system = _system(seen)
+    assert "- {{counselor_name}}: Dana Lee" in system
+    # The fallback fills drafts only; it does not say who is asking.
+    assert "Who is asking: a high school counselor at B High (CA)." in system
 
 
 def _source_urls(resp) -> list[str | None]:
