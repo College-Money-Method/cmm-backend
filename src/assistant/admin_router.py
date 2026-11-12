@@ -18,9 +18,11 @@ from sqlalchemy import func, or_, select
 
 from src.assistant.admin_chunk_scope import (
     ChunkScopeOut,
+    ScopeOptionsOut,
     Visibility,
     scope_filters,
     scope_labels,
+    scope_options,
 )
 from src.assistant.embeddings import EmbeddingError, embed_query
 from src.assistant.family_school_scope import scope_for_school
@@ -87,6 +89,14 @@ class SearchTestOut(BaseModel):
     items: list[SearchTestHit]
 
 
+@router.get("/scope-options", response_model=ScopeOptionsOut)
+def list_scope_options(
+    _admin: AdminDep, db: DbDep, audience: Literal["family", "counselor"] | None = Query(None)
+) -> ScopeOptionsOut:
+    """The cohorts and states the restricted filters can pick from."""
+    return scope_options(db, audience)
+
+
 @router.get("/chunks", response_model=ChunkListOut)
 def list_chunks(
     _admin: AdminDep,
@@ -95,6 +105,8 @@ def list_chunks(
     audience: Literal["family", "counselor"] | None = Query(None),
     visibility: Annotated[Visibility | None, Query(description="public = no scope, restricted = scoped")] = None,
     school_id: Annotated[uuid.UUID | None, Query(description="Chunks this school's members would retrieve")] = None,
+    cohort_id: Annotated[uuid.UUID | None, Query(description="Chunks limited to this cohort")] = None,
+    state: Annotated[str | None, Query(pattern="^[A-Za-z]{2}$", description="Chunks limited to this state")] = None,
     search: str | None = Query(None, description="Substring of title, heading, text or generated questions"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -105,7 +117,7 @@ def list_chunks(
         filters.append(AssistantChunk.source_type == source_type)
     if audience:
         filters.append(audience_clause(audience))
-    filters.extend(scope_filters(db, visibility, school_id))
+    filters.extend(scope_filters(db, visibility, school_id, cohort_id, state))
     if search and search.strip():
         term = search.strip()
         filters.append(
