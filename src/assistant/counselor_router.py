@@ -22,6 +22,7 @@ from src.assistant.counselor_schemas import CounselorChatIn
 from src.assistant.counselor_workshop_section import school_workshop_section
 from src.assistant.family_school_scope import scope_for_school
 from src.assistant.models import AssistantConversation
+from src.assistant.prompt_sections import prompt_guidance
 from src.assistant.schemas import AssistantConversationListOut, AssistantConversationOut
 from src.auth.deps import get_current_user
 from src.auth.hub_school import resolve_hub_school_id
@@ -53,8 +54,12 @@ def chat(body: CounselorChatIn, user: CounselorAssistantUser, db: DbDep) -> Stre
     school = db.get(School, resolve_hub_school_id(user, body.school_id))
     if school is None:
         raise HTTPException(status_code=404, detail="assistant_school_not_found")
+    # Admins switch the assistant on per school; a super admin may test any school.
+    if user.role != "super_admin" and not school.counselor_assistant_enabled:
+        raise HTTPException(status_code=403, detail="counselor_assistant_disabled")
     scope = scope_for_school(school, COUNSELOR_AUDIENCE, "full")
     workshops = school_workshop_section(db, school, datetime.now(UTC))
+    guidance = prompt_guidance(db, COUNSELOR_AUDIENCE)
     return run_chat_turn(
         db,
         audience=COUNSELOR_AUDIENCE,
@@ -62,7 +67,7 @@ def chat(body: CounselorChatIn, user: CounselorAssistantUser, db: DbDep) -> Stre
         conversation_id=body.conversation_id,
         message=body.message,
         scope=scope,
-        build_prompt=lambda chunks: build_counselor_prompt(chunks, school, workshops),
+        build_prompt=lambda chunks: build_counselor_prompt(chunks, school, workshops, guidance),
         profile={"school_id": str(school.id)},
         school_slug=school.slug,
     )

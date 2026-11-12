@@ -62,7 +62,8 @@ class ChunkListOut(BaseModel):
     total: int
     limit: int
     offset: int
-    # Chunks per source type across the whole index, whatever the filters.
+    # Chunks per source type for the requested audience (the whole index when none),
+    # whatever the other filters.
     counts: dict[str, int]
     last_indexed_at: datetime | None = None
 
@@ -129,7 +130,14 @@ def list_chunks(
         .limit(limit)
         .offset(offset)
     ).all()
-    counts = dict(db.execute(select(AssistantChunk.source_type, func.count()).group_by(AssistantChunk.source_type)).all())
+    audience_only = [audience_clause(audience)] if audience else []
+    counts = dict(
+        db.execute(
+            select(AssistantChunk.source_type, func.count())
+            .where(*audience_only)
+            .group_by(AssistantChunk.source_type)
+        ).all()
+    )
     scopes = scope_labels(db, rows)
     return ChunkListOut(
         items=[ChunkOut.model_validate(r).model_copy(update={"scope": scopes[r.id]}) for r in rows],

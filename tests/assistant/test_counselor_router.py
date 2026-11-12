@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.assistant import answer, chat_turn, counselor_router
-from src.assistant.models import AssistantConversation
+from src.assistant.models import AssistantConversation, AssistantPromptSection
 from src.assistant.retrieval_scope import RetrievalScope
 from src.auth.deps import get_current_user
 from src.auth.schemas import CurrentUser
@@ -21,7 +21,7 @@ from tests.assistant.conftest import FakeBedrock, make_chunk
 from tests.assistant.counselor_test_support import make_counselor_factory
 
 BASE = "/api/v1/assistant/counselor"
-SCHOOL_A, SCHOOL_B = uuid.uuid4(), uuid.uuid4()
+SCHOOL_A, SCHOOL_B, SCHOOL_OFF = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
 
 
 @pytest.fixture
@@ -29,8 +29,9 @@ def factory():
     factory = make_counselor_factory()
     with factory() as db:
         db.add_all([
-            School(id=SCHOOL_A, name="A High", slug="a-high", state="TX"),
-            School(id=SCHOOL_B, name="B High", slug="b-high", state="CA"),
+            School(id=SCHOOL_A, name="A High", slug="a-high", state="TX", counselor_assistant_enabled=True),
+            School(id=SCHOOL_B, name="B High", slug="b-high", state="CA", counselor_assistant_enabled=True),
+            School(id=SCHOOL_OFF, name="Off High", slug="off-high", state="NV"),
         ])
         db.commit()
     return factory
@@ -134,6 +135,34 @@ def test_refused_before_embedding(harness, seen, role, school, status):
     resp = harness.chat()
     assert resp.status_code == status
     assert seen["embeds"] == 0
+
+
+@pytest.mark.parametrize("role", ["hub_user", "hub_admin"])
+def test_school_without_the_assistant_is_refused(harness, seen, role):
+    harness.as_user(role, SCHOOL_OFF)
+    resp = harness.chat()
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "counselor_assistant_disabled"
+    assert seen["embeds"] == 0
+
+
+def test_super_admin_can_test_a_school_without_the_assistant(harness, seen):
+    harness.as_user("super_admin")
+    assert harness.chat(school_id=str(SCHOOL_OFF)).status_code == 200
+
+
+def test_counselor_prompt_sections_reach_the_prompt(harness, seen, factory):
+    with factory() as db:
+        db.add_all([
+            AssistantPromptSection(title="Greeting", body="Say hi to the counselor.", audience="counselor"),
+            AssistantPromptSection(title="Family only", body="Talk to parents.", audience="family"),
+        ])
+        db.commit()
+    harness.as_user("hub_user", SCHOOL_A)
+    assert harness.chat().status_code == 200
+    system = str(seen["bedrock"].calls[0]["system"])
+    assert "### Greeting\nSay hi to the counselor." in system
+    assert "Talk to parents." not in system
 
 
 def test_unknown_school_for_super_admin_is_404(harness, seen):

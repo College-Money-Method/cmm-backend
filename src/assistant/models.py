@@ -124,3 +124,22 @@ class AssistantMessage(Base):
     conversation: Mapped[AssistantConversation] = relationship(back_populates="messages")
 
     __table_args__ = (Index("idx_assistant_messages_conversation", "conversation_id", "created_at"),)
+
+
+class AssistantPromptSection(Base):
+    """An instruction an admin adds to the assistant's system prompt.
+
+    Each section has a title (for admins only; the model sees it as a heading)
+    and the text to append. ``audience`` picks the assistant: "family",
+    "counselor" or "both". Disabled sections are kept but never sent.
+    """
+
+    __tablename__ = "assistant_prompt_sections"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    audience: Mapped[str] = mapped_column(Text, nullable=False, default="both", server_default="both")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))

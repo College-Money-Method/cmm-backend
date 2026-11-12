@@ -26,6 +26,7 @@ from src.assistant.chat_turn import owned_conversation, run_chat_turn
 from src.assistant.family_prompt import build_family_prompt
 from src.assistant.family_school_scope import family_school_scope
 from src.assistant.models import AssistantConversation
+from src.assistant.prompt_sections import prompt_guidance
 from src.assistant.schemas import (
     AssistantAccessIn,
     AssistantAccessOut,
@@ -86,6 +87,7 @@ def chat(
     school = db.get(School, body.school_id) if body.school_id else None
     profile = body.profile.model_dump()
     profile["school_id"] = str(body.school_id) if body.school_id else None
+    guidance = prompt_guidance(db, FAMILY_AUDIENCE)
     return run_chat_turn(
         db,
         audience=FAMILY_AUDIENCE,
@@ -98,6 +100,7 @@ def chat(
             profile,
             body.calculator_result.model_dump() if body.calculator_result else None,
             body.college_aid_result.model_dump() if body.college_aid_result else None,
+            guidance=guidance,
         ),
         profile=profile,
         school_slug=school.slug if school else None,
