@@ -9,9 +9,12 @@ import pytest
 
 from src.assistant import counselor_workshop_section as section
 from src.assistant.counselor_workshop_section import (
+    CAPPED_NOTE,
     MAX_WORKSHOPS,
+    NEXT_MARK,
     school_workshop_section,
 )
+from src.cycles.models import Cycle
 from src.schools.models import School
 from src.workshops.models import WorkshopRegistration
 from tests.assistant.counselor_test_support import add_webinar, make_counselor_factory
@@ -59,11 +62,12 @@ def test_window_bounds_and_empty_message(db, school):
     assert "Recent" in text and "Soon Enough" in text and "Too Old" not in text and "Too Far" not in text
 
 
-def test_cap_is_twelve(db, school):
+def test_cap_limits_listed_workshops(db, school):
     for i in range(MAX_WORKSHOPS + 3):
         add_webinar(db, school.id, NOW + timedelta(days=i + 1), name=f"Night {i:02d}")
     text = school_workshop_section(db, school, NOW)
     assert text.count("\n- ") == MAX_WORKSHOPS
+    assert text.endswith(CAPPED_NOTE)
 
 
 def test_upcoming_listed_before_past_and_past_marked(db, school):
@@ -73,6 +77,12 @@ def test_upcoming_listed_before_past_and_past_marked(db, school):
     assert text.index("Later") < text.index("Earlier")
     assert "(already held)" in text.split("Earlier")[1]
     assert "(already held)" not in text.split("Earlier")[0]
+    assert text.count(NEXT_MARK) == 1 and NEXT_MARK in text.split("Earlier")[0]
+
+
+def test_no_next_mark_when_only_past_workshops(db, school):
+    add_webinar(db, school.id, NOW - timedelta(days=3), name="Earlier")
+    assert NEXT_MARK not in school_workshop_section(db, school, NOW)
 
 
 def test_school_override_grades_win(db, school):
@@ -147,3 +157,24 @@ def test_held_workshop_adds_attendance(db, school):
 def test_workshop_with_no_registrations_shows_zeros(db, school):
     add_webinar(db, school.id, NOW + timedelta(days=3))
     assert "registered: 0 total, 0 from your school" in school_workshop_section(db, school, NOW)
+
+
+def _current_cycle(db, began):
+    db.add(Cycle(id=uuid.uuid4(), name="2026-27", beginning_date=began, is_current=True))
+    db.commit()
+
+
+def test_past_window_reaches_back_to_the_current_cycle_start(db, school):
+    _current_cycle(db, (NOW - timedelta(days=70)).date())
+    add_webinar(db, school.id, NOW - timedelta(days=60), name="September Night")
+    add_webinar(db, school.id, NOW - timedelta(days=80), name="Last Cycle Night")
+    text = school_workshop_section(db, school, NOW)
+    assert "September Night" in text and "Last Cycle Night" not in text
+
+
+def test_past_window_is_at_least_thirty_days_and_at_most_a_year(db, school):
+    _current_cycle(db, (NOW - timedelta(days=5)).date())
+    assert section.past_window_start(db, NOW) == NOW - timedelta(days=section.PAST_DAYS)
+    db.query(Cycle).update({Cycle.beginning_date: (NOW - timedelta(days=900)).date()})
+    db.commit()
+    assert section.past_window_start(db, NOW) == NOW - timedelta(days=section.MAX_PAST_DAYS)
