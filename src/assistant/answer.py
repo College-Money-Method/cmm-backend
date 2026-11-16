@@ -44,11 +44,18 @@ def source_list(chunks: list[RetrievedChunk]) -> list[dict]:
     ]
 
 
-def numbered_sources(chunks: list[RetrievedChunk]) -> str:
-    """The prompt's numbered source blocks, matching the numbers in ``source_list``."""
-    return "\n\n".join(
-        f"[{n}] {c.title}{f' — {c.heading}' if c.heading else ''}\n{c.text}" for n, c in enumerate(chunks, start=1)
-    ) or "(no sources matched this question)"
+def numbered_sources(chunks: list[RetrievedChunk], origin: str = "") -> str:
+    """The prompt's numbered source blocks, matching the numbers in ``source_list``.
+
+    With an ``origin``, each source that has a page gets a ``Link:`` line with its
+    absolute URL, so drafted emails can link it; sources without a page get none.
+    """
+    def block(n: int, c: RetrievedChunk) -> str:
+        head = f"[{n}] {c.title}{f' — {c.heading}' if c.heading else ''}"
+        link = f"\nLink: {origin}{c.url_path}" if origin and c.url_path else ""
+        return f"{head}{link}\n{c.text}"
+
+    return "\n\n".join(block(n, c) for n, c in enumerate(chunks, start=1)) or "(no sources matched this question)"
 
 
 def sse(event: str, data: dict) -> str:

@@ -165,6 +165,15 @@ def test_citations_link_into_the_school_resource_center(harness):
     assert _source_urls(harness.chat()) == ["/school/a-high/topic/divorce"]
 
 
+def test_prompt_links_sources_absolutely_and_reports_reach(harness, seen, monkeypatch):
+    monkeypatch.setattr(counselor_router, "email_origin", lambda: "https://cmm.example")
+    harness.as_user("hub_user", SCHOOL_A)
+    assert harness.chat().status_code == 200
+    system = _system(seen)
+    assert "Link: https://cmm.example/school/a-high/topic/divorce" in system
+    assert "Your school's program" in system and "Families registered for CMM workshops" in system
+
+
 @pytest.mark.parametrize("role,school,status", [
     ("viewer", SCHOOL_A, 403), ("super_admin", None, 422), ("hub_user", None, 403),
 ])
