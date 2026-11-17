@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.assistant import answer, chat_turn, counselor_router
+from src.assistant import answer, chat_turn, counselor_context, counselor_router
 from src.assistant.models import AssistantConversation, AssistantPromptSection
 from src.assistant.retrieval_scope import RetrievalScope
 from src.auth.deps import get_current_user
@@ -166,7 +166,7 @@ def test_citations_link_into_the_school_resource_center(harness):
 
 
 def test_prompt_links_sources_absolutely_and_reports_reach(harness, seen, monkeypatch):
-    monkeypatch.setattr(counselor_router, "email_origin", lambda: "https://cmm.example")
+    monkeypatch.setattr(counselor_context, "email_origin", lambda: "https://cmm.example")
     harness.as_user("hub_user", SCHOOL_A)
     assert harness.chat().status_code == 200
     system = _system(seen)

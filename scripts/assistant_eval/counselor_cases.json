@@ -1,0 +1,1852 @@
+{
+ "version": 1,
+ "cases": [
+  {
+   "id": "01-a",
+   "theme": "1",
+   "theme_name": "FAFSA identity or citizenship flag",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "which message or flag the student sees (identity confirmation, citizenship match, selected for verification)",
+    "whether the student or parent already completed the identity or mobile step"
+   ],
+   "must_cover": [
+    "the next step for the flag, from CMM content",
+    "that federal guidance on this is still changing or to watch studentaid.gov"
+   ],
+   "source_hints": [
+    "fafsa",
+    "fsa id",
+    "federal student aid"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A senior finished the FAFSA but it says the student's identity needs to be confirmed. What does that mean and what should we do next?"
+  },
+  {
+   "id": "01-b",
+   "theme": "1",
+   "theme_name": "FAFSA identity or citizenship flag",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "which message or flag the student sees (identity confirmation, citizenship match, selected for verification)",
+    "whether the student or parent already completed the identity or mobile step"
+   ],
+   "must_cover": [
+    "the next step for the flag, from CMM content",
+    "that federal guidance on this is still changing or to watch studentaid.gov"
+   ],
+   "source_hints": [
+    "fafsa",
+    "fsa id",
+    "federal student aid"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A student's FAFSA came back with a citizenship flag. Is this time-sensitive?"
+  },
+  {
+   "id": "01-c",
+   "theme": "1",
+   "theme_name": "FAFSA identity or citizenship flag",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "which message or flag the student sees (identity confirmation, citizenship match, selected for verification)",
+    "whether the student or parent already completed the identity or mobile step"
+   ],
+   "must_cover": [
+    "the next step for the flag, from CMM content",
+    "that federal guidance on this is still changing or to watch studentaid.gov"
+   ],
+   "source_hints": [
+    "fafsa",
+    "fsa id",
+    "federal student aid"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "One of my students got a message on the FAFSA that's holding up processing. What should the family do?"
+  },
+  {
+   "id": "01-d",
+   "theme": "1",
+   "theme_name": "FAFSA identity or citizenship flag",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "the next step for the flag, from CMM content",
+    "that federal guidance on this is still changing or to watch studentaid.gov"
+   ],
+   "source_hints": [
+    "fafsa",
+    "fsa id",
+    "federal student aid"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "detail_given",
+   "message": "A student's FAFSA says 'selected for verification'. She hasn't done anything else yet. What happens next and what should she gather?"
+  },
+  {
+   "id": "02-a",
+   "theme": "2",
+   "theme_name": "FAFSA account errors and corrections",
+   "mode": "answer_route",
+   "route_to": "Federal Student Aid support, and Paul at College Money Method if the error persists or is unfamiliar",
+   "must_ask": [],
+   "must_cover": [
+    "the options: retry, make a correction on the submitted FAFSA, or contact Federal Student Aid support"
+   ],
+   "source_hints": [
+    "fafsa",
+    "fsa id",
+    "studentaid.gov",
+    "pro tips"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A parent keeps getting an 'unknown error' trying to create their FAFSA account. Is this a known issue?"
+  },
+  {
+   "id": "02-b",
+   "theme": "2",
+   "theme_name": "FAFSA account errors and corrections",
+   "mode": "answer_route",
+   "route_to": "Federal Student Aid support, and Paul at College Money Method if the error persists or is unfamiliar",
+   "must_ask": [],
+   "must_cover": [
+    "the options: retry, make a correction on the submitted FAFSA, or contact Federal Student Aid support"
+   ],
+   "source_hints": [
+    "fafsa",
+    "fsa id",
+    "studentaid.gov",
+    "pro tips"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A family submitted the FAFSA and then realized they entered the wrong household size. How do they fix it?"
+  },
+  {
+   "id": "02-c",
+   "theme": "2",
+   "theme_name": "FAFSA account errors and corrections",
+   "mode": "answer_route",
+   "route_to": "Federal Student Aid support, and Paul at College Money Method if the error persists or is unfamiliar",
+   "must_ask": [],
+   "must_cover": [
+    "the options: retry, make a correction on the submitted FAFSA, or contact Federal Student Aid support"
+   ],
+   "source_hints": [
+    "fafsa",
+    "fsa id",
+    "studentaid.gov",
+    "pro tips"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Parent can't log in to studentaid.gov to finish the FAFSA, it keeps erroring out. Options?"
+  },
+  {
+   "id": "03-a",
+   "theme": "3",
+   "theme_name": "Separated or divorced parents",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "whether the parents are legally separated or divorced, or still married and filing jointly",
+    "which parent the student lives with or who provides more financial support"
+   ],
+   "must_cover": [
+    "which parent completes the FAFSA (the one who provides more support)",
+    "that the CSS Profile may also ask for the noncustodial parent",
+    "how to report one parent's share of a joint return"
+   ],
+   "source_hints": [
+    "divorced",
+    "separated",
+    "who completes",
+    "household"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A student's parents are separated. Which parent fills out the FAFSA?"
+  },
+  {
+   "id": "03-b",
+   "theme": "3",
+   "theme_name": "Separated or divorced parents",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "whether the parents are legally separated or divorced, or still married and filing jointly",
+    "which parent the student lives with or who provides more financial support"
+   ],
+   "must_cover": [
+    "which parent completes the FAFSA (the one who provides more support)",
+    "that the CSS Profile may also ask for the noncustodial parent",
+    "how to report one parent's share of a joint return"
+   ],
+   "source_hints": [
+    "divorced",
+    "separated",
+    "who completes",
+    "household"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Parents are separated but still file taxes jointly. How should they report income on the FAFSA?"
+  },
+  {
+   "id": "03-c",
+   "theme": "3",
+   "theme_name": "Separated or divorced parents",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "whether the parents are legally separated or divorced, or still married and filing jointly",
+    "which parent the student lives with or who provides more financial support"
+   ],
+   "must_cover": [
+    "which parent completes the FAFSA (the one who provides more support)",
+    "that the CSS Profile may also ask for the noncustodial parent",
+    "how to report one parent's share of a joint return"
+   ],
+   "source_hints": [
+    "divorced",
+    "separated",
+    "who completes",
+    "household"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Do parents need to be legally separated for only one of them to do the FAFSA?"
+  },
+  {
+   "id": "03-d",
+   "theme": "3",
+   "theme_name": "Separated or divorced parents",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "which parent completes the FAFSA (the one who provides more support)",
+    "that the CSS Profile may also ask for the noncustodial parent",
+    "how to report one parent's share of a joint return"
+   ],
+   "source_hints": [
+    "divorced",
+    "separated",
+    "who completes",
+    "household"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "detail_given",
+   "message": "Divorced parents, student lives with mom most of the year, dad pays more of her expenses. Who does the FAFSA and who does the CSS Profile?"
+  },
+  {
+   "id": "04-a",
+   "theme": "4",
+   "theme_name": "Noncustodial parent on the CSS Profile",
+   "mode": "clarify",
+   "route_to": "each college's financial aid office (for waivers)",
+   "must_ask": [
+    "which colleges the student is applying to, since each sets its own noncustodial-parent rule"
+   ],
+   "must_cover": [
+    "the first parent cannot see whether the other parent finished their part",
+    "waivers are requested from and decided by each college's aid office"
+   ],
+   "source_hints": [
+    "css profile",
+    "divorced",
+    "separated"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Mom finished her part of the CSS Profile. Can she see whether dad finished his?"
+  },
+  {
+   "id": "04-b",
+   "theme": "4",
+   "theme_name": "Noncustodial parent on the CSS Profile",
+   "mode": "clarify",
+   "route_to": "each college's financial aid office (for waivers)",
+   "must_ask": [
+    "which colleges the student is applying to, since each sets its own noncustodial-parent rule"
+   ],
+   "must_cover": [
+    "the first parent cannot see whether the other parent finished their part",
+    "waivers are requested from and decided by each college's aid office"
+   ],
+   "source_hints": [
+    "css profile",
+    "divorced",
+    "separated"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "The student's father won't complete the noncustodial CSS Profile. Can the family get a waiver?"
+  },
+  {
+   "id": "04-c",
+   "theme": "4",
+   "theme_name": "Noncustodial parent on the CSS Profile",
+   "mode": "clarify",
+   "route_to": "each college's financial aid office (for waivers)",
+   "must_ask": [
+    "which colleges the student is applying to, since each sets its own noncustodial-parent rule"
+   ],
+   "must_cover": [
+    "the first parent cannot see whether the other parent finished their part",
+    "waivers are requested from and decided by each college's aid office"
+   ],
+   "source_hints": [
+    "css profile",
+    "divorced",
+    "separated"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "The noncustodial parent hasn't filed taxes. What should he put on his CSS Profile?"
+  },
+  {
+   "id": "05-a",
+   "theme": "5",
+   "theme_name": "529 plans",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "reporting depends on who owns the account",
+    "a grandparent-owned 529 is not reported on the FAFSA but some CSS Profile colleges ask about it"
+   ],
+   "source_hints": [
+    "asset",
+    "investment",
+    "529"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "detail_given",
+   "message": "A grandparent has a 529 for the student. Does it count on the FAFSA?"
+  },
+  {
+   "id": "05-b",
+   "theme": "5",
+   "theme_name": "529 plans",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "who owns the 529 account (parent, student, grandparent or other relative, custodial)"
+   ],
+   "must_cover": [
+    "reporting depends on who owns the account",
+    "a grandparent-owned 529 is not reported on the FAFSA but some CSS Profile colleges ask about it"
+   ],
+   "source_hints": [
+    "asset",
+    "investment",
+    "529"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "How is a 529 reported on the FAFSA and CSS Profile?"
+  },
+  {
+   "id": "05-c",
+   "theme": "5",
+   "theme_name": "529 plans",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "reporting depends on who owns the account",
+    "a grandparent-owned 529 is not reported on the FAFSA but some CSS Profile colleges ask about it"
+   ],
+   "source_hints": [
+    "asset",
+    "investment",
+    "529"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "detail_given",
+   "message": "A family has a custodial UTMA account and a 529 owned by an aunt. Do either of those hurt aid?"
+  },
+  {
+   "id": "05-d",
+   "theme": "5",
+   "theme_name": "529 plans",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "reporting depends on who owns the account",
+    "a grandparent-owned 529 is not reported on the FAFSA but some CSS Profile colleges ask about it"
+   ],
+   "source_hints": [
+    "asset",
+    "investment",
+    "529"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "detail_given",
+   "message": "The 529 is owned by the parents and the student is the beneficiary. Where does it go on the FAFSA?"
+  },
+  {
+   "id": "06-a",
+   "theme": "6",
+   "theme_name": "Rental property, LLCs, inherited real estate",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "whether the property is the family's primary residence",
+    "whose names are on the deed or entity",
+    "for a business, how many employees it has"
+   ],
+   "must_cover": [
+    "FAFSA excludes the primary home but counts other real estate",
+    "CSS Profile counts home equity",
+    "value is current market value minus debt owed on it"
+   ],
+   "source_hints": [
+    "asset",
+    "home equity",
+    "business",
+    "real estate"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A family owns a rental property. Do they report it on the FAFSA?"
+  },
+  {
+   "id": "06-b",
+   "theme": "6",
+   "theme_name": "Rental property, LLCs, inherited real estate",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "whether the property is the family's primary residence",
+    "whose names are on the deed or entity",
+    "for a business, how many employees it has"
+   ],
+   "must_cover": [
+    "FAFSA excludes the primary home but counts other real estate",
+    "CSS Profile counts home equity",
+    "value is current market value minus debt owed on it"
+   ],
+   "source_hints": [
+    "asset",
+    "home equity",
+    "business",
+    "real estate"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Parents inherited a house with an uncle, both names on the deed. How do they value it for the CSS Profile?"
+  },
+  {
+   "id": "06-c",
+   "theme": "6",
+   "theme_name": "Rental property, LLCs, inherited real estate",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "whether the property is the family's primary residence",
+    "whose names are on the deed or entity",
+    "for a business, how many employees it has"
+   ],
+   "must_cover": [
+    "FAFSA excludes the primary home but counts other real estate",
+    "CSS Profile counts home equity",
+    "value is current market value minus debt owed on it"
+   ],
+   "source_hints": [
+    "asset",
+    "home equity",
+    "business",
+    "real estate"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Dad owns an LLC. Does it count as an asset?"
+  },
+  {
+   "id": "06-d",
+   "theme": "6",
+   "theme_name": "Rental property, LLCs, inherited real estate",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "FAFSA excludes the primary home but counts other real estate",
+    "CSS Profile counts home equity",
+    "value is current market value minus debt owed on it"
+   ],
+   "source_hints": [
+    "asset",
+    "home equity",
+    "business",
+    "real estate"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "detail_given",
+   "message": "A family owns a second home in their own names, it's not where they live. How is that treated on the FAFSA versus the CSS Profile?"
+  },
+  {
+   "id": "07-a",
+   "theme": "7",
+   "theme_name": "Trusts, settlements, student-held assets",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "what kind of trust or settlement it is and who controls it or can access it"
+   ],
+   "must_cover": [
+    "student assets are assessed more heavily than parent assets",
+    "money the student cannot access yet can still count"
+   ],
+   "source_hints": [
+    "student income",
+    "student asset",
+    "asset"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A student is the beneficiary of a trust. Does it count as their asset?"
+  },
+  {
+   "id": "07-b",
+   "theme": "7",
+   "theme_name": "Trusts, settlements, student-held assets",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "what kind of trust or settlement it is and who controls it or can access it"
+   ],
+   "must_cover": [
+    "student assets are assessed more heavily than parent assets",
+    "money the student cannot access yet can still count"
+   ],
+   "source_hints": [
+    "student income",
+    "student asset",
+    "asset"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A student has a settlement she can't access until she's 21. Does it count for financial aid?"
+  },
+  {
+   "id": "07-c",
+   "theme": "7",
+   "theme_name": "Trusts, settlements, student-held assets",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "student assets are assessed more heavily than parent assets",
+    "money the student cannot access yet can still count"
+   ],
+   "source_hints": [
+    "student income",
+    "student asset",
+    "asset"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "detail_given",
+   "message": "The student has a savings account in her own name. How much does that hurt aid compared to the parents' savings?"
+  },
+  {
+   "id": "08-a",
+   "theme": "8",
+   "theme_name": "Merit aid and whether to file",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "merit aid filing rules vary by college, so check each college's requirements",
+    "some colleges require the FAFSA or CSS Profile even for merit scholarships"
+   ],
+   "source_hints": [
+    "merit",
+    "scholarship"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A family makes too much for need-based aid. Do they still need to file the FAFSA to get merit scholarships?"
+  },
+  {
+   "id": "08-b",
+   "theme": "8",
+   "theme_name": "Merit aid and whether to file",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "merit aid filing rules vary by college, so check each college's requirements",
+    "some colleges require the FAFSA or CSS Profile even for merit scholarships"
+   ],
+   "source_hints": [
+    "merit",
+    "scholarship"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "How should a student answer the Common App question about applying for financial aid if they only want merit aid?"
+  },
+  {
+   "id": "08-c",
+   "theme": "8",
+   "theme_name": "Merit aid and whether to file",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "merit aid filing rules vary by college, so check each college's requirements",
+    "some colleges require the FAFSA or CSS Profile even for merit scholarships"
+   ],
+   "source_hints": [
+    "merit",
+    "scholarship"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Is the CSS Profile required for merit scholarships?"
+  },
+  {
+   "id": "09-a",
+   "theme": "9",
+   "theme_name": "CSS Profile optional fields and unfiled taxes",
+   "mode": "answer",
+   "route_to": "the CSS Profile guide in the Resource Center, or Paul at College Money Method for the family's case",
+   "must_ask": [],
+   "must_cover": [
+    "estimate unfiled taxes (for example with a tax estimator) and update later",
+    "answer optional questions when the family has real data for them"
+   ],
+   "source_hints": [
+    "css profile"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "A family hasn't filed their taxes yet. What should they put on the CSS Profile?"
+  },
+  {
+   "id": "09-b",
+   "theme": "9",
+   "theme_name": "CSS Profile optional fields and unfiled taxes",
+   "mode": "answer",
+   "route_to": "the CSS Profile guide in the Resource Center, or Paul at College Money Method for the family's case",
+   "must_ask": [],
+   "must_cover": [
+    "estimate unfiled taxes (for example with a tax estimator) and update later",
+    "answer optional questions when the family has real data for them"
+   ],
+   "source_hints": [
+    "css profile"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Should a parent leave the optional questions blank on the CSS Profile?"
+  },
+  {
+   "id": "09-c",
+   "theme": "9",
+   "theme_name": "CSS Profile optional fields and unfiled taxes",
+   "mode": "answer",
+   "route_to": "the CSS Profile guide in the Resource Center, or Paul at College Money Method for the family's case",
+   "must_ask": [],
+   "must_cover": [
+    "estimate unfiled taxes (for example with a tax estimator) and update later",
+    "answer optional questions when the family has real data for them"
+   ],
+   "source_hints": [
+    "css profile"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Does leaving items blank on the CSS Profile hurt the student's aid?"
+  },
+  {
+   "id": "10-a",
+   "theme": "10",
+   "theme_name": "CSS Profile K-12 tuition and siblings",
+   "mode": "answer",
+   "route_to": "the CSS Profile guide in the Resource Center, or Paul at College Money Method for the family's case",
+   "must_ask": [],
+   "must_cover": [
+    "the K-12 section covers what parents paid and aid from the school itself, not outside help",
+    "point to the CSS Profile guide for sibling years"
+   ],
+   "source_hints": [
+    "css profile"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "What goes in the CSS Profile's K-12 tuition section?"
+  },
+  {
+   "id": "10-b",
+   "theme": "10",
+   "theme_name": "CSS Profile K-12 tuition and siblings",
+   "mode": "answer",
+   "route_to": "the CSS Profile guide in the Resource Center, or Paul at College Money Method for the family's case",
+   "must_ask": [],
+   "must_cover": [
+    "the K-12 section covers what parents paid and aid from the school itself, not outside help",
+    "point to the CSS Profile guide for sibling years"
+   ],
+   "source_hints": [
+    "css profile"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Grandparents pay part of the younger sibling's private school tuition. Does that go on the CSS Profile?"
+  },
+  {
+   "id": "10-c",
+   "theme": "10",
+   "theme_name": "CSS Profile K-12 tuition and siblings",
+   "mode": "answer",
+   "route_to": "the CSS Profile guide in the Resource Center, or Paul at College Money Method for the family's case",
+   "must_ask": [],
+   "must_cover": [
+    "the K-12 section covers what parents paid and aid from the school itself, not outside help",
+    "point to the CSS Profile guide for sibling years"
+   ],
+   "source_hints": [
+    "css profile"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "How does the CSS Profile handle a sibling who's also in college next year?"
+  },
+  {
+   "id": "11-a",
+   "theme": "11",
+   "theme_name": "Special circumstances, income changes, appeals",
+   "mode": "answer_route",
+   "route_to": "a 1:1 session with College Money Method (Paul) for the specific family's case",
+   "must_ask": [],
+   "must_cover": [
+    "what counts as a special circumstance and that it is documented with the college's aid office",
+    "families can appeal after receiving an offer"
+   ],
+   "source_hints": [
+    "appeal",
+    "special circumstance"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A parent was laid off this fall. Does that count as a special circumstance and what should the family do?"
+  },
+  {
+   "id": "11-b",
+   "theme": "11",
+   "theme_name": "Special circumstances, income changes, appeals",
+   "mode": "answer_route",
+   "route_to": "a 1:1 session with College Money Method (Paul) for the specific family's case",
+   "must_ask": [],
+   "must_cover": [
+    "what counts as a special circumstance and that it is documented with the college's aid office",
+    "families can appeal after receiving an offer"
+   ],
+   "source_hints": [
+    "appeal",
+    "special circumstance"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A family wants to appeal their daughter's aid offer. Where do they start?"
+  },
+  {
+   "id": "11-c",
+   "theme": "11",
+   "theme_name": "Special circumstances, income changes, appeals",
+   "mode": "answer_route",
+   "route_to": "a 1:1 session with College Money Method (Paul) for the specific family's case",
+   "must_ask": [],
+   "must_cover": [
+    "what counts as a special circumstance and that it is documented with the college's aid office",
+    "families can appeal after receiving an offer"
+   ],
+   "source_hints": [
+    "appeal",
+    "special circumstance"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A dad plans to retire next year. How should they handle that on the aid forms?"
+  },
+  {
+   "id": "11-d",
+   "theme": "11",
+   "theme_name": "Special circumstances, income changes, appeals",
+   "mode": "answer_route",
+   "route_to": "a 1:1 session with College Money Method (Paul) for the specific family's case",
+   "must_ask": [],
+   "must_cover": [
+    "what counts as a special circumstance and that it is documented with the college's aid office",
+    "families can appeal after receiving an offer"
+   ],
+   "source_hints": [
+    "appeal",
+    "special circumstance"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A family has huge out-of-pocket medical costs this year. Can they get more aid?"
+  },
+  {
+   "id": "12-a",
+   "theme": "12",
+   "theme_name": "Self-employment, gig and retirement income",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "whether the income is already earned or only expected"
+   ],
+   "must_cover": [
+    "where each income type is reported",
+    "expected future gains are not reported"
+   ],
+   "source_hints": [
+    "income",
+    "business"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "A parent is self-employed. How does that income go on the FAFSA?"
+  },
+  {
+   "id": "12-b",
+   "theme": "12",
+   "theme_name": "Self-employment, gig and retirement income",
+   "mode": "clarify",
+   "route_to": null,
+   "must_ask": [
+    "whether the income is already earned or only expected"
+   ],
+   "must_cover": [
+    "where each income type is reported",
+    "expected future gains are not reported"
+   ],
+   "source_hints": [
+    "income",
+    "business"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Mom does gig work for a delivery app. Where is that reported?"
+  },
+  {
+   "id": "12-c",
+   "theme": "12",
+   "theme_name": "Self-employment, gig and retirement income",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "where each income type is reported",
+    "expected future gains are not reported"
+   ],
+   "source_hints": [
+    "income",
+    "business"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "detail_given",
+   "message": "A retired parent is drawing from investments. How do they report it?"
+  },
+  {
+   "id": "12-d",
+   "theme": "12",
+   "theme_name": "Self-employment, gig and retirement income",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "where each income type is reported",
+    "expected future gains are not reported"
+   ],
+   "source_hints": [
+    "income",
+    "business"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "detail_given",
+   "message": "A parent expects to sell stock next year at a big gain. Do they report that now?"
+  },
+  {
+   "id": "13-a",
+   "theme": "13",
+   "theme_name": "1:1 advising: what it is, cost, who",
+   "mode": "answer",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "what 1:1 advising is, only from its sources",
+    "if the sources lack the current offering or cost, says so and routes to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "What does College Money Method's 1:1 advising include?"
+  },
+  {
+   "id": "13-b",
+   "theme": "13",
+   "theme_name": "1:1 advising: what it is, cost, who",
+   "mode": "answer",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "what 1:1 advising is, only from its sources",
+    "if the sources lack the current offering or cost, says so and routes to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "I have a family whose situation is beyond what I can help with. Can I refer them for individual advising? How much is it?"
+  },
+  {
+   "id": "13-c",
+   "theme": "13",
+   "theme_name": "1:1 advising: what it is, cost, who",
+   "mode": "answer",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "what 1:1 advising is, only from its sources",
+    "if the sources lack the current offering or cost, says so and routes to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Can our school sponsor 1:1 sessions for some families?"
+  },
+  {
+   "id": "13-d",
+   "theme": "13",
+   "theme_name": "1:1 advising: what it is, cost, who",
+   "mode": "answer",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "what 1:1 advising is, only from its sources",
+    "if the sources lack the current offering or cost, says so and routes to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Who actually does the 1:1 advising sessions?"
+  },
+  {
+   "id": "14-a",
+   "theme": "14",
+   "theme_name": "1:1 booking, billing and availability",
+   "mode": "answer_route",
+   "route_to": "Paul at College Money Method (especially for deadline-sensitive cases)",
+   "must_ask": [],
+   "must_cover": [
+    "gives a booking link only if a source provides one; otherwise routes to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Where does a family book a 1:1 session?"
+  },
+  {
+   "id": "14-b",
+   "theme": "14",
+   "theme_name": "1:1 booking, billing and availability",
+   "mode": "answer_route",
+   "route_to": "Paul at College Money Method (especially for deadline-sensitive cases)",
+   "must_ask": [],
+   "must_cover": [
+    "gives a booking link only if a source provides one; otherwise routes to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "A family needs a 1:1 before the Nov 1 early deadline. Is there availability?"
+  },
+  {
+   "id": "14-c",
+   "theme": "14",
+   "theme_name": "1:1 booking, billing and availability",
+   "mode": "answer_route",
+   "route_to": "Paul at College Money Method (especially for deadline-sensitive cases)",
+   "must_ask": [],
+   "must_cover": [
+    "gives a booking link only if a source provides one; otherwise routes to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "How is a school-sponsored 1:1 session billed versus one the family pays for?"
+  },
+  {
+   "id": "15-a",
+   "theme": "15",
+   "theme_name": "What support is included",
+   "mode": "answer",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "families use the Resource Center and workshops",
+    "counselors can contact CMM with questions"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Can families email College Money Method directly with FAFSA questions?"
+  },
+  {
+   "id": "15-b",
+   "theme": "15",
+   "theme_name": "What support is included",
+   "mode": "answer",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "families use the Resource Center and workshops",
+    "counselors can contact CMM with questions"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "What support is included in our partnership?"
+  },
+  {
+   "id": "15-c",
+   "theme": "15",
+   "theme_name": "What support is included",
+   "mode": "answer",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "families use the Resource Center and workshops",
+    "counselors can contact CMM with questions"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Can I email you a question about a specific family's CSS Profile?"
+  },
+  {
+   "id": "16-a",
+   "theme": "16",
+   "theme_name": "Workshop dates, recordings, slides",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "the school's upcoming workshops with dates and registration links",
+    "which grades each workshop fits"
+   ],
+   "source_hints": [
+    "workshop"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "When is our next workshop and who is it for?"
+  },
+  {
+   "id": "16-b",
+   "theme": "16",
+   "theme_name": "Workshop dates, recordings, slides",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "where recordings are shared, only as its sources say (for example the follow-up email or the Resource Center)"
+   ],
+   "source_hints": [
+    "workshop"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Where can families find recordings of past workshops?"
+  },
+  {
+   "id": "16-c",
+   "theme": "16",
+   "theme_name": "Workshop dates, recordings, slides",
+   "mode": "answer",
+   "route_to": null,
+   "must_ask": [],
+   "must_cover": [
+    "the school's upcoming workshops with dates and registration links",
+    "which grades each workshop fits"
+   ],
+   "source_hints": [
+    "workshop"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Which workshop should I recommend for sophomore parents?"
+  },
+  {
+   "id": "16-d",
+   "theme": "16",
+   "theme_name": "Workshop dates, recordings, slides",
+   "mode": "answer",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "shares slides only if a source provides them; otherwise says so and routes the request"
+   ],
+   "source_hints": [
+    "workshop"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Can I get the slides from the FAFSA workshop to share with families?"
+  },
+  {
+   "id": "17-a",
+   "theme": "17",
+   "theme_name": "Language access",
+   "mode": "answer_route",
+   "route_to": "Paul at College Money Method (interpreter funding arrangements)",
+   "must_ask": [],
+   "must_cover": [
+    "what language support exists, only from its sources",
+    "routes interpreter funding to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "We have a lot of Spanish-speaking families. Are the workshops available in Spanish?"
+  },
+  {
+   "id": "17-b",
+   "theme": "17",
+   "theme_name": "Language access",
+   "mode": "answer_route",
+   "route_to": "Paul at College Money Method (interpreter funding arrangements)",
+   "must_ask": [],
+   "must_cover": [
+    "what language support exists, only from its sources",
+    "routes interpreter funding to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Can our school pay for an interpreter at a live workshop?"
+  },
+  {
+   "id": "17-c",
+   "theme": "17",
+   "theme_name": "Language access",
+   "mode": "answer_route",
+   "route_to": "Paul at College Money Method (interpreter funding arrangements)",
+   "must_ask": [],
+   "must_cover": [
+    "what language support exists, only from its sources",
+    "routes interpreter funding to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Do the recordings have captions?"
+  },
+  {
+   "id": "18-a",
+   "theme": "18",
+   "theme_name": "Hub access and logins",
+   "mode": "route",
+   "route_to": "the school's Hub admin, then Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "the school's Hub admin adds team members",
+    "pass the person's name and email to Paul if it is not resolved"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "How do I add a new counselor to the Hub?"
+  },
+  {
+   "id": "18-b",
+   "theme": "18",
+   "theme_name": "Hub access and logins",
+   "mode": "route",
+   "route_to": "the school's Hub admin, then Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "the school's Hub admin adds team members",
+    "pass the person's name and email to Paul if it is not resolved"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "A colleague can't log in to the Counselor Hub. What should she do?"
+  },
+  {
+   "id": "18-c",
+   "theme": "18",
+   "theme_name": "Hub access and logins",
+   "mode": "route",
+   "route_to": "the school's Hub admin, then Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "the school's Hub admin adds team members",
+    "pass the person's name and email to Paul if it is not resolved"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "I'm new at my school. How do I get Hub access?"
+  },
+  {
+   "id": "19-a",
+   "theme": "19",
+   "theme_name": "Resource Center content issues",
+   "mode": "answer_route",
+   "route_to": "the CMM content team (Paul)",
+   "must_ask": [],
+   "must_cover": [
+    "points to an existing resource on the topic if one is in its sources",
+    "sends broken or missing resources to the content team"
+   ],
+   "source_hints": [
+    "css profile",
+    "fafsa"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "The link to the CSS Profile guide in the Resource Center is broken. Who fixes it?"
+  },
+  {
+   "id": "19-b",
+   "theme": "19",
+   "theme_name": "Resource Center content issues",
+   "mode": "answer_route",
+   "route_to": "the CMM content team (Paul)",
+   "must_ask": [],
+   "must_cover": [
+    "points to an existing resource on the topic if one is in its sources",
+    "sends broken or missing resources to the content team"
+   ],
+   "source_hints": [
+    "css profile",
+    "fafsa"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "Is there a resource on financial aid for divorced parents? I couldn't find one."
+  },
+  {
+   "id": "19-c",
+   "theme": "19",
+   "theme_name": "Resource Center content issues",
+   "mode": "answer_route",
+   "route_to": "the CMM content team (Paul)",
+   "must_ask": [],
+   "must_cover": [
+    "points to an existing resource on the topic if one is in its sources",
+    "sends broken or missing resources to the content team"
+   ],
+   "source_hints": [
+    "css profile",
+    "fafsa"
+   ],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": false,
+   "variant": "base",
+   "message": "One of the FAFSA guides still says 2024-25. Can that be updated?"
+  },
+  {
+   "id": "20-a",
+   "theme": "20",
+   "theme_name": "Contracts, workshop dates, invoices",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "routes contract, invoice and date-change requests to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "When will we get our contract for next year?"
+  },
+  {
+   "id": "20-b",
+   "theme": "20",
+   "theme_name": "Contracts, workshop dates, invoices",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "routes contract, invoice and date-change requests to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Can you send me the invoice for this year's workshops?"
+  },
+  {
+   "id": "20-c",
+   "theme": "20",
+   "theme_name": "Contracts, workshop dates, invoices",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "routes contract, invoice and date-change requests to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "What's the payment schedule for the partnership?"
+  },
+  {
+   "id": "20-d",
+   "theme": "20",
+   "theme_name": "Contracts, workshop dates, invoices",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "routes contract, invoice and date-change requests to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "We need to move our March workshop to a different date. Who do I talk to?"
+  },
+  {
+   "id": "20-e",
+   "theme": "20",
+   "theme_name": "Contracts, workshop dates, invoices",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "routes contract, invoice and date-change requests to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Our business office needs a W-9 from you. How do I get one?"
+  },
+  {
+   "id": "r1-a",
+   "theme": "R1",
+   "theme_name": "Partnership inquiries",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "routes to Paul for pricing or a call"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "A counselor at another school asked me about College Money Method. How can they learn more or see pricing?"
+  },
+  {
+   "id": "r1-b",
+   "theme": "R1",
+   "theme_name": "Partnership inquiries",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "routes to Paul for pricing or a call"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "We talked with you last year about a partnership. How do we restart that conversation?"
+  },
+  {
+   "id": "r2-a",
+   "theme": "R2",
+   "theme_name": "Speaking and school visits",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [
+    "the date, audience, location and budget"
+   ],
+   "must_cover": [
+    "does not quote fees"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Could Paul speak at our family weekend in April? What would it cost?"
+  },
+  {
+   "id": "r2-b",
+   "theme": "R2",
+   "theme_name": "Speaking and school visits",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [
+    "the date, audience, location and budget"
+   ],
+   "must_cover": [
+    "does not quote fees"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Is Paul available to visit our campus for a parent night?"
+  },
+  {
+   "id": "r3-a",
+   "theme": "R3",
+   "theme_name": "Workshop hosting",
+   "mode": "answer_route",
+   "route_to": "Paul or the CMM workshop team (for host links)",
+   "must_ask": [],
+   "must_cover": [
+    "shares host steps only if a source has them",
+    "routes host-link requests"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "I'm hosting the next webinar. Where's my host link?"
+  },
+  {
+   "id": "r3-b",
+   "theme": "R3",
+   "theme_name": "Workshop hosting",
+   "mode": "answer_route",
+   "route_to": "Paul or the CMM workshop team (for host links)",
+   "must_ask": [],
+   "must_cover": [
+    "shares host steps only if a source has them",
+    "routes host-link requests"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "What do I need to do to host a workshop for our families?"
+  },
+  {
+   "id": "r4-a",
+   "theme": "R4",
+   "theme_name": "Logo, slides and usage data",
+   "mode": "answer_route",
+   "route_to": "Paul at College Money Method (usage data and brand assets)",
+   "must_ask": [],
+   "must_cover": [
+    "reports the school's program figures it has",
+    "routes 1:1 usage numbers and logo requests to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Can I get the College Money Method logo for our newsletter?"
+  },
+  {
+   "id": "r4-b",
+   "theme": "R4",
+   "theme_name": "Logo, slides and usage data",
+   "mode": "answer_route",
+   "route_to": "Paul at College Money Method (usage data and brand assets)",
+   "must_ask": [],
+   "must_cover": [
+    "reports the school's program figures it has",
+    "routes 1:1 usage numbers and logo requests to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "How many of our families have used 1:1 sessions this year?"
+  },
+  {
+   "id": "r4-c",
+   "theme": "R4",
+   "theme_name": "Logo, slides and usage data",
+   "mode": "answer_route",
+   "route_to": "Paul at College Money Method (usage data and brand assets)",
+   "must_ask": [],
+   "must_cover": [
+    "reports the school's program figures it has",
+    "routes 1:1 usage numbers and logo requests to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Do you have overview slides I can show at back-to-school night?"
+  },
+  {
+   "id": "r5-a",
+   "theme": "R5",
+   "theme_name": "Counselor call requests",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "routes the call request to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "Can I get 15 minutes with Paul to talk through a family's case?"
+  },
+  {
+   "id": "r5-b",
+   "theme": "R5",
+   "theme_name": "Counselor call requests",
+   "mode": "route",
+   "route_to": "Paul at College Money Method",
+   "must_ask": [],
+   "must_cover": [
+    "routes the call request to Paul"
+   ],
+   "source_hints": [],
+   "must_not": [
+    "invents a fee, price, rate, date, phone number, email address or URL that is not in its sources",
+    "claims it sent, logged, forwarded or scheduled anything",
+    "promises availability, a response time or an outcome"
+   ],
+   "needs_policy": true,
+   "variant": "base",
+   "message": "I'd like a quick call to debrief after a family's 1:1. How do I set that up?"
+  }
+ ]
+}
