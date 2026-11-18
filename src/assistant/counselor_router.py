@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from src.assistant.chat_turn import owned_conversation, run_chat_turn
+from src.assistant.counselor_card_context import card_search
 from src.assistant.counselor_context import COUNSELOR_AUDIENCE, counselor_prompt_builder
 from src.assistant.counselor_schemas import CounselorChatIn
 from src.assistant.family_school_scope import scope_for_school
@@ -61,9 +62,12 @@ def chat(body: CounselorChatIn, user: CounselorAssistantUser, db: DbDep) -> Stre
         conversation_id=body.conversation_id,
         message=body.message,
         scope=scope,
-        build_prompt=counselor_prompt_builder(db, school, user.user_id),
+        build_prompt=counselor_prompt_builder(
+            db, school, user.user_id, card_type=body.card_type
+        ),
         profile={"school_id": str(school.id)},
         school_slug=school.slug,
+        search_hint=card_search(body.card_type),
     )
 
 

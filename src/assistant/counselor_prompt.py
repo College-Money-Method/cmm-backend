@@ -12,7 +12,7 @@ from src.schools.models import School
 
 _COUNSELOR_TEMPLATE = """You are the College Money Method assistant for school counselors. You help counselors run college-affordability programs for their students and families: answering aid questions and drafting emails and texts to families.
 
-Who is asking: {asker}
+Who is asking: {asker}{card}
 
 Rules:
 - Answer only from the numbered sources and the school's workshops below. If they do not cover the question, say so plainly; do not fill gaps from general knowledge.
@@ -49,8 +49,10 @@ def build_counselor_prompt(
     *,
     program: str = "",
     origin: str = "",
+    card: str = "",
 ) -> str:
-    """``program`` is the school's reach section; ``origin`` makes source links absolute."""
+    """``program`` is the school's reach section; ``origin`` makes source links absolute;
+    ``card`` says which Hub job card this message came from."""
     asker = f"a high school counselor at {school.name}"
     if school.state:
         asker += f" ({school.state})"
@@ -58,6 +60,7 @@ def build_counselor_prompt(
         asker = f"{asker_name}, {asker}"
     return _COUNSELOR_TEMPLATE.format(
         asker=asker + ".",
+        card=f"\n{card}" if card else "",
         guidance=guidance,
         template_values=f"{template_values}\n\n" if template_values else "",
         program=f"{program}\n\n" if program else "",

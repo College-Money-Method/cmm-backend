@@ -6,12 +6,16 @@ import uuid
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.assistant.counselor_card_context import CounselorCardType
+
 
 class CounselorChatIn(BaseModel):
     conversation_id: uuid.UUID | None = None
     message: str = Field(min_length=1, max_length=2000)
     # Honoured only for a super_admin; hub users always use their own school.
     school_id: uuid.UUID | None = None
+    # The Hub job card the message came from; adds hidden context for this turn only.
+    card_type: CounselorCardType | None = None
 
     @field_validator("message")
     @classmethod

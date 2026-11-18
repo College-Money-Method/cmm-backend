@@ -134,3 +134,14 @@ def test_rules_cover_clarifying_and_handing_off():
     assert "ask for it in one to three short questions" in prompt
     assert "say plainly who handles the rest" in prompt
     assert "Never state a price, fee, rate, payment term" in prompt
+
+
+def test_card_line_follows_who_is_asking_only_when_given():
+    from src.assistant.counselor_card_context import CARD_CONTEXT, card_prompt
+
+    line = card_prompt("family_advising")
+    prompt = build_counselor_prompt([make_chunk()], SCHOOL, WORKSHOPS, card=line)
+    assert f"a high school counselor at A High (TX).\n{line}\n\nRules:" in prompt
+    assert "started from" not in _prompt()
+    assert card_prompt(None) == card_prompt("unknown") == ""
+    assert all(c.prompt for c in CARD_CONTEXT.values())

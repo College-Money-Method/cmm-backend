@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from src.assistant.counselor_card_context import card_prompt
 from src.assistant.counselor_program_snapshot import program_snapshot_section
 from src.assistant.counselor_prompt import build_counselor_prompt
 from src.assistant.counselor_template_values import (
@@ -31,9 +32,15 @@ COUNSELOR_AUDIENCE = "counselor"
 
 
 def counselor_prompt_builder(
-    db: Session, school: School, user_id: uuid.UUID | None, *, guidance: str | None = None
+    db: Session,
+    school: School,
+    user_id: uuid.UUID | None,
+    *,
+    guidance: str | None = None,
+    card_type: str | None = None,
 ) -> Callable[[list[RetrievedChunk]], str]:
-    """A ``build_prompt`` for ``run_chat_turn``; ``guidance`` overrides the admin sections (eval only)."""
+    """A ``build_prompt`` for ``run_chat_turn``; ``guidance`` overrides the admin sections (eval only),
+    and ``card_type`` names the Hub job card the message came from."""
     workshops = school_workshop_section(db, school, datetime.now(UTC))
     program = program_snapshot_section(db, school)
     if guidance is None:
@@ -44,7 +51,8 @@ def counselor_prompt_builder(
     values_section = template_values_section(values)
     asker_name = own[2] if own else ""
     origin = email_origin()
+    card = card_prompt(card_type)
     return lambda chunks: build_counselor_prompt(
         fill_template_chunks(chunks, values), school, workshops, guidance, values_section, asker_name,
-        program=program, origin=origin,
+        program=program, origin=origin, card=card,
     )
