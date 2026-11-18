@@ -63,7 +63,7 @@ def chat(body: CounselorChatIn, user: CounselorAssistantUser, db: DbDep) -> Stre
         message=body.message,
         scope=scope,
         build_prompt=counselor_prompt_builder(
-            db, school, user.user_id, card_type=body.card_type
+            db, school, user.user_id, card_type=body.card_type, message=body.message
         ),
         profile={"school_id": str(school.id)},
         school_slug=school.slug,

@@ -57,10 +57,11 @@ def past_window_start(db, now: datetime) -> datetime:
     return max(min(cycle_start, recent), now - timedelta(days=MAX_PAST_DAYS))
 
 
-def school_workshop_section(db, school: School, now: datetime) -> str:
+def school_webinar_rows(db, school: School, now: datetime) -> tuple[list, list]:
+    """``(upcoming, past)`` ``(Webinar, PortalMapping)`` rows: upcoming soonest first; past
+    ones (newest first) only fill what the cap leaves, so a busy cycle never hides the next
+    workshop."""
     start = Webinar.start_datetime
-    # Upcoming first, soonest first; past ones (newest first) only fill what the
-    # cap leaves, so a busy cycle never hides the next workshop.
     upcoming = _school_webinars(
         db, school, start.between(now, now + timedelta(days=AHEAD_DAYS)), False, MAX_WORKSHOPS
     )
@@ -70,6 +71,11 @@ def school_workshop_section(db, school: School, now: datetime) -> str:
             db, school, (start >= past_window_start(db, now)) & (start < now), True,
             MAX_WORKSHOPS - len(upcoming),
         )
+    return upcoming, past
+
+
+def school_workshop_section(db, school: School, now: datetime) -> str:
+    upcoming, past = school_webinar_rows(db, school, now)
     if not upcoming and not past:
         return f"{SECTION_HEADER}\n{EMPTY_SECTION}"
 
@@ -85,16 +91,10 @@ def school_workshop_section(db, school: School, now: datetime) -> str:
     return "\n".join([SECTION_HEADER, *lines])
 
 
-def _line(
-    school: School,
-    webinar: Webinar,
-    mapping: PortalMapping,
-    origin: str | None,
-    counts: WorkshopCounts,
-    is_past: bool,
-) -> str:
+def workshop_values(school: School, webinar: Webinar, mapping: PortalMapping, origin: str | None) -> dict[str, str]:
+    """The workshop merge-tag values the Hub's emails use for this session at this school."""
     override = (mapping.school_override or {}).get("suggested_grades")
-    values = build_workshop_merge_replacements(
+    return build_workshop_merge_replacements(
         school_name=school.name,
         family_label="",
         counselor_name="",
@@ -110,6 +110,17 @@ def _line(
         registration_url=webinar.registration_url or webinar.zoom_link,
         origin=origin,
     )
+
+
+def _line(
+    school: School,
+    webinar: Webinar,
+    mapping: PortalMapping,
+    origin: str | None,
+    counts: WorkshopCounts,
+    is_past: bool,
+) -> str:
+    values = workshop_values(school, webinar, mapping, origin)
     line = (
         f"- {values['workshop_name']}: {values['date']} at {values['time']} "
         f"({values['grade_label']}); register: {values['registration_link']}"

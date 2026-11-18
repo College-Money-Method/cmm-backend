@@ -22,6 +22,7 @@ from src.assistant.counselor_template_values import (
     template_values_section,
 )
 from src.assistant.counselor_workshop_section import school_workshop_section
+from src.assistant.counselor_workshop_template import workshop_template_section
 from src.assistant.prompt_sections import prompt_guidance
 from src.assistant.search import RetrievedChunk
 from src.emails.counselor_resolver import resolve_counselor_name
@@ -38,10 +39,13 @@ def counselor_prompt_builder(
     *,
     guidance: str | None = None,
     card_type: str | None = None,
+    message: str = "",
 ) -> Callable[[list[RetrievedChunk]], str]:
     """A ``build_prompt`` for ``run_chat_turn``; ``guidance`` overrides the admin sections (eval only),
-    and ``card_type`` names the Hub job card the message came from."""
-    workshops = school_workshop_section(db, school, datetime.now(UTC))
+    ``card_type`` names the Hub job card the message came from, and ``message`` picks the
+    workshop template for a workshop email."""
+    now = datetime.now(UTC)
+    workshops = school_workshop_section(db, school, now)
     program = program_snapshot_section(db, school)
     if guidance is None:
         guidance = prompt_guidance(db, COUNSELOR_AUDIENCE)
@@ -52,7 +56,10 @@ def counselor_prompt_builder(
     asker_name = own[2] if own else ""
     origin = email_origin()
     card = card_prompt(card_type)
+    workshop_template = workshop_template_section(
+        db, school, message, card_type, values, origin or None, now
+    )
     return lambda chunks: build_counselor_prompt(
         fill_template_chunks(chunks, values), school, workshops, guidance, values_section, asker_name,
-        program=program, origin=origin, card=card,
+        program=program, origin=origin, card=card, workshop_template=workshop_template,
     )
