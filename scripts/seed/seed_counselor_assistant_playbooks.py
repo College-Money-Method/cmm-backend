@@ -1,8 +1,9 @@
 """Save the counselor assistant's playbooks as team-guidance sections.
 
 Reads ``scripts/assistant_eval/counselor_playbooks.json`` (the file the eval
-grades with ``--guidance-file``) and creates or updates one counselor-audience
-prompt section per entry, matched by title. Sections stay editable in
+grades with ``--guidance-file``) and creates or updates one prompt section per
+entry, matched by title and audience. An entry's optional ``audience`` is
+"counselor" (the default), "family" or "both". Sections stay editable in
 Admin -> Assistant afterwards; re-running overwrites their body with the file's.
 
 Usage (from the repo root; dry run unless --apply):
@@ -25,10 +26,11 @@ from sqlalchemy import func, select
 
 import src.db.models  # noqa: F401 - registers every mapper before the first query
 from src.assistant.models import AssistantPromptSection
+from src.assistant.prompt_sections import PROMPT_SECTION_AUDIENCES
 from src.db.base import get_session_factory
 
 PLAYBOOKS = PROJECT_ROOT / "scripts" / "assistant_eval" / "counselor_playbooks.json"
-AUDIENCE = "counselor"
+DEFAULT_AUDIENCE = "counselor"
 
 
 def main() -> None:
@@ -43,15 +45,18 @@ def main() -> None:
         print(f"Database: {db.get_bind().url.database} (live for all schools once applied)")
         for entry in entries:
             title, body = entry["title"].strip(), entry["body"].strip()
+            audience = entry.get("audience", DEFAULT_AUDIENCE)
+            if audience not in PROMPT_SECTION_AUDIENCES:
+                sys.exit(f"{title!r}: audience must be one of {PROMPT_SECTION_AUDIENCES}")
             row = db.scalars(
                 select(AssistantPromptSection).where(
                     func.lower(func.trim(AssistantPromptSection.title)) == title.lower(),
-                    AssistantPromptSection.audience == AUDIENCE,
+                    AssistantPromptSection.audience == audience,
                 )
             ).first()
             if row is None:
-                print(f"create  {title} ({len(body)} chars)")
-                db.add(AssistantPromptSection(title=title, body=body, audience=AUDIENCE, enabled=True))
+                print(f"create  {title} [{audience}] ({len(body)} chars)")
+                db.add(AssistantPromptSection(title=title, body=body, audience=audience, enabled=True))
             elif row.body.strip() != body:
                 print(f"update  {title} ({len(row.body)} -> {len(body)} chars)")
                 row.body, row.updated_at = body, datetime.now(UTC)

@@ -124,7 +124,8 @@ def main() -> None:
         parts = guidance_parts(db, COUNSELOR_AUDIENCE)
         if args.guidance_file:
             # A draft replaces a saved section with the same title, so a seeded playbook is not doubled.
-            drafts = [(s["title"].strip(), s["body"]) for s in json.loads(args.guidance_file.read_text())]
+            drafts = [(s["title"].strip(), s["body"]) for s in json.loads(args.guidance_file.read_text())
+                      if s.get("audience", COUNSELOR_AUDIENCE) in (COUNSELOR_AUDIENCE, "both")]
             titles = {t.lower() for t, _ in drafts}
             parts = [p for p in parts if p[0].strip().lower() not in titles] + drafts
         prepared = prepare(db, school, cases, format_guidance(parts))

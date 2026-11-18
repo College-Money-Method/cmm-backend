@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from eval_style import style_summary
+
 
 def _rate(rows: list[dict]) -> str:
     passed = sum(r["passed"] for r in rows)
@@ -48,6 +50,7 @@ def summary_markdown(meta: dict, results: list[dict]) -> str:
             f"Content in place: {_rate([r for r in results if not r.get('needs_policy')])} · "
             f"waiting on CMM content (needs_policy): {_rate([r for r in results if r.get('needs_policy')])}"
         ),
+        style_summary(results),
         "",
         "## By mode",
         "",

@@ -47,6 +47,25 @@ would teach the model to guess, which the rules forbid.
 - Appeals: move the "suggest a 1:1" line into the base rules if Paul confirms it applies to every appeal.
 - Re-check after content lands; the judge flagged some clarify cases where the detail was arguably given.
 
+## Voice and style (2026-11-18)
+
+Paul's style guide turned into two team-guidance sections in `counselor_playbooks.json`:
+"Voice and style" (both assistants: no em/en dashes, sparing bold, answer first, no hype words,
+merit vs need offices, how to write family emails/texts) and "Talking with families" (family chat only:
+partnership "we", "your student", spell out acronyms, short paragraphs, warm close).
+Eval now reports house style (dashes, hype phrases) and a judge voice score 1-5; style never fails a case.
+
+| Run | Pass | Style clean | Voice |
+|---|---|---|---|
+| voice-baseline (DB playbooks, no voice) | 52/81 | 29/81 | 4.0 |
+| voice v1 (one long section, both) | 43/81 | – | 3.9 |
+| voice v3 (lean both + family-only) | 50/81 | 75/81 | 4.0 |
+
+The long single section cost about 8 passes (shorter answers, skipped closing questions); keeping the
+family warmth out of the counselor prompt fixed that. 50 vs 52 is within run-to-run noise (49 to 52).
+Family chat spot check (5 questions): 0/5 style clean without the sections, 5/5 with them.
+Bold is allowed for scan terms: source samples are plain text extracted from email, so they say nothing about bold.
+
 ## Unresolved questions
 - Is ≥ 80% the right bar, or should route/policy themes be 100% and aid themes judged by hand?
 - Should clarify always end with questions even when a common-case answer covers most families?
