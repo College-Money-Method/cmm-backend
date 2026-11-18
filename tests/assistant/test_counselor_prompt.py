@@ -145,3 +145,10 @@ def test_card_line_follows_who_is_asking_only_when_given():
     assert "started from" not in _prompt()
     assert card_prompt(None) == card_prompt("unknown") == ""
     assert all(c.prompt for c in CARD_CONTEXT.values())
+
+
+def test_answers_keep_first_person_out():
+    prompt = _prompt()
+    assert 'avoid "I", "me" and "my", and never open with them' in prompt
+    assert "CMM's resources don't cover X" in prompt
+    assert "still give the common-case answer before any question" in prompt
