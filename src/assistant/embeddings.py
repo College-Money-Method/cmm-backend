@@ -78,5 +78,6 @@ def embed_documents(texts: list[str]) -> list[list[float]]:
     return _embed(texts, "search_document", bedrock_usage.ASSISTANT_CONTENT_EMBED)
 
 
-def embed_query(text: str) -> list[float]:
-    return _embed([text], "search_query", bedrock_usage.ASSISTANT_QUESTION_EMBED)[0]
+def embed_query(text: str, invoke_type: str = bedrock_usage.ASSISTANT_QUESTION_EMBED) -> list[float]:
+    """``invoke_type`` lets an offline eval bill its questions apart from live chat."""
+    return _embed([text], "search_query", invoke_type)[0]

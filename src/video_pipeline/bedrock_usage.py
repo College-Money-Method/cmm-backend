@@ -44,6 +44,8 @@ ASSISTANT_ENRICH = "assistant_enrich"
 ASSISTANT_ANSWER = "assistant_answer"
 ASSISTANT_QUESTION_EMBED = "assistant_question_embed"
 ASSISTANT_CONTENT_EMBED = "assistant_content_embed"
+# Offline calibration runs of the counselor assistant: answers and the grading model.
+ASSISTANT_EVAL = "assistant_eval"
 
 
 def cost_usd(input_tokens: int, output_tokens: int, model_id: str | None = None) -> Decimal:

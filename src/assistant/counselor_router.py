@@ -9,7 +9,6 @@ counselor's conversation answers 404.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -17,31 +16,19 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from src.assistant.chat_turn import owned_conversation, run_chat_turn
-from src.assistant.counselor_program_snapshot import program_snapshot_section
-from src.assistant.counselor_prompt import build_counselor_prompt
+from src.assistant.counselor_context import COUNSELOR_AUDIENCE, counselor_prompt_builder
 from src.assistant.counselor_schemas import CounselorChatIn
-from src.assistant.counselor_template_values import (
-    fill_template_chunks,
-    own_name,
-    template_values,
-    template_values_section,
-)
-from src.assistant.counselor_workshop_section import school_workshop_section
 from src.assistant.family_school_scope import scope_for_school
 from src.assistant.models import AssistantConversation
-from src.assistant.prompt_sections import prompt_guidance
 from src.assistant.schemas import AssistantConversationListOut, AssistantConversationOut
 from src.auth.deps import get_current_user
 from src.auth.hub_school import resolve_hub_school_id
 from src.auth.schemas import CurrentUser
 from src.db.deps import DbDep
-from src.emails.counselor_resolver import resolve_counselor_name
-from src.emails.school_links import email_origin
 from src.schools.models import School
 
 router = APIRouter(prefix="/api/v1/assistant/counselor", tags=["assistant-counselor"])
 
-COUNSELOR_AUDIENCE = "counselor"
 CONVERSATION_LIST_LIMIT = 50
 _ALLOWED_ROLES = ("super_admin", "hub_admin", "hub_user")
 
@@ -67,14 +54,6 @@ def chat(body: CounselorChatIn, user: CounselorAssistantUser, db: DbDep) -> Stre
     if user.role != "super_admin" and not school.counselor_assistant_enabled:
         raise HTTPException(status_code=403, detail="counselor_assistant_disabled")
     scope = scope_for_school(school, COUNSELOR_AUDIENCE, "full")
-    workshops = school_workshop_section(db, school, datetime.now(UTC))
-    program = program_snapshot_section(db, school)
-    guidance = prompt_guidance(db, COUNSELOR_AUDIENCE)
-    # The asker's name and school fill the drafts' merge tags, also when a super admin tests a school.
-    own = own_name(db, user.user_id)
-    values = template_values(school, own or resolve_counselor_name(db, school.id))
-    values_section = template_values_section(values)
-    asker_name = own[2] if own else ""
     return run_chat_turn(
         db,
         audience=COUNSELOR_AUDIENCE,
@@ -82,10 +61,7 @@ def chat(body: CounselorChatIn, user: CounselorAssistantUser, db: DbDep) -> Stre
         conversation_id=body.conversation_id,
         message=body.message,
         scope=scope,
-        build_prompt=lambda chunks: build_counselor_prompt(
-            fill_template_chunks(chunks, values), school, workshops, guidance, values_section, asker_name,
-            program=program, origin=email_origin(),
-        ),
+        build_prompt=counselor_prompt_builder(db, school, user.user_id),
         profile={"school_id": str(school.id)},
         school_slug=school.slug,
     )

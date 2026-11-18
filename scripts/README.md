@@ -105,6 +105,7 @@ scripts/
 | `seed_counselors_from_contacts.py` | Create counselor accounts from school contacts. | `uv run python scripts/seed/seed_counselors_from_contacts.py [--dry-run]` |
 | `seed_super_admins.py` | Seed `super_admin` role records for CMM team members. | `uv run python scripts/seed/seed_super_admins.py [--dry-run]` |
 | `seed_pages_from_crawl.py` | Seed pages from crawl output; uploads WP assets to S3. | `uv run --extra scripts python scripts/seed/seed_pages_from_crawl.py [--dry-run] [--force] [--env dev]` |
+| `seed_counselor_assistant_playbooks.py` | Save `assistant_eval/counselor_playbooks.json` as counselor team-guidance sections (upsert by title; editable in Admin → Assistant). | `uv run python scripts/seed/seed_counselor_assistant_playbooks.py [--apply]` |
 
 ## content_fix/ — Content corrections
 
@@ -136,3 +137,19 @@ scripts/
 | Script | Description | Run |
 |--------|-------------|-----|
 | `check_callout_attrs.py` | Inspect callout-node attrs for a specific content asset (read-only). | `python -m scripts.debug.check_callout_attrs` |
+
+## assistant_eval/ — Counselor assistant calibration
+
+Grades the counselor assistant on the Phase 1 top-20 questions. Each case runs through the live
+retrieval scope and system prompt, gets one answer from the answer model, and is graded twice:
+deterministic checks (citation numbers; links, dollar amounts, emails and phones not in the prompt;
+retrieval hits) and a Sonnet rubric judge. Bedrock spend is recorded as `assistant_eval`. Reports land
+in `scripts/output/assistant_eval/` (gitignored).
+
+| File | Description |
+|------|-------------|
+| `counselor_cases.json` | 81 cases: theme, expected mode (answer / clarify / answer_route / route), must_ask, must_cover, route_to, must_not, `needs_policy` (CMM content not written yet). |
+| `counselor_playbooks.json` | Draft team-guidance sections (clarifying details, who handles what, partnership scope). Graded with `--guidance-file`; saved with the seed script above. |
+| `run_counselor_eval.py` | Runner. `uv run python scripts/assistant_eval/run_counselor_eval.py [--school SLUG] [--only 03,13,r2] [--guidance-file FILE] [--no-judge] [--label NAME]` |
+| `eval_grading.py` / `eval_report.py` | Checks, judge rubric, pass rule, markdown summary. |
+

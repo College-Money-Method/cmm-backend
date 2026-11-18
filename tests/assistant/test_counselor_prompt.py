@@ -127,3 +127,10 @@ def test_grade_checklist_rule_present():
     assert "A checklist is not an email draft: it uses no {{merge_tags}} except {{resource_center_password}}" in prompt
     assert "leave out any item you cannot tie to either" in prompt
     assert "Cite each item with a plain [n] after its text" in prompt
+
+
+def test_rules_cover_clarifying_and_handing_off():
+    prompt = _prompt()
+    assert "ask for it in one to three short questions" in prompt
+    assert "say plainly who handles the rest" in prompt
+    assert "Never state a price, fee, rate, payment term" in prompt
