@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import re
 
+from eval_style import style_issues
+
 from src.config import settings
 from src.video_pipeline import bedrock_usage
 from src.video_pipeline.bedrock_client import get_client
@@ -39,6 +41,7 @@ def deterministic_checks(case: dict, answer: str, system_prompt: str, chunks: li
         "invented_contacts": unknown(_EMAIL) + unknown(_PHONE),
         "asks_question": "?" in answer,
         "retrieval_hit": any(h.lower() in titles for h in hints) if hints else None,
+        "style": style_issues(answer),
     }
 
 
@@ -74,6 +77,7 @@ Reply with JSON only, no prose around it:
  "violations": [the must_not items the answer commits, verbatim],
  "grounded": true|false (false if any factual claim is not supported by the sources or school data),
  "score": 1-5 (5 = a counselor could use it as is),
+ "voice": 1-5 (CMM's voice, graded apart from content: 5 = warm, direct, plain everyday words, short paragraphs, honest, with the partnership "we" and a clear next step in anything written to families; 1 = corporate, jargon-heavy, hyped or cold),
  "notes": "one sentence on the biggest problem, or what made it good"}"""
 
 
