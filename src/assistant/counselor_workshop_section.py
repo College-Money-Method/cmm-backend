@@ -4,8 +4,8 @@ The school's mapped webinars from the start of the current cycle (at least the
 last 30 days, at most a year) to 120 days ahead, upcoming ones first. Values come from the
 same builder the emails use, so a drafted date, time and link match what
 families would receive. Each line also carries registration (and, once held,
-attendance) counts: the session total and this school's share. The
-resource-center password, contact emails and registrants are never read in.
+attendance) counts: session totals across every host school, never one school's
+share. The resource-center password, contact emails and registrants are never read in.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ def school_workshop_section(db, school: School, now: datetime) -> str:
         return f"{SECTION_HEADER}\n{EMPTY_SECTION}"
 
     origin = email_origin() or None
-    counts = workshop_counts(db, [w.id for w, _ in upcoming + past], school.id)
+    counts = workshop_counts(db, [w.id for w, _ in upcoming + past])
     lines = [_line(school, w, m, origin, counts[w.id], is_past=False) for w, m in upcoming]
     if lines:
         # Anchors "our next workshop" to one line instead of leaving the model to compare dates.

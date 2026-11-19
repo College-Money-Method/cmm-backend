@@ -127,7 +127,7 @@ def _register(db, webinar, school_id, *, attended=False, n=1):
     db.commit()
 
 
-def test_upcoming_workshop_shows_total_and_school_registrations(db, school):
+def test_upcoming_workshop_shows_only_the_session_total(db, school):
     other = School(id=uuid.uuid4(), name="B High", slug="b-high")
     db.add(other)
     db.commit()
@@ -137,9 +137,10 @@ def test_upcoming_workshop_shows_total_and_school_registrations(db, school):
     _register(db, webinar, other.id, n=3)
     _register(db, webinar, None)  # no school on record still counts toward the total
     text = school_workshop_section(db, school, NOW)
-    assert "registered: 6 total, 2 from your school" in text
+    assert "registered: 6 in total" in text
     assert "attended" not in text
-    # Counts only: never who registered, never the other school.
+    # The total only: never the school's own share, who registered, or the other school.
+    assert "your school" not in text
     assert "Pat" not in text and "Parent" not in text and "@example.com" not in text and "B High" not in text
 
 
@@ -151,12 +152,13 @@ def test_held_workshop_adds_attendance(db, school):
     _register(db, webinar, school.id)
     _register(db, webinar, other.id, attended=True)
     text = school_workshop_section(db, school, NOW)
-    assert "registered: 4 total, 3 from your school; attended: 3 total, 2 from your school" in text
+    assert "registered: 4 in total; attended: 3 in total" in text
+    assert "your school" not in text
 
 
 def test_workshop_with_no_registrations_shows_zeros(db, school):
     add_webinar(db, school.id, NOW + timedelta(days=3))
-    assert "registered: 0 total, 0 from your school" in school_workshop_section(db, school, NOW)
+    assert "registered: 0 in total" in school_workshop_section(db, school, NOW)
 
 
 def _current_cycle(db, began):
