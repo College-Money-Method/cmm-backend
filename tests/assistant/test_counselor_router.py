@@ -240,3 +240,30 @@ def test_conversation_ownership_and_audience(harness, factory):
 def test_viewer_cannot_list_conversations(harness):
     harness.as_user("viewer", SCHOOL_A)
     assert harness.client.get(f"{BASE}/conversations").status_code == 403
+
+
+def test_job_card_adds_hidden_context_but_stores_the_message_as_typed(harness, seen, factory, monkeypatch):
+    texts = []
+    monkeypatch.setattr(chat_turn, "hybrid_search", lambda db, text, vector, scope: texts.append(text) or [make_chunk()])
+    harness.as_user("hub_user", SCHOOL_A)
+    response = harness.chat(message="CSS Profile", card_type="finding_resources")
+    assert response.status_code == 200
+    assert 'started from "Finding Resources"' in _system(seen)
+    assert texts == ["CSS Profile\nCMM resources, guides and videos for families on this topic"]
+    with factory() as db:
+        conversation = db.query(AssistantConversation).one()
+        assert conversation.title == "CSS Profile"
+        assert [m.content for m in conversation.messages if m.role == "user"] == ["CSS Profile"]
+
+
+def test_typed_question_gets_no_card_context(harness, seen):
+    harness.as_user("hub_user", SCHOOL_A)
+    assert harness.chat().status_code == 200
+    assert "started from" not in _system(seen)
+
+
+def test_unknown_card_type_is_rejected(harness, seen):
+    harness.as_user("hub_user", SCHOOL_A)
+    assert harness.chat(card_type="anything_else").status_code == 422
+    assert harness.chat(card_type="grade_checklist").status_code == 422
+    assert seen["embeds"] == 0

@@ -106,6 +106,7 @@ scripts/
 | `seed_super_admins.py` | Seed `super_admin` role records for CMM team members. | `uv run python scripts/seed/seed_super_admins.py [--dry-run]` |
 | `seed_pages_from_crawl.py` | Seed pages from crawl output; uploads WP assets to S3. | `uv run --extra scripts python scripts/seed/seed_pages_from_crawl.py [--dry-run] [--force] [--env dev]` |
 | `seed_counselor_assistant_playbooks.py` | Save `assistant_eval/counselor_playbooks.json` as team-guidance sections (upsert by title and audience; an entry's `audience` is `counselor` by default, or `family` / `both`; editable in Admin → Assistant). | `uv run python scripts/seed/seed_counselor_assistant_playbooks.py [--apply]` |
+| `seed_counselor_hub_guide.py` | Load the frontend's `docs/user-guides/counselor-hub-user-guide.md` as one counselor-only resource (converted to Tiptap headings, one chunk per page or task) and reindex it. The Markdown file wins: re-running overwrites edits made in Admin → Content. | `uv run python scripts/seed/seed_counselor_hub_guide.py --file <guide.md> [--apply] [--no-enrich]` |
 
 ## content_fix/ — Content corrections
 

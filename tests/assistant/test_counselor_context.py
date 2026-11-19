@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -11,8 +12,9 @@ from src.assistant.counselor_context import counselor_prompt_builder
 from src.assistant.models import AssistantPromptSection
 from src.assistant.prompt_sections import format_guidance
 from src.schools.models import School
+from src.workshops.models import WorkshopEmailTemplate
 from tests.assistant.conftest import make_chunk
-from tests.assistant.counselor_test_support import make_counselor_factory
+from tests.assistant.counselor_test_support import add_webinar, make_counselor_factory
 
 
 @pytest.fixture
@@ -41,6 +43,16 @@ def test_guidance_override_replaces_saved_guidance(db, school):
     override = format_guidance([("Draft rule", "Draft guidance body.")])
     prompt = counselor_prompt_builder(db, school, None, guidance=override)([make_chunk()])
     assert "### Draft rule\nDraft guidance body." in prompt and "Saved guidance body." not in prompt
+
+
+def test_workshop_email_message_brings_that_workshops_template(db, school):
+    webinar = add_webinar(db, school.id, datetime.now(UTC) + timedelta(days=5), name="FAFSA Live")
+    db.add(WorkshopEmailTemplate(workshop_id=webinar.workshop_id, type="announcement", name="Invite",
+                                 subject="Join {{workshop_name}}", body="Own invite body"))
+    db.commit()
+    build = counselor_prompt_builder(db, school, None, card_type="workshop_promotion", message="FAFSA Live")
+    assert "Subject: Join FAFSA Live\nOwn invite body" in build([make_chunk()])
+    assert "Own invite body" not in counselor_prompt_builder(db, school, None, message="FAFSA Live")([make_chunk()])
 
 
 def test_blank_sections_format_to_nothing():

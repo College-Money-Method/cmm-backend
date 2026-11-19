@@ -64,8 +64,13 @@ def run_chat_turn(
     build_prompt: Callable[[list[RetrievedChunk]], str],
     profile: dict,
     school_slug: str | None = None,
+    search_hint: str = "",
 ) -> StreamingResponse:
-    """Retrieve for ``scope``, save the question, and stream the answer as SSE."""
+    """Retrieve for ``scope``, save the question, and stream the answer as SSE.
+
+    ``search_hint`` adds words to this turn's retrieval query only; the stored
+    question stays as the user typed it.
+    """
     history: list[dict] = []
     if conversation_id:
         conversation = owned_conversation(db, conversation_id, owner_id, audience)
@@ -89,6 +94,8 @@ def run_chat_turn(
         history.pop()
 
     retrieval_text = retrieval_query(history, message)
+    if search_hint:
+        retrieval_text = f"{retrieval_text}\n{search_hint}"
     try:
         query_vector = embed_query(retrieval_text)
     except EmbeddingError:

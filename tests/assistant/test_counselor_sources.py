@@ -113,7 +113,7 @@ def test_inactive_and_google_docs_templates_are_skipped(db):
     assert list(communication_template_documents(db)) == []
 
 
-def test_workshop_email_title_names_workshop_when_specific(db):
+def test_workshop_email_templates_name_their_workshop_and_skip_legacy_globals(db):
     workshop = Workshop(id=uuid.uuid4(), name="FAFSA Basics", sequence_number=1)
     db.add(workshop)
     db.flush()
@@ -125,10 +125,7 @@ def test_workshop_email_title_names_workshop_when_specific(db):
     ])
     db.commit()
     docs = {d.title: d for d in workshop_email_template_documents(db)}
-    assert set(docs) == {
-        "Workshop email: Announce (announcement, FAFSA Basics)",
-        "Workshop email: Thanks (followup)",
-    }
+    assert set(docs) == {"Workshop email: Announce (announcement, FAFSA Basics)"}
     assert all(d.for_family is False and d.for_counselor for d in docs.values())
 
 

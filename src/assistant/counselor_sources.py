@@ -44,11 +44,12 @@ def communication_template_documents(db: Session) -> Iterator[SourceDocument]:
 def workshop_email_template_documents(db: Session) -> Iterator[SourceDocument]:
     query = (
         select(WorkshopEmailTemplate, Workshop.name)
-        .outerjoin(Workshop, Workshop.id == WorkshopEmailTemplate.workshop_id)
+        # Only workshop-specific templates: the Hub never shows the legacy ones without a workshop.
+        .join(Workshop, Workshop.id == WorkshopEmailTemplate.workshop_id)
         .order_by(WorkshopEmailTemplate.name, WorkshopEmailTemplate.id)
     )
     for template, workshop_name in db.execute(query):
-        kind = f"{template.type}, {workshop_name}" if workshop_name else template.type
+        kind = f"{template.type}, {workshop_name}"
         sections = [
             *_text_section("Subject", template.subject),
             *_text_section("Email", template.body),

@@ -63,9 +63,10 @@ def load_cases(path: Path, only: str | None) -> list[dict]:
 def prepare(db, school: School, cases: list[dict], guidance: str) -> list[dict]:
     """Retrieval and prompt for each case, sequentially (one DB session)."""
     scope = scope_for_school(school, COUNSELOR_AUDIENCE, "full")
-    build_prompt = counselor_prompt_builder(db, school, None, guidance=guidance)
     prepared = []
     for case in cases:
+        # Per case: the message picks the workshop template for a workshop email.
+        build_prompt = counselor_prompt_builder(db, school, None, guidance=guidance, message=case["message"])
         vector = embed_query(case["message"], bedrock_usage.ASSISTANT_EVAL)
         chunks = school_links(hybrid_search(db, case["message"], vector, scope), school.slug)
         prepared.append({"case": case, "chunks": chunks, "system": build_prompt(chunks)})
