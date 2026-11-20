@@ -84,6 +84,13 @@ def test_prompt_asks_one_follow_up_without_personal_data():
     assert "Never ask for names, contact details, income or asset figures" in prompt
 
 
+def test_prompt_leads_gaps_with_cmm_resources_and_never_offers_one_on_one():
+    prompt = build_family_prompt([], {"grade": None, "state": None})
+    assert "lead with what CMM does have" in prompt
+    assert "Never suggest, offer or describe one-on-one advising" in prompt
+    assert "suggest asking their school counselor or a CMM workshop" not in prompt
+
+
 def test_prompt_offers_calculator_marker_and_trusts_results():
     prompt = build_family_prompt([], {"grade": None, "state": None})
     assert f"end the answer with this exact line: {CALCULATOR_MARKER}" in prompt
