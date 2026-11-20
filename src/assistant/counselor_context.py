@@ -13,7 +13,6 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from src.assistant.counselor_card_context import card_prompt
-from src.assistant.counselor_program_snapshot import program_snapshot_section
 from src.assistant.counselor_prompt import build_counselor_prompt
 from src.assistant.counselor_template_values import (
     fill_template_chunks,
@@ -46,7 +45,6 @@ def counselor_prompt_builder(
     workshop template for a workshop email."""
     now = datetime.now(UTC)
     workshops = school_workshop_section(db, school, now)
-    program = program_snapshot_section(db, school)
     if guidance is None:
         guidance = prompt_guidance(db, COUNSELOR_AUDIENCE)
     # The asker's name and school fill the drafts' merge tags, also when a super admin tests a school.
@@ -61,5 +59,5 @@ def counselor_prompt_builder(
     )
     return lambda chunks: build_counselor_prompt(
         fill_template_chunks(chunks, values), school, workshops, guidance, values_section, asker_name,
-        program=program, origin=origin, card=card, workshop_template=workshop_template,
+        origin=origin, card=card, workshop_template=workshop_template,
     )
