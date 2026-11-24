@@ -25,6 +25,7 @@ from sqlalchemy import select
 from src.assistant.answer import HISTORY_MESSAGES, stream_answer
 from src.assistant.embeddings import EmbeddingError, embed_query
 from src.assistant.models import AssistantConversation, AssistantMessage
+from src.assistant.question_topics import tag_question_soon
 from src.assistant.retrieval_scope import RetrievalScope
 from src.assistant.search import RetrievedChunk, hybrid_search, retrieval_query
 
@@ -116,6 +117,8 @@ def run_chat_turn(
     db.add(question)
     conversation.updated_at = datetime.now(UTC)
     db.commit()
+    # Admin topic stats; runs beside the answer and never delays it.
+    tag_question_soon(question.id)
 
     return StreamingResponse(
         stream_answer(

@@ -61,6 +61,7 @@ from src.pages.router import router as pages_router
 from src.calculators.router import router as calculators_router
 from src.app_config.router import router as app_config_router
 from src.colleges.public_router import router as colleges_public_router
+from src.assistant.admin_conversations_router import router as assistant_admin_conversations_router
 from src.assistant.admin_feedback_router import router as assistant_admin_feedback_router
 from src.assistant.admin_router import router as assistant_admin_router
 from src.assistant.admin_settings_router import router as assistant_admin_settings_router
@@ -159,6 +160,7 @@ app.include_router(assistant_counselor_router)
 app.include_router(assistant_counselor_feedback_router)
 app.include_router(assistant_admin_router)
 app.include_router(assistant_admin_feedback_router)
+app.include_router(assistant_admin_conversations_router)
 app.include_router(assistant_admin_settings_router)
 app.include_router(analytics_router)
 app.include_router(analytics_admin_router)

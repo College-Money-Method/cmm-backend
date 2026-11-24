@@ -94,6 +94,10 @@ class AssistantConversation(Base):
     card_type: Mapped[str | None] = mapped_column(Text)
     # Counselor "delete" hides the chat from its owner but keeps it for quality review and usage.
     deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # Admin review: the cached summary, when it was written, and how many messages it covered.
+    admin_summary: Mapped[str | None] = mapped_column(Text)
+    admin_summary_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    admin_summary_messages: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
@@ -127,6 +131,8 @@ class AssistantMessage(Base):
     model_id: Mapped[str | None] = mapped_column(Text)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
+    # User questions only: the topic it was classified into (src/assistant/question_topics.py).
+    topic_tag: Mapped[str | None] = mapped_column(Text, index=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     conversation: Mapped[AssistantConversation] = relationship(back_populates="messages")

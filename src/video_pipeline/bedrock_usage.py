@@ -44,6 +44,9 @@ ASSISTANT_ENRICH = "assistant_enrich"
 ASSISTANT_ANSWER = "assistant_answer"
 ASSISTANT_QUESTION_EMBED = "assistant_question_embed"
 ASSISTANT_CONTENT_EMBED = "assistant_content_embed"
+# Admin review: one topic tag per user question, and on-demand conversation summaries.
+ASSISTANT_TOPIC_TAG = "assistant_topic_tag"
+ASSISTANT_SUMMARY = "assistant_summary"
 # Offline calibration runs of the counselor assistant: answers and the grading model.
 ASSISTANT_EVAL = "assistant_eval"
 
