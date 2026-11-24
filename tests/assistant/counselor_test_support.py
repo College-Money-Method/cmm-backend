@@ -21,8 +21,9 @@ from src.workshops.models import PortalMapping, Webinar, Workshop
 
 TABLES = (
     "app_config", "assistant_conversations", "assistant_messages", "assistant_prompt_sections",
+    "assistant_message_feedback",
     "schools", "cohorts", "grade_sets", "cycles", "workshops", "webinars", "portal_mapping",
-    "workshop_registrations", "contacts", "user_roles", "workshop_email_templates",
+    "workshop_registrations", "contacts", "user_roles", "workshop_email_templates", "profiles",
 )
 
 

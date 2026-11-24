@@ -22,7 +22,18 @@ from src.assistant.search import RetrievedChunk
 from src.db.base import Base
 from src.video_pipeline import bedrock_usage
 
-TABLES = ("app_config", "assistant_conversations", "assistant_messages", "assistant_prompt_sections")
+@pytest.fixture(autouse=True)
+def no_background_topic_tagging(monkeypatch):
+    """Chat turns queue a Bedrock topic call; tests record the ids instead."""
+    queued: list[uuid.UUID] = []
+    monkeypatch.setattr(chat_turn, "tag_question_soon", queued.append)
+    return queued
+
+
+TABLES = (
+    "app_config", "schools", "assistant_conversations", "assistant_messages",
+    "assistant_prompt_sections", "assistant_message_feedback",
+)
 
 
 @pytest.fixture

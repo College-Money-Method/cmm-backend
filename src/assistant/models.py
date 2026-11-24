@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Boolean, Computed, ForeignKey, Index, Integer, Text, Uuid
+from sqlalchemy import JSON, Boolean, Computed, ForeignKey, Index, Integer, SmallInteger, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -86,6 +86,18 @@ class AssistantConversation(Base):
     # link to a person. Supabase user id (counselor).
     local_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
+    # Counselor chats: the school the chat ran for (a super admin's pick included)
+    # and the Hub job card it started from, so usage reads by school.
+    school_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("schools.id", ondelete="SET NULL"), index=True
+    )
+    card_type: Mapped[str | None] = mapped_column(Text)
+    # Counselor "delete" hides the chat from its owner but keeps it for quality review and usage.
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # Admin review: the cached summary, when it was written, and how many messages it covered.
+    admin_summary: Mapped[str | None] = mapped_column(Text)
+    admin_summary_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    admin_summary_messages: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
@@ -119,11 +131,32 @@ class AssistantMessage(Base):
     model_id: Mapped[str | None] = mapped_column(Text)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
+    # User questions only: the topic it was classified into (src/assistant/question_topics.py).
+    topic_tag: Mapped[str | None] = mapped_column(Text, index=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
     conversation: Mapped[AssistantConversation] = relationship(back_populates="messages")
 
     __table_args__ = (Index("idx_assistant_messages_conversation", "conversation_id", "created_at"),)
+
+
+class AssistantMessageFeedback(Base):
+    """One user's rating, flag and comment on one assistant answer (counselor assistant)."""
+
+    __tablename__ = "assistant_message_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("assistant_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    local_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    rating: Mapped[int | None] = mapped_column(SmallInteger)  # 1 helpful, -1 not helpful
+    flag: Mapped[str | None] = mapped_column(Text)  # "wrong_or_outdated"
+    comment: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("message_id", "local_user_id", name="uq_assistant_feedback_message_user"),)
 
 
 class AssistantPromptSection(Base):

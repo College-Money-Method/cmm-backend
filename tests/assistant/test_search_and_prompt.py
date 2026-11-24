@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
-from src.assistant.answer import source_list, sse
+from src.assistant.answer import numbered_sources, source_list, sse
 from src.assistant.chat_turn import school_links
 from src.assistant.family_prompt import build_family_prompt
 from src.assistant.prompt_tool_sections import (
@@ -155,7 +155,9 @@ def test_prompt_carries_profile_and_numbered_sources():
     prompt = build_family_prompt(chunks, {"grade": 11, "state": "TX"})
     assert "a parent or student of a junior (11th grade), in TX." in prompt
     assert "[1] Divorced and Separated Parents — Who files" in prompt
-    assert "[2] CSS Profile\n" in prompt
+    # A source with no page is background: used, but never numbered.
+    assert "[2] CSS Profile" not in prompt
+    assert "Background notes" in prompt and "- CSS Profile\n" in prompt
 
 
 def test_prompt_is_family_only_and_handles_no_sources():
@@ -174,9 +176,26 @@ def test_family_capability_question_answered_as_outcomes_not_rules():
 
 
 def test_source_list_numbers_match_prompt():
-    sources = source_list([make_chunk(), make_chunk(title="Loans", url=None)])
-    assert [s["n"] for s in sources] == [1, 2]
-    assert sources[1] == {"n": 2, "title": "Loans", "url": None, "source_type": "topic", "heading": "Who files"}
+    chunks = [
+        make_chunk(),
+        make_chunk(title="Loans", url=None),
+        make_chunk(title="Aid", url="/topic/aid"),
+        make_chunk(heading="Second chunk"),
+    ]
+    sources = source_list(chunks)
+    # Only pages are listed; two chunks of one page share its number.
+    assert [(s["n"], s["url"]) for s in sources] == [(1, "/topic/divorce"), (2, "/topic/aid")]
+    prompt = numbered_sources(chunks, "https://x.test")
+    assert "[1] Divorced and Separated Parents — Who files\nLink: https://x.test/topic/divorce" in prompt
+    assert "[2] Aid" in prompt and "[3]" not in prompt
+    assert prompt.index("Background notes") > prompt.index("[2] Aid")
+    assert "- Loans — Who files" in prompt
+
+
+def test_numbered_sources_with_only_background_has_no_numbers():
+    prompt = numbered_sources([make_chunk(title="Loans", url=None)])
+    assert prompt.startswith("(no sources matched this question)")
+    assert "[1]" not in prompt
 
 
 def test_school_links_point_into_the_school_resource_center():

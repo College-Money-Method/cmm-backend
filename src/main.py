@@ -49,6 +49,7 @@ from src.cycles.router import router as cohorts_router
 from src.db import get_supabase
 from src.schools.prospects_router import router as school_prospects_router
 from src.schools.router import router as schools_router
+from src.schools.hub_src_session_router import router as hub_src_session_router
 from src.workshops.qa_router import router as webinar_qa_router
 from src.workshops.host_questions_router import router as host_questions_router
 from src.workshops.router import router as workshops_router
@@ -60,9 +61,12 @@ from src.pages.router import router as pages_router
 from src.calculators.router import router as calculators_router
 from src.app_config.router import router as app_config_router
 from src.colleges.public_router import router as colleges_public_router
+from src.assistant.admin_conversations_router import router as assistant_admin_conversations_router
+from src.assistant.admin_feedback_router import router as assistant_admin_feedback_router
 from src.assistant.admin_router import router as assistant_admin_router
 from src.assistant.admin_settings_router import router as assistant_admin_settings_router
 from src.assistant.router import router as assistant_router
+from src.assistant.counselor_feedback_router import router as assistant_counselor_feedback_router
 from src.assistant.counselor_router import router as assistant_counselor_router
 from src.assistant.sync import register_assistant_sync_job
 from src.colleges.admin_router import router as colleges_admin_router
@@ -131,6 +135,8 @@ app.add_middleware(
 app.include_router(auth_router)
 # Literal /schools/prospects paths must be registered before /schools/{school_id}
 app.include_router(school_prospects_router)
+# Before the schools router, so "/schools/me/..." never reads "me" as a school id.
+app.include_router(hub_src_session_router)
 app.include_router(schools_router)
 app.include_router(cohorts_router)
 app.include_router(content_router)
@@ -151,7 +157,10 @@ app.include_router(colleges_admin_router)
 app.include_router(colleges_admin_edit_router)
 app.include_router(assistant_router)
 app.include_router(assistant_counselor_router)
+app.include_router(assistant_counselor_feedback_router)
 app.include_router(assistant_admin_router)
+app.include_router(assistant_admin_feedback_router)
+app.include_router(assistant_admin_conversations_router)
 app.include_router(assistant_admin_settings_router)
 app.include_router(analytics_router)
 app.include_router(analytics_admin_router)

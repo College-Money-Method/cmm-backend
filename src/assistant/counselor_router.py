@@ -9,6 +9,7 @@ counselor's conversation answers 404.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -18,6 +19,7 @@ from sqlalchemy import select
 from src.assistant.chat_turn import owned_conversation, run_chat_turn
 from src.assistant.counselor_card_context import card_search
 from src.assistant.counselor_context import COUNSELOR_AUDIENCE, counselor_prompt_builder
+from src.assistant.counselor_feedback_store import feedback_by_message
 from src.assistant.counselor_schemas import CounselorChatIn
 from src.assistant.family_school_scope import scope_for_school
 from src.assistant.models import AssistantConversation
@@ -68,6 +70,7 @@ def chat(body: CounselorChatIn, user: CounselorAssistantUser, db: DbDep) -> Stre
         profile={"school_id": str(school.id)},
         school_slug=school.slug,
         search_hint=card_search(body.card_type),
+        new_conversation={"school_id": school.id, "card_type": body.card_type},
     )
 
 
@@ -79,6 +82,7 @@ def list_conversations(user: CounselorAssistantUser, db: DbDep, response: Respon
         .where(
             AssistantConversation.local_user_id == user.user_id,
             AssistantConversation.audience == COUNSELOR_AUDIENCE,
+            AssistantConversation.deleted_at.is_(None),
         )
         .order_by(AssistantConversation.updated_at.desc())
         .limit(CONVERSATION_LIST_LIMIT)
@@ -94,11 +98,15 @@ def get_conversation(
 ) -> AssistantConversationOut:
     response.headers["Cache-Control"] = "private, no-store"
     conversation = owned_conversation(db, conversation_id, user.user_id, COUNSELOR_AUDIENCE)
+    feedback = feedback_by_message(db, [m.id for m in conversation.messages], user.user_id)
     return AssistantConversationOut(
         id=conversation.id,
         title=conversation.title,
         messages=[
-            {"id": m.id, "role": m.role, "content": m.content, "sources": m.sources or [], "created_at": m.created_at}
+            {
+                "id": m.id, "role": m.role, "content": m.content, "sources": m.sources or [],
+                "created_at": m.created_at, "feedback": feedback.get(m.id),
+            }
             for m in conversation.messages
         ],
     )
@@ -106,6 +114,7 @@ def get_conversation(
 
 @router.delete("/conversations/{conversation_id}", status_code=204)
 def delete_conversation(conversation_id: uuid.UUID, user: CounselorAssistantUser, db: DbDep) -> Response:
-    db.delete(owned_conversation(db, conversation_id, user.user_id, COUNSELOR_AUDIENCE))
+    """Hides the chat from the counselor; it is kept for answer review and usage counts."""
+    owned_conversation(db, conversation_id, user.user_id, COUNSELOR_AUDIENCE).deleted_at = datetime.now(UTC)
     db.commit()
     return Response(status_code=204)

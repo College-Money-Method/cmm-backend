@@ -17,7 +17,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-CounselorCardType = Literal["family_advising", "program_progress", "workshop_promotion", "finding_resources"]
+# ``finding_resources`` left the Hub's cards but stays valid, so links and history that carry it still work.
+CounselorCardType = Literal[
+    "family_advising", "program_progress", "workshop_promotion", "grade_checklist", "finding_resources"
+]
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,14 @@ CARD_CONTEXT: dict[str, CardContext] = {
             "Draft an email inviting families to it, following the email and workshop rules."
         ),
         search="workshop announcement email inviting families to register",
+    ),
+    "grade_checklist": CardContext(
+        prompt=(
+            'The counselor started from "Making a checklist": their message names the grade or the '
+            "families, and may name a timeframe. Make a dated checklist for those families' parents, "
+            "following the checklist rule."
+        ),
+        search="checklist for parents: what families of this grade should do next, deadlines by month",
     ),
     "finding_resources": CardContext(
         prompt=(

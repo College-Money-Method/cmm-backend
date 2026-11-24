@@ -150,12 +150,20 @@ class AssistantConversationListOut(BaseModel):
     items: list[AssistantConversationSummaryOut]
 
 
+class AssistantFeedbackOut(BaseModel):
+    rating: int | None = None
+    flag: str | None = None
+    comment: str | None = None
+
+
 class AssistantMessageOut(BaseModel):
     id: uuid.UUID
     role: str
     content: str
     sources: list[AssistantSourceOut]
     created_at: datetime
+    # The caller's own rating of this answer (counselor assistant only).
+    feedback: AssistantFeedbackOut | None = None
 
 
 class AssistantConversationOut(BaseModel):

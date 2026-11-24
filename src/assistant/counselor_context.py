@@ -29,6 +29,8 @@ from src.emails.school_links import email_origin
 from src.schools.models import School
 
 COUNSELOR_AUDIENCE = "counselor"
+# Answering a family's question: a no-answer reply never routes to Paul.
+FAMILY_ADVISING_CARD = "family_advising"
 
 
 def counselor_prompt_builder(
@@ -60,4 +62,5 @@ def counselor_prompt_builder(
     return lambda chunks: build_counselor_prompt(
         fill_template_chunks(chunks, values), school, workshops, guidance, values_section, asker_name,
         origin=origin, card=card, workshop_template=workshop_template,
+        offer_paul=card_type != FAMILY_ADVISING_CARD,
     )

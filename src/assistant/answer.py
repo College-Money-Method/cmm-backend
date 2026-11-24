@@ -36,26 +36,60 @@ _ANSWER_WORKERS = ThreadPoolExecutor(max_workers=16, thread_name_prefix="assista
 # Marks the end of an answer's events.
 _END = object()
 
+BACKGROUND_HEADER = (
+    "Background notes (facts with no page to open; never cite them with [n] and never link them; "
+    "state the facts plainly):"
+)
+NO_SOURCES = "(no sources matched this question)"
+
+
+def _cited_groups(chunks: list[RetrievedChunk]) -> tuple[list[list[RetrievedChunk]], list[RetrievedChunk]]:
+    """Split chunks into numbered page groups and unnumbered background.
+
+    Only chunks with a page (``url_path``) are numbered, so every citation
+    opens something; chunks of the same page share one number, in the order
+    the page first ranked. The rest is background the model may use but not cite.
+    """
+    groups: dict[str, list[RetrievedChunk]] = {}
+    background: list[RetrievedChunk] = []
+    for c in chunks:
+        if c.url_path:
+            groups.setdefault(c.url_path, []).append(c)
+        else:
+            background.append(c)
+    return list(groups.values()), background
+
+
 def source_list(chunks: list[RetrievedChunk]) -> list[dict]:
-    """The citation list sent to the browser and stored with the answer."""
+    """The citation list sent to the browser and stored with the answer; row n is citation [n]."""
+    groups, _ = _cited_groups(chunks)
     return [
-        {"n": n, "title": c.title, "url": c.url_path, "source_type": c.source_type, "heading": c.heading}
-        for n, c in enumerate(chunks, start=1)
+        {"n": n, "title": g[0].title, "url": g[0].url_path, "source_type": g[0].source_type, "heading": g[0].heading}
+        for n, g in enumerate(groups, start=1)
     ]
 
 
 def numbered_sources(chunks: list[RetrievedChunk], origin: str = "") -> str:
     """The prompt's numbered source blocks, matching the numbers in ``source_list``.
 
-    With an ``origin``, each source that has a page gets a ``Link:`` line with its
-    absolute URL, so drafted emails can link it; sources without a page get none.
+    With an ``origin``, each source gets a ``Link:`` line with its absolute URL,
+    so drafted emails can link it. Chunks with no page follow as background notes.
     """
-    def block(n: int, c: RetrievedChunk) -> str:
-        head = f"[{n}] {c.title}{f' — {c.heading}' if c.heading else ''}"
-        link = f"\nLink: {origin}{c.url_path}" if origin and c.url_path else ""
-        return f"{head}{link}\n{c.text}"
+    groups, background = _cited_groups(chunks)
 
-    return "\n\n".join(block(n, c) for n, c in enumerate(chunks, start=1)) or "(no sources matched this question)"
+    def block(n: int, group: list[RetrievedChunk]) -> str:
+        first = group[0]
+        head = f"[{n}] {first.title}{f' — {first.heading}' if first.heading else ''}"
+        link = f"\nLink: {origin}{first.url_path}" if origin else ""
+        return f"{head}{link}\n" + "\n\n".join(c.text for c in group)
+
+    def note(c: RetrievedChunk) -> str:
+        return f"- {c.title}{f' — {c.heading}' if c.heading else ''}\n{c.text}"
+
+    numbered = "\n\n".join(block(n, g) for n, g in enumerate(groups, start=1)) or NO_SOURCES
+    if not background:
+        return numbered
+    return f"{numbered}\n\n{BACKGROUND_HEADER}\n" + "\n\n".join(note(c) for c in background)
 
 
 def sse(event: str, data: dict) -> str:
