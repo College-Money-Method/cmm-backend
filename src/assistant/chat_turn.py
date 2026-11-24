@@ -41,9 +41,14 @@ def school_links(chunks: list[RetrievedChunk], school_slug: str | None) -> list[
 
 
 def owned_conversation(db, conversation_id: uuid.UUID, owner_id: uuid.UUID, audience: str) -> AssistantConversation:
-    """The caller's conversation in this assistant; anything else answers 404."""
+    """The caller's conversation in this assistant; anything else (or one they deleted) answers 404."""
     conversation = db.get(AssistantConversation, conversation_id)
-    if conversation is None or conversation.local_user_id != owner_id or conversation.audience != audience:
+    if (
+        conversation is None
+        or conversation.local_user_id != owner_id
+        or conversation.audience != audience
+        or conversation.deleted_at is not None
+    ):
         raise HTTPException(status_code=404, detail="assistant_conversation_not_found")
     return conversation
 
@@ -65,11 +70,13 @@ def run_chat_turn(
     profile: dict,
     school_slug: str | None = None,
     search_hint: str = "",
+    new_conversation: dict | None = None,
 ) -> StreamingResponse:
     """Retrieve for ``scope``, save the question, and stream the answer as SSE.
 
     ``search_hint`` adds words to this turn's retrieval query only; the stored
-    question stays as the user typed it.
+    question stays as the user typed it. ``new_conversation`` holds extra fields
+    (school, card) saved when this turn starts a conversation.
     """
     history: list[dict] = []
     if conversation_id:
@@ -82,7 +89,9 @@ def run_chat_turn(
         ).all()
         history = [{"role": m.role, "content": m.content} for m in reversed(recent)]
     else:
-        conversation = AssistantConversation(local_user_id=owner_id, audience=audience, title=_title_from(message))
+        conversation = AssistantConversation(
+            local_user_id=owner_id, audience=audience, title=_title_from(message), **(new_conversation or {})
+        )
         db.add(conversation)
 
     # Messages must start with a user turn. A question whose answer failed is
@@ -103,7 +112,8 @@ def run_chat_turn(
         raise HTTPException(status_code=503, detail="assistant_unavailable") from None
     chunks = school_links(hybrid_search(db, retrieval_text, query_vector, scope), school_slug)
 
-    db.add(AssistantMessage(conversation=conversation, role="user", content=message, profile=profile))
+    question = AssistantMessage(conversation=conversation, role="user", content=message, profile=profile)
+    db.add(question)
     conversation.updated_at = datetime.now(UTC)
     db.commit()
 

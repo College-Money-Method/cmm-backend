@@ -1,8 +1,9 @@
 """Registration and attendance figures for the counselor's workshop list.
 
-A webinar is often shared by several host schools. Each figure is the session's
-total across every host school; no school's own share is given, the counselor's
-included. Only counts leave this module, never who registered. Counted the way the
+A webinar serves the schools or cohorts it is allocated to. Each figure is that
+workshop's total and says so in its own words ("total registrations for this
+workshop"), so it is never read as the school's own count; no school's own share is
+given, the counselor's included. Only counts leave this module, never who registered. Counted the way the
 Hub counts (every registration row, whatever its status), in one grouped query for
 the whole list.
 """
@@ -18,15 +19,18 @@ from sqlalchemy.orm import Session
 from src.workshops.models import WorkshopRegistration
 
 
+TOTAL_REGISTERED = "total registrations for this workshop"
+
+
 @dataclass(frozen=True)
 class WorkshopCounts:
     registered: int = 0
     attended: int = 0
 
     def describe(self, held: bool) -> str:
-        text = f"registered: {self.registered} in total"
+        text = f"{TOTAL_REGISTERED}: {self.registered}"
         if held:
-            text += f"; attended: {self.attended} in total"
+            text += f"; total attended: {self.attended}"
         return text
 
 

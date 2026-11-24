@@ -38,3 +38,6 @@ scripts/output/
 .claude/skills/*
 !.claude/skills/vibe-coding/
 .agentkit
+
+# Local export of production assistant chats (user data, never commit)
+conversations-context/

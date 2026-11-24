@@ -54,10 +54,10 @@ def test_other_schools_webinar_is_excluded(db, school):
 
 def test_window_bounds_and_empty_message(db, school):
     add_webinar(db, school.id, NOW - timedelta(days=31), name="Too Old")
-    add_webinar(db, school.id, NOW + timedelta(days=121), name="Too Far")
+    add_webinar(db, school.id, NOW + timedelta(days=366), name="Too Far")
     assert "(no workshops scheduled for this school in this window)" in school_workshop_section(db, school, NOW)
     add_webinar(db, school.id, NOW - timedelta(days=29), name="Recent")
-    add_webinar(db, school.id, NOW + timedelta(days=119), name="Soon Enough")
+    add_webinar(db, school.id, NOW + timedelta(days=200), name="Soon Enough")
     text = school_workshop_section(db, school, NOW)
     assert "Recent" in text and "Soon Enough" in text and "Too Old" not in text and "Too Far" not in text
 
@@ -108,6 +108,7 @@ def test_link_falls_back_to_zoom_without_origin(db, school, monkeypatch):
 
 
 def test_upcoming_workshop_survives_a_full_past_month(db, school):
+    _current_cycle(db, (NOW - timedelta(days=MAX_WORKSHOPS + 10)).date())
     for i in range(MAX_WORKSHOPS + 2):
         add_webinar(db, school.id, NOW - timedelta(days=i + 1), name=f"Past {i:02d}")
     add_webinar(db, school.id, NOW + timedelta(days=60), name="Next Up")
@@ -137,7 +138,7 @@ def test_upcoming_workshop_shows_only_the_session_total(db, school):
     _register(db, webinar, other.id, n=3)
     _register(db, webinar, None)  # no school on record still counts toward the total
     text = school_workshop_section(db, school, NOW)
-    assert "registered: 6 in total" in text
+    assert "total registrations for this workshop: 6" in text
     assert "attended" not in text
     # The total only: never the school's own share, who registered, or the other school.
     assert "your school" not in text
@@ -152,13 +153,13 @@ def test_held_workshop_adds_attendance(db, school):
     _register(db, webinar, school.id)
     _register(db, webinar, other.id, attended=True)
     text = school_workshop_section(db, school, NOW)
-    assert "registered: 4 in total; attended: 3 in total" in text
+    assert "total registrations for this workshop: 4; total attended: 3" in text
     assert "your school" not in text
 
 
 def test_workshop_with_no_registrations_shows_zeros(db, school):
     add_webinar(db, school.id, NOW + timedelta(days=3))
-    assert "registered: 0 in total" in school_workshop_section(db, school, NOW)
+    assert "total registrations for this workshop: 0" in school_workshop_section(db, school, NOW)
 
 
 def _current_cycle(db, began):
@@ -180,3 +181,32 @@ def test_past_window_is_at_least_thirty_days_and_at_most_a_year(db, school):
     db.query(Cycle).update({Cycle.beginning_date: (NOW - timedelta(days=900)).date()})
     db.commit()
     assert section.past_window_start(db, NOW) == NOW - timedelta(days=section.MAX_PAST_DAYS)
+
+
+def test_ahead_window_runs_to_the_cycle_end_within_bounds(db, school):
+    db.add(Cycle(id=uuid.uuid4(), name="2026-27", end_date=(NOW + timedelta(days=200)).date(), is_current=True))
+    db.commit()
+    add_webinar(db, school.id, NOW + timedelta(days=190), name="Spring Night")
+    add_webinar(db, school.id, NOW + timedelta(days=230), name="Next Cycle Night")
+    text = school_workshop_section(db, school, NOW)
+    assert "Spring Night" in text and "Next Cycle Night" not in text
+    # Near a cycle's end the next months still show.
+    db.query(Cycle).update({Cycle.end_date: (NOW + timedelta(days=5)).date()})
+    db.commit()
+    assert section.ahead_window_end(db, NOW) == NOW + timedelta(days=section.AHEAD_DAYS)
+
+
+def test_summary_counts_held_and_upcoming_and_names_the_most_registered(db, school):
+    popular = add_webinar(db, school.id, NOW - timedelta(days=3), name="Popular Night")
+    quiet = add_webinar(db, school.id, NOW + timedelta(days=3), name="Quiet Night")
+    add_webinar(db, school.id, NOW + timedelta(days=9), name="Later Night")
+    _register(db, popular, school.id, n=5)
+    _register(db, quiet, school.id, n=2)
+    summary = school_workshop_section(db, school, NOW).splitlines()[1]
+    assert summary.startswith("Summary: 1 held so far this cycle and 2 upcoming are listed below.")
+    assert "Most registered: Popular Night" in summary and "(total registrations for this workshop: 5)" in summary
+
+
+def test_summary_names_no_top_workshop_without_registrations(db, school):
+    add_webinar(db, school.id, NOW + timedelta(days=3))
+    assert "Most registered" not in school_workshop_section(db, school, NOW)

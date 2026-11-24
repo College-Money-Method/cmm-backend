@@ -103,6 +103,8 @@ def test_sources_get_absolute_links_only_with_an_origin_and_a_page():
     prompt = build_counselor_prompt([page, private], SCHOOL, WORKSHOPS, origin="https://cmm.example")
     assert "Link: https://cmm.example/school/a-high/topic/divorce" in prompt
     assert prompt.count("Link: ") == 1
+    # A counselor-only page has no Resource Center page: background, never numbered.
+    assert "[2] Counselor Guide" not in prompt and "- Counselor Guide" in prompt
     assert "Link: " not in _prompt([page])
 
 
@@ -115,8 +117,16 @@ def test_reply_rule_keeps_password_tag_and_forbids_invented_links():
 def test_honest_workshop_figures_and_no_school_reach():
     prompt = _prompt()
     assert "even when they are low; never round up, soften or guess" in prompt
-    assert "how many it has reached: never estimate them" in prompt
     assert "Your school's program" not in prompt and "families reached" not in prompt
+
+
+def test_figures_are_workshop_totals_and_school_numbers_point_to_hub_analytics():
+    prompt = build_counselor_prompt([make_chunk()], SCHOOL, WORKSHOPS, origin="https://cmm.example")
+    assert '"Total registrations for this workshop: 42"' in prompt and "never call it the school's" in prompt
+    assert "from the Summary line; never count or rank them yourself" in prompt
+    assert "only from its own grade label" in prompt
+    assert "the Assistant doesn't have school-level numbers" in prompt
+    assert "[Counselor Hub Analytics page](https://cmm.example/hub/analytics)" in prompt
 
 
 def test_greeting_offers_hub_help_from_the_user_guide():
@@ -125,11 +135,47 @@ def test_greeting_offers_hub_help_from_the_user_guide():
 
 def test_grade_checklist_rule_present():
     prompt = _prompt()
-    assert 'five to ten short items as "- [ ] " lines' in prompt
+    assert 'grouped under month names, five to twelve "- [ ] " items' in prompt
+    assert "if no grade is given, ask which grade" in prompt
     assert "If the sources say little about that grade, say so plainly" in prompt
     assert "A checklist is not an email draft: it uses no {{merge_tags}} except {{resource_center_password}}" in prompt
-    assert "leave out any item you cannot tie to either" in prompt
-    assert "Cite each item with a plain [n] after its text" in prompt
+    assert "Leave out any item you cannot tie to a source, background note or workshop" in prompt
+
+
+def test_answer_format_short_first_copy_blocks_and_link_text():
+    prompt = _prompt()
+    assert "a line containing only <!-- more -->" in prompt
+    assert "opens with a line ```copy" in prompt and "no [n] citations" in prompt
+    assert 'never "here", "this link" or a bare URL' in prompt
+
+
+def test_no_answer_points_outside_and_offers_paul_by_email_to_the_counselor_only():
+    prompt = _prompt()
+    assert "https://studentaid.gov" in prompt and "https://cssprofile.collegeboard.org" in prompt
+    assert "Common Data Set" in prompt
+    assert "mailto:paul.martin@collegemoneymethod.com" in prompt
+    family = build_counselor_prompt([make_chunk()], SCHOOL, WORKSHOPS, offer_paul=False)
+    assert "mailto:" not in family and "email Paul" not in family
+    assert "https://studentaid.gov" in family
+
+
+def test_family_advising_card_turns_off_the_paul_offer(monkeypatch):
+    from src.assistant import counselor_context
+
+    seen = {}
+    monkeypatch.setattr(counselor_context, "build_counselor_prompt", lambda *a, **k: seen.update(k) or "")
+    monkeypatch.setattr(counselor_context, "school_workshop_section", lambda *a: "")
+    monkeypatch.setattr(counselor_context, "workshop_template_section", lambda *a: "")
+    monkeypatch.setattr(counselor_context, "resolve_counselor_name", lambda *a: ("Jane", "", "Jane"))
+    for card, offered in (("family_advising", False), (None, True), ("grade_checklist", True)):
+        counselor_context.counselor_prompt_builder(None, SCHOOL, None, guidance="", card_type=card)([])
+        assert seen["offer_paul"] is offered
+
+
+def test_no_financial_advice_and_student_details_not_repeated():
+    prompt = _prompt()
+    assert "not personal financial advice" in prompt and "a financial professional should advise" in prompt
+    assert "never repeat it" in prompt and "not to enter student names or IDs" in prompt
 
 
 def test_rules_cover_clarifying_and_handing_off():

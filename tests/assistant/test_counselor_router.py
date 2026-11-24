@@ -235,6 +235,20 @@ def test_conversation_ownership_and_audience(harness, factory):
     assert [c["title"] for c in harness.client.get(f"{BASE}/conversations").json()["items"]] == ["mine"]
     assert harness.chat(conversation_id=str(family_id)).status_code == 404
     assert harness.client.delete(f"{BASE}/conversations/{mine}").status_code == 204
+    # Soft delete: hidden from the counselor, kept for usage and quality review.
+    assert harness.client.get(f"{BASE}/conversations/{mine}").status_code == 404
+    assert harness.client.get(f"{BASE}/conversations").json()["items"] == []
+    assert harness.chat(conversation_id=str(mine)).status_code == 404
+    with factory() as db:
+        assert db.get(AssistantConversation, mine).deleted_at is not None
+
+
+def test_new_chat_records_school_and_card(harness, seen, factory):
+    harness.as_user("super_admin")
+    assert harness.chat(school_id=str(SCHOOL_B), card_type="grade_checklist").status_code == 200
+    with factory() as db:
+        conversation = db.query(AssistantConversation).one()
+        assert (conversation.school_id, conversation.card_type) == (SCHOOL_B, "grade_checklist")
 
 
 def test_viewer_cannot_list_conversations(harness):
@@ -265,5 +279,5 @@ def test_typed_question_gets_no_card_context(harness, seen):
 def test_unknown_card_type_is_rejected(harness, seen):
     harness.as_user("hub_user", SCHOOL_A)
     assert harness.chat(card_type="anything_else").status_code == 422
-    assert harness.chat(card_type="grade_checklist").status_code == 422
+    assert harness.chat(card_type="finding_checklists").status_code == 422
     assert seen["embeds"] == 0
