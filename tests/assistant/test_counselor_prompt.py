@@ -149,6 +149,13 @@ def test_answer_format_short_first_copy_blocks_and_link_text():
     assert 'never "here", "this link" or a bare URL' in prompt
 
 
+def test_resources_are_linked_inline_not_cited_by_number():
+    prompt = _prompt()
+    assert "Never write citation numbers like [2]" in prompt
+    assert "link that source's page right in the sentence" in prompt
+    assert "Cite every factual sentence" not in prompt
+
+
 def test_no_answer_points_outside_and_offers_paul_by_email_to_the_counselor_only():
     prompt = _prompt()
     assert "https://studentaid.gov" in prompt and "https://cssprofile.collegeboard.org" in prompt
